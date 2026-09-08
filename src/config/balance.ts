@@ -52,6 +52,8 @@ export const ECONOMY = {
 export const GUEST_TRAITS = {
   lightSleeperChance: 0.2,
   bigSpenderChance: 0.2,
+  // Drawn from the "normal" pool (0.6 -> 0.45), light_sleeper/big_spender unchanged.
+  partyGuestChance: 0.15,
   lightSleeperNoiseMult: 1.5,
   bigSpenderBudgetMult: 1.5,
 };

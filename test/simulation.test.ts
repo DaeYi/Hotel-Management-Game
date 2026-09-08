@@ -1,15 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { PRNG } from '../src/simulation/prng.js';
 import { createHotelState, addRoom, getOccupancyRate, demolishRoom, demolishFacility, addFacility, getDemolishRefund } from '../src/simulation/HotelState.js';
-import { processArrivals, processDepartures, calculateGuestReview } from '../src/simulation/GuestManager.js';
+import { processArrivals, processDepartures, calculateGuestReview, generateGuestTrait } from '../src/simulation/GuestManager.js';
 import { processDailyCosts, checkBankruptcy, updateReviewScore } from '../src/simulation/EconomyManager.js';
 import { calculateRoomNoise, noiseToRatingPenalty, createConstructionNoise, tickNoiseSources } from '../src/simulation/NoiseManager.js';
+import { startTurnoverCleaning, processCleaningTick, processDailyHousekeeping, checkHousekeepingCompliance } from '../src/simulation/HousekeepingManager.js';
+import { processMaintenanceTick } from '../src/simulation/MaintenanceManager.js';
+import { saveGame, loadGame, hasSavedGame, deleteSave } from '../src/simulation/SaveManager.js';
 import { calculateStarRating, calculateStarPoints, getNextStarRequirements } from '../src/simulation/StarRatingManager.js';
 import { getSpecialEvent, getTotalDemandMultiplier } from '../src/simulation/SeasonManager.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import { simulate } from '../src/simulation/simulate.js';
-import { ECONOMY, REVIEW, ROOM_CONFIG, FACILITY_CONFIG } from '../src/config/balance.js';
-import type { Room, Guest, Booking } from '../src/simulation/types.js';
+import { ECONOMY, REVIEW, ROOM_CONFIG, FACILITY_CONFIG, GUEST_TRAITS, NOISE, HOUSEKEEPING } from '../src/config/balance.js';
+import type { Room, Guest, Booking, GuestTrait } from '../src/simulation/types.js';
+import { getGuestDotColor } from '../src/ui/GridRenderer';
 
 describe('PRNG', () => {
   it('is deterministic with same seed', () => {
@@ -46,6 +50,115 @@ describe('PRNG', () => {
     const restored = PRNG.fromState(savedState);
     const val2 = restored.next();
     expect(val1).toBe(val2);
+  });
+});
+
+describe('SaveManager', () => {
+  // Required per plan-eng-review: tests run against Node's own native
+  // localStorage (no jsdom in this project) under one fixed SAVE_KEY —
+  // without clearing between tests, they'd share state and be order-dependent.
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('saves and loads a full round trip, including PRNG state', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'deluxe', 2, 3)!;
+    const prng = new PRNG(123);
+    prng.next();
+    prng.next();
+
+    expect(saveGame(state, prng)).toBe(true);
+
+    const loaded = loadGame();
+    expect(loaded).not.toBeNull();
+    expect(loaded!.state.cash).toBe(state.cash);
+    expect(loaded!.state.rooms).toHaveLength(1);
+    expect(loaded!.prngState).toBe(prng.getState());
+  });
+
+  it('hasSavedGame and deleteSave reflect save state', () => {
+    expect(hasSavedGame()).toBe(false);
+    saveGame(createHotelState(), new PRNG(1));
+    expect(hasSavedGame()).toBe(true);
+    deleteSave();
+    expect(hasSavedGame()).toBe(false);
+  });
+
+  it('loadGame returns null when no save exists', () => {
+    expect(loadGame()).toBeNull();
+  });
+
+  it('loadGame returns null, not throws, on corrupt JSON', () => {
+    localStorage.setItem('hotel-game-save', '{not valid json');
+    expect(() => loadGame()).not.toThrow();
+    expect(loadGame()).toBeNull();
+  });
+
+  it('loadGame returns null, not throws, when the version field is missing entirely', () => {
+    localStorage.setItem('hotel-game-save', JSON.stringify({
+      state: createHotelState(), prngState: 1, timestamp: 0,
+    }));
+    expect(() => loadGame()).not.toThrow();
+    expect(loadGame()).toBeNull();
+  });
+
+  it('loadGame returns null when the version is newer than this build supports', () => {
+    localStorage.setItem('hotel-game-save', JSON.stringify({
+      version: 999, prngState: 1, state: createHotelState(), timestamp: 0,
+    }));
+    expect(loadGame()).toBeNull();
+  });
+
+  it('migrates a v1 save (missing noiseSources and facilities) all the way to the current version', () => {
+    const v1Save = {
+      version: 1, prngState: 42, timestamp: 0,
+      state: {
+        cash: 1000, day: 1, hour: 0, rooms: [], guests: [], bookings: [],
+        // noiseSources and facilities intentionally absent (v1 shape, predates
+        // both fields) — this is what actually exercises the v8->v9 step;
+        // previously this fixture pre-populated facilities: [], which made
+        // that assertion pass trivially regardless of whether the migration
+        // line existed at all.
+        housekeeping: { turnoverQuality: 'standard', dailyCadence: 'daily' },
+        staff: { maintenanceWorkers: 0, housekeepers: 1, frontDesk: 1 },
+        amenities: { standard: 'basic', deluxe: 'basic', suite: 'basic' },
+        starRating: 1, reviewScore: 5, totalTurnedAway: 0, totalRevenue: 0,
+      },
+    };
+    localStorage.setItem('hotel-game-save', JSON.stringify(v1Save));
+
+    const loaded = loadGame();
+    expect(loaded).not.toBeNull();
+    expect(loaded!.version).toBe(9);
+    expect(loaded!.state.noiseSources).toEqual([]);
+    expect(loaded!.state.facilities).toEqual([]); // added by the v8->v9 step
+  });
+
+  it('migrates v3 reputationScore and booking rating into starRating/reviewScore correctly', () => {
+    const v3Save = {
+      version: 3, prngState: 1, timestamp: 0,
+      state: {
+        cash: 1000, day: 1, hour: 0, rooms: [], facilities: [], guests: [],
+        bookings: [{ id: 'b1', roomId: 'r1', guestId: 'g1', nightRate: 100, rating: 4 }], // old-style 1-5 rating, no reviewScore
+        noiseSources: [],
+        housekeeping: { turnoverQuality: 'standard', dailyCadence: 'daily' },
+        staff: { maintenanceWorkers: 0, housekeepers: 1 }, // frontDesk intentionally missing (pre-v6->v7)
+        amenities: undefined, // intentionally missing (pre-v7->v8)
+        reputationScore: 72, // old-style 0-100 field
+        totalTurnedAway: 0, totalRevenue: 0,
+      },
+    };
+    localStorage.setItem('hotel-game-save', JSON.stringify(v3Save));
+
+    const loaded = loadGame();
+    expect(loaded).not.toBeNull();
+    expect(loaded!.version).toBe(9);
+    expect(loaded!.state.reviewScore).toBeCloseTo(7.2, 5); // 72 / 10
+    expect((loaded!.state as any).reputationScore).toBeUndefined();
+    expect(loaded!.state.bookings[0].reviewScore).toBe(8); // rating 4 * 2
+    expect(loaded!.state.staff.frontDesk).toBe(1); // filled by v6->v7
+    expect(loaded!.state.amenities).toEqual({ standard: 'basic', deluxe: 'basic', suite: 'basic' }); // filled by v7->v8
   });
 });
 
@@ -229,6 +342,243 @@ describe('GuestManager', () => {
     const avgLow = lowRatings.reduce((s, r) => s + r, 0) / lowRatings.length;
     const avgHigh = highRatings.reduce((s, r) => s + r, 0) / highRatings.length;
     expect(avgHigh).toBeGreaterThan(avgLow);
+  });
+});
+
+describe('party_guest trait', () => {
+  it('spawns at approximately GUEST_TRAITS.partyGuestChance, leaving light_sleeper/big_spender unchanged', () => {
+    const prng = new PRNG(42);
+    const counts: Record<GuestTrait, number> = { normal: 0, light_sleeper: 0, big_spender: 0, party_guest: 0 };
+    const samples = 20000;
+    for (let i = 0; i < samples; i++) {
+      counts[generateGuestTrait(prng)]++;
+    }
+
+    // Wide tolerance (statistical test) — just confirms the new branch is
+    // reachable at roughly the configured rate and didn't shift the existing
+    // trait probabilities by inserting itself in the wrong place in the chain.
+    expect(counts.light_sleeper / samples).toBeCloseTo(GUEST_TRAITS.lightSleeperChance, 1);
+    expect(counts.big_spender / samples).toBeCloseTo(GUEST_TRAITS.bigSpenderChance, 1);
+    expect(counts.party_guest / samples).toBeCloseTo(GUEST_TRAITS.partyGuestChance, 1);
+    expect(counts.normal / samples).toBeCloseTo(
+      1 - GUEST_TRAITS.lightSleeperChance - GUEST_TRAITS.bigSpenderChance - GUEST_TRAITS.partyGuestChance,
+      1
+    );
+  });
+
+  it('gets its own noise multipliers (already configured in balance.ts)', () => {
+    expect(NOISE.traitNoiseOutput.party_guest).toBeGreaterThan(NOISE.traitNoiseOutput.normal);
+    expect(NOISE.traitNoiseSensitivity.party_guest).toBeLessThan(NOISE.traitNoiseSensitivity.normal);
+  });
+});
+
+describe('getGuestDotColor', () => {
+  it('gives every trait its own explicit color (no shared fallback)', () => {
+    const traits: GuestTrait[] = ['normal', 'light_sleeper', 'big_spender', 'party_guest'];
+    const colors = traits.map(getGuestDotColor);
+    expect(new Set(colors).size).toBe(traits.length);
+  });
+
+  it('party_guest does not fall through to the normal/default color', () => {
+    expect(getGuestDotColor('party_guest')).not.toBe(getGuestDotColor('normal'));
+  });
+});
+
+describe('HousekeepingManager', () => {
+  it('startTurnoverCleaning sets duration per quality tier', () => {
+    const baseRoom: Room = {
+      id: 'r', type: 'standard', gridX: 0, gridY: 0, pricePerNight: 80,
+      condition: 100, cleanliness: 0, status: 'occupied', guestId: 'g1',
+      cleaningHoursRemaining: 0, lastDailyCleanDay: 0,
+    };
+
+    const quick = startTurnoverCleaning(baseRoom, 'quick');
+    expect(quick.status).toBe('cleaning');
+    expect(quick.guestId).toBeUndefined();
+    expect(quick.cleaningHoursRemaining).toBe(HOUSEKEEPING.turnoverDuration.quick);
+
+    expect(startTurnoverCleaning(baseRoom, 'standard').cleaningHoursRemaining).toBe(HOUSEKEEPING.turnoverDuration.standard);
+    expect(startTurnoverCleaning(baseRoom, 'thorough').cleaningHoursRemaining).toBe(HOUSEKEEPING.turnoverDuration.thorough);
+  });
+
+  it('processCleaningTick restores cleanliness to the quality-tier target when a room finishes', () => {
+    let state = createHotelState(); // default turnoverQuality: 'standard'
+    state = addRoom(state, 'standard', 0, 0)!;
+    state = {
+      ...state,
+      hour: 10, // within the 6-22 work shift
+      staff: { ...state.staff, housekeepers: 1 },
+      rooms: state.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: 1, cleanliness: 0 })),
+    };
+
+    const result = processCleaningTick(state);
+    expect(result.state.rooms[0].status).toBe('vacant');
+    expect(result.state.rooms[0].cleanliness).toBe(HOUSEKEEPING.turnoverCleanlinessResult.standard);
+  });
+
+  it('0 housekeepers: cleaning rooms make no progress (stuck indefinitely)', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 0, 0)!;
+    state = {
+      ...state,
+      hour: 10,
+      staff: { ...state.staff, housekeepers: 0 },
+      rooms: state.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: 2 })),
+    };
+
+    const result = processCleaningTick(state);
+    expect(result.state.rooms[0].status).toBe('cleaning');
+    expect(result.state.rooms[0].cleaningHoursRemaining).toBe(2);
+  });
+
+  it('outside the 6am-10pm work shift: cleaning rooms make no progress', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 0, 0)!;
+    state = {
+      ...state,
+      hour: 2,
+      staff: { ...state.staff, housekeepers: 2 },
+      rooms: state.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: 2 })),
+    };
+
+    const result = processCleaningTick(state);
+    expect(result.state.rooms[0].cleaningHoursRemaining).toBe(2);
+  });
+
+  it('daily housekeeping: cadence "none" never cleans occupied rooms', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 0, 0)!;
+    state = {
+      ...state,
+      hour: HOUSEKEEPING.dailyCleaningHour,
+      day: 2,
+      housekeeping: { turnoverQuality: 'standard', dailyCadence: 'none' },
+      staff: { ...state.staff, housekeepers: 1 },
+      rooms: state.rooms.map(r => ({ ...r, status: 'occupied' as const, guestId: 'g1', cleanliness: 50 })),
+    };
+
+    const result = processDailyHousekeeping(state);
+    expect(result.state.rooms[0].cleanliness).toBe(50);
+  });
+
+  it('daily housekeeping: cadence "every_other_day" only cleans on even days', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 0, 0)!;
+    const base = {
+      ...state,
+      hour: HOUSEKEEPING.dailyCleaningHour,
+      housekeeping: { turnoverQuality: 'standard' as const, dailyCadence: 'every_other_day' as const },
+      staff: { ...state.staff, housekeepers: 1 },
+      rooms: state.rooms.map(r => ({ ...r, status: 'occupied' as const, guestId: 'g1', cleanliness: 50 })),
+    };
+
+    const oddDayResult = processDailyHousekeeping({ ...base, day: 3 });
+    expect(oddDayResult.state.rooms[0].cleanliness).toBe(50); // skipped
+
+    const evenDayResult = processDailyHousekeeping({ ...base, day: 4 });
+    expect(evenDayResult.state.rooms[0].cleanliness).toBe(50 + HOUSEKEEPING.dailyCleaningBoost); // cleaned
+  });
+
+  it('checkHousekeepingCompliance: warns with 0 housekeepers and rooms built', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 0, 0)!;
+    state = { ...state, staff: { ...state.staff, housekeepers: 0 } };
+    expect(checkHousekeepingCompliance(state)).toMatch(/No housekeepers/);
+  });
+
+  it('checkHousekeepingCompliance: 3-star with cadence "none" is non-compliant', () => {
+    let state = createHotelState();
+    state = { ...state, starRating: 3, housekeeping: { turnoverQuality: 'standard', dailyCadence: 'none' } };
+    expect(checkHousekeepingCompliance(state)).toMatch(/every-other-day/);
+  });
+
+  it('checkHousekeepingCompliance: 4-star requires daily cadence', () => {
+    let state = createHotelState();
+    state = { ...state, starRating: 4, housekeeping: { turnoverQuality: 'standard', dailyCadence: 'every_other_day' } };
+    expect(checkHousekeepingCompliance(state)).toMatch(/daily housekeeping/);
+  });
+
+  it('checkHousekeepingCompliance: compliant hotel returns null', () => {
+    let state = createHotelState();
+    state = {
+      ...state,
+      starRating: 4,
+      staff: { ...state.staff, housekeepers: 1 },
+      housekeeping: { turnoverQuality: 'standard', dailyCadence: 'daily' },
+    };
+    expect(checkHousekeepingCompliance(state)).toBeNull();
+  });
+});
+
+describe('MaintenanceManager', () => {
+  it('only repairs vacant rooms below the condition threshold, never occupied ones', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 0, 0)!;
+    state = addRoom(state, 'standard', 1, 0)!;
+    state = {
+      ...state,
+      hour: 10,
+      staff: { ...state.staff, maintenanceWorkers: 2 },
+      rooms: [
+        { ...state.rooms[0], status: 'vacant' as const, condition: 50 },
+        { ...state.rooms[1], status: 'occupied' as const, guestId: 'g1', condition: 50 },
+      ],
+    };
+
+    const result = processMaintenanceTick(state);
+    expect(result.state.rooms[0].condition).toBeGreaterThan(50);
+    expect(result.state.rooms[1].condition).toBe(50);
+  });
+
+  it('repairs the worst-condition room first when workers are outnumbered', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 0, 0)!;
+    state = addRoom(state, 'standard', 1, 0)!;
+    state = addRoom(state, 'standard', 2, 0)!;
+    state = {
+      ...state,
+      hour: 10,
+      staff: { ...state.staff, maintenanceWorkers: 1 },
+      rooms: [
+        { ...state.rooms[0], status: 'vacant' as const, condition: 60 },
+        { ...state.rooms[1], status: 'vacant' as const, condition: 20 }, // worst
+        { ...state.rooms[2], status: 'vacant' as const, condition: 40 },
+      ],
+    };
+
+    const result = processMaintenanceTick(state);
+    expect(result.state.rooms[1].condition).toBeGreaterThan(20);
+    expect(result.state.rooms[0].condition).toBe(60);
+    expect(result.state.rooms[2].condition).toBe(40);
+  });
+
+  it('does nothing outside the 6am-10pm shift', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 0, 0)!;
+    state = {
+      ...state,
+      hour: 3,
+      staff: { ...state.staff, maintenanceWorkers: 1 },
+      rooms: [{ ...state.rooms[0], status: 'vacant' as const, condition: 30 }],
+    };
+
+    const result = processMaintenanceTick(state);
+    expect(result.state.rooms[0].condition).toBe(30);
+  });
+
+  it('caps repairs at one room per worker per hour', () => {
+    let state = createHotelState();
+    for (let i = 0; i < 5; i++) state = addRoom(state, 'standard', i, 0)!;
+    state = {
+      ...state,
+      hour: 10,
+      staff: { ...state.staff, maintenanceWorkers: 2 },
+      rooms: state.rooms.map(r => ({ ...r, status: 'vacant' as const, condition: 20 })),
+    };
+
+    const result = processMaintenanceTick(state);
+    const repairedCount = result.state.rooms.filter(r => r.condition > 20).length;
+    expect(repairedCount).toBe(2);
   });
 });
 

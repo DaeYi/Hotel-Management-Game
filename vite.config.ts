@@ -6,4 +6,7 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: true,
   },
+  test: {
+    setupFiles: ['./test/setup.ts'],
+  },
 });

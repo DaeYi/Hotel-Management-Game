@@ -1,7 +1,7 @@
 export type RoomType = 'standard' | 'deluxe' | 'suite';
 export type FacilityType = 'gym' | 'restaurant' | 'pool' | 'shop';
 export type TileType = RoomType | FacilityType;
-export type GuestTrait = 'normal' | 'light_sleeper' | 'big_spender';
+export type GuestTrait = 'normal' | 'light_sleeper' | 'big_spender' | 'party_guest';
 export type RoomStatus = 'vacant' | 'occupied' | 'cleaning';
 export type CleaningQuality = 'quick' | 'standard' | 'thorough';
 export type DailyCleaningCadence = 'daily' | 'every_other_day' | 'none';

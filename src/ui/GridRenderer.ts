@@ -1,7 +1,18 @@
 import Phaser from 'phaser';
-import type { HotelState, RoomType, FacilityType } from '../simulation/types';
+import type { HotelState, RoomType, FacilityType, GuestTrait } from '../simulation/types';
 import { GRID, ECONOMY, NOISE, FACILITY_CONFIG } from '../config/balance';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
+
+/** Guest dot color by trait, in one place so every trait gets an explicit,
+ * distinct color instead of silently falling through to the default. */
+export function getGuestDotColor(trait: GuestTrait): number {
+  switch (trait) {
+    case 'light_sleeper': return 0x3498db;
+    case 'big_spender': return 0xe74c3c;
+    case 'party_guest': return 0xe91e63;
+    case 'normal': return 0xecf0f1;
+  }
+}
 
 export const TILE_SIZE = 32;
 export const GRID_OFFSET_X = 16;
@@ -217,9 +228,7 @@ export class GridRenderer {
       const x = GRID_OFFSET_X + room.gridX * TILE_SIZE + TILE_SIZE / 2;
       const y = GRID_OFFSET_Y + room.gridY * TILE_SIZE + TILE_SIZE / 2;
 
-      const dotColor = guest.trait === 'light_sleeper' ? 0x3498db
-        : guest.trait === 'big_spender' ? 0xe74c3c
-        : 0xecf0f1;
+      const dotColor = getGuestDotColor(guest.trait);
 
       this.guestGraphics.fillStyle(dotColor, 0.9);
       this.guestGraphics.fillCircle(x, y, 4);

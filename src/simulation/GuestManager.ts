@@ -6,10 +6,11 @@ import { calculateRoomNoise, noiseToRatingPenalty } from './NoiseManager.js';
 import { getExpectationMultiplier } from './StarRatingManager.js';
 import { getTotalDemandMultiplier, getCurrentSeason } from './SeasonManager.js';
 
-function generateGuestTrait(prng: PRNG): GuestTrait {
+export function generateGuestTrait(prng: PRNG): GuestTrait {
   const roll = prng.next();
   if (roll < GUEST_TRAITS.lightSleeperChance) return 'light_sleeper';
   if (roll < GUEST_TRAITS.lightSleeperChance + GUEST_TRAITS.bigSpenderChance) return 'big_spender';
+  if (roll < GUEST_TRAITS.lightSleeperChance + GUEST_TRAITS.bigSpenderChance + GUEST_TRAITS.partyGuestChance) return 'party_guest';
   return 'normal';
 }
 

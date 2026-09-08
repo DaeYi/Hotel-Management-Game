@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { createHotelState, addRoom, setRoomPrice, repairRoom, demolishRoom, addFacility, isTileOccupied } from '../simulation/HotelState';
+import { createHotelState, addRoom, setRoomPrice, repairRoom, demolishRoom, addFacility, demolishFacility, isTileOccupied } from '../simulation/HotelState';
 import { tickSimulation } from '../simulation/tick';
 import { checkBankruptcy } from '../simulation/EconomyManager';
 import { PRNG } from '../simulation/prng';
@@ -10,6 +10,7 @@ import { BuildPanel } from '../ui/BuildPanel';
 import { InfoBar } from '../ui/InfoBar';
 import { GridRenderer, GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE } from '../ui/GridRenderer';
 import { RoomInspector } from '../ui/RoomInspector';
+import { FacilityInspector } from '../ui/FacilityInspector';
 import { NotificationToast } from '../ui/NotificationToast';
 import { FinanceChart } from '../ui/FinanceChart';
 import { Tutorial } from '../ui/Tutorial';
@@ -33,6 +34,7 @@ export class GameScene extends Phaser.Scene {
   private buildPanel!: BuildPanel;
   private infoBar!: InfoBar;
   private roomInspector!: RoomInspector;
+  private facilityInspector!: FacilityInspector;
   private toasts!: NotificationToast;
   private chart!: FinanceChart;
   private noVacancy!: NoVacancySign;
@@ -86,6 +88,7 @@ export class GameScene extends Phaser.Scene {
     this.buildPanel = new BuildPanel(this, buildPanelX, GRID_OFFSET_Y, () => {
       if (this.buildPanel.getSelectedType()) {
         this.roomInspector.hide();
+        this.facilityInspector.hide();
       }
     });
 
@@ -95,6 +98,12 @@ export class GameScene extends Phaser.Scene {
       (roomId, pct) => this.handlePriceChange(roomId, pct),
       (roomId) => this.handleRepair(roomId),
       (roomId) => this.handleDemolish(roomId)
+    );
+
+    // Facility inspector (popup on facility click)
+    this.facilityInspector = new FacilityInspector(
+      this,
+      (facilityId) => this.handleDemolishFacility(facilityId)
     );
 
     // Notification toasts
@@ -178,6 +187,7 @@ export class GameScene extends Phaser.Scene {
     this.infoBar.update(this.state, this.paused, this.speedMultiplier);
     this.buildPanel.updateAffordability(this.state.cash);
     this.roomInspector.update(this.state);
+    this.facilityInspector.update(this.state);
     this.housekeepingPanel.update(this.state);
     this.staffPanel.update(this.state);
     this.amenitiesPanel.update(this.state);
@@ -292,6 +302,9 @@ export class GameScene extends Phaser.Scene {
     if (this.roomInspector.isVisible() && this.roomInspector.containsPoint(pointer.x, pointer.y)) {
       return;
     }
+    if (this.facilityInspector.isVisible() && this.facilityInspector.containsPoint(pointer.x, pointer.y)) {
+      return;
+    }
 
     const selectedType = this.buildPanel.getSelectedType();
     const cell = this.grid.pointerToGrid(pointer);
@@ -317,10 +330,22 @@ export class GameScene extends Phaser.Scene {
         r => r.gridX === cell.gridX && r.gridY === cell.gridY
       );
       if (room) {
+        this.facilityInspector.hide();
         this.roomInspector.show(room, this.state);
-      } else {
-        this.roomInspector.hide();
+        return;
       }
+
+      const facility = this.state.facilities.find(
+        f => f.gridX === cell.gridX && f.gridY === cell.gridY
+      );
+      if (facility) {
+        this.roomInspector.hide();
+        this.facilityInspector.show(facility);
+        return;
+      }
+
+      this.roomInspector.hide();
+      this.facilityInspector.hide();
     }
   }
 
@@ -371,6 +396,14 @@ export class GameScene extends Phaser.Scene {
     if (result) {
       this.state = result;
       this.roomInspector.hide();
+    }
+  }
+
+  private handleDemolishFacility(facilityId: string) {
+    const result = demolishFacility(this.state, facilityId);
+    if (result) {
+      this.state = result;
+      this.facilityInspector.hide();
     }
   }
 
