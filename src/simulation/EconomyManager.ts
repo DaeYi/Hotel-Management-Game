@@ -70,7 +70,7 @@ export function updateReviewScore(state: HotelState): number {
   }
 
   // Rolling window
-  const recentBookings = state.bookings.slice(-REVIEW.reviewWindowDays * 10);
+  const recentBookings = state.bookings.slice(-REVIEW.reviewWindowBookingCount);
   if (recentBookings.length === 0) return ECONOMY.initialReviewScore;
 
   const avg = recentBookings.reduce((sum, b) => sum + b.reviewScore, 0) / recentBookings.length;

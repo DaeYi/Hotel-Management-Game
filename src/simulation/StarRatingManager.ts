@@ -2,12 +2,14 @@ import type { HotelState, RoomType } from './types.js';
 import { STAR_RATING, AMENITIES, FACILITY_CONFIG } from '../config/balance.js';
 
 /**
- * Calculate the hotel's star classification (1-5 stars).
- * Based on what the hotel HAS: room types, services, amenities.
- * This is structural, not experiential. A dirty 5-star hotel is still 5 stars.
+ * Accumulate the hotel's raw star points from everything it has: room type
+ * mix, housekeeping quality, room count, amenity tiers, and facilities.
+ * Shared by calculateStarRating (converts to 1-5 stars) and
+ * getNextStarRequirements (derives hint thresholds from the same numbers) so
+ * the two can never independently drift out of sync with each other.
  */
-export function calculateStarRating(state: HotelState): number {
-  if (state.rooms.length === 0) return 1;
+export function calculateStarPoints(state: HotelState): number {
+  if (state.rooms.length === 0) return 0;
 
   let points = 0;
 
@@ -57,9 +59,17 @@ export function calculateStarRating(state: HotelState): number {
     }
   }
 
-  // Convert points to 1-5 star scale
-  const rawStars = Math.max(1, Math.min(5, Math.floor(points) + 1));
-  return rawStars;
+  return points;
+}
+
+/**
+ * Calculate the hotel's star classification (1-5 stars).
+ * Based on what the hotel HAS: room types, services, amenities.
+ * This is structural, not experiential. A dirty 5-star hotel is still 5 stars.
+ */
+export function calculateStarRating(state: HotelState): number {
+  const points = calculateStarPoints(state);
+  return Math.max(1, Math.min(5, Math.floor(points) + 1));
 }
 
 /**
@@ -89,11 +99,36 @@ export function getNextStarRequirements(state: HotelState): string | null {
   const deluxePct = (roomCounts.deluxe + roomCounts.suite) / total;
   const suitePct = roomCounts.suite / total;
 
-  if (target >= 3 && deluxePct < 0.3) {
-    hints.push('Add more deluxe/suite rooms (need 30%+)');
-  }
-  if (target >= 4 && suitePct < 0.15) {
-    hints.push('Add more suites (need 15%+)');
+  // Derive the deluxe/suite mix needed for the next star from the same points
+  // calculateStarRating uses, instead of hardcoded percentages that could
+  // silently drift out of sync with the real formula.
+  //
+  // Approximation: this holds every other point contributor constant while
+  // solving for deluxePct/suitePct. That's not exactly right when amenity
+  // tiers differ per room type (the amenity term is itself weighted by
+  // room-type count, which shifts as the mix shifts) — accepted as good
+  // enough for a hint string; see TODOS.md "exact numeric-search star-rating
+  // hint" for the fully-precise alternative.
+  if (target >= 3) {
+    const requiredPoints = target - 1;
+    const otherPoints = calculateStarPoints(state)
+      - (deluxePct * STAR_RATING.deluxeRatioPoints + suitePct * STAR_RATING.suiteRatioPoints);
+    const neededDeluxePct = (requiredPoints - otherPoints - suitePct * STAR_RATING.suiteRatioPoints)
+      / STAR_RATING.deluxeRatioPoints;
+
+    if (neededDeluxePct > deluxePct) {
+      if (neededDeluxePct <= 1) {
+        hints.push(`Add more deluxe/suite rooms (need ${Math.round(neededDeluxePct * 100)}%+)`);
+      } else {
+        const neededSuitePct = (requiredPoints - otherPoints - deluxePct * STAR_RATING.deluxeRatioPoints)
+          / STAR_RATING.suiteRatioPoints;
+        if (neededSuitePct > suitePct && neededSuitePct <= 1) {
+          hints.push(`Add more suites (need ${Math.round(neededSuitePct * 100)}%+)`);
+        }
+        // else: room mix alone can't reach this star even at 100% suites —
+        // fall through silently, the other hint types below still apply.
+      }
+    }
   }
   if (target >= 3 && state.housekeeping.turnoverQuality === 'quick') {
     hints.push('Upgrade turnover cleaning to standard or thorough');

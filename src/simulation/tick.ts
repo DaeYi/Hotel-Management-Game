@@ -67,7 +67,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
     ...current,
     rooms: roomsAfterDeparture,
     guests: current.guests.filter(g => !departedGuestIds.has(g.id)),
-    bookings: [...current.bookings, ...newBookings].slice(-(REVIEW.reviewWindowDays * 20)),
+    bookings: [...current.bookings, ...newBookings].slice(-REVIEW.reviewWindowBookingCount),
     cash: current.cash + revenueThisTick - turnoverCost,
     totalRevenue: current.totalRevenue + Math.max(0, revenueThisTick),
   };

@@ -96,13 +96,17 @@ export function setRoomPrice(
   };
 }
 
+/** Refund amount when demolishing a room or facility: a fixed fraction of build cost. */
+export function getDemolishRefund(buildCost: number): number {
+  return Math.floor(buildCost * ECONOMY.demolishRefundRate);
+}
+
 export function demolishRoom(state: HotelState, roomId: string): HotelState | null {
   const room = state.rooms.find(r => r.id === roomId);
   if (!room) return null;
   if (room.status === 'occupied') return null; // can't demolish while occupied
 
-  // Refund 25% of build cost
-  const refund = Math.floor(ROOM_CONFIG[room.type].buildCost * 0.25);
+  const refund = getDemolishRefund(ROOM_CONFIG[room.type].buildCost);
 
   return {
     ...state,
@@ -180,7 +184,7 @@ export function demolishFacility(state: HotelState, facilityId: string): HotelSt
   if (!facility) return null;
 
   const config = FACILITY_CONFIG[facility.type];
-  const refund = Math.floor((config?.buildCost ?? 0) * 0.25);
+  const refund = getDemolishRefund(config?.buildCost ?? 0);
 
   return {
     ...state,

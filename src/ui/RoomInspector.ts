@@ -3,6 +3,7 @@ import type { HotelState, Room } from '../simulation/types';
 import { ROOM_CONFIG, ECONOMY, AMENITIES } from '../config/balance';
 import { TILE_SIZE, GRID_OFFSET_X, GRID_OFFSET_Y } from './GridRenderer';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
+import { getDemolishRefund } from '../simulation/HotelState';
 
 const PANEL_W = 220;
 const PANEL_H = 260;
@@ -61,7 +62,7 @@ export class RoomInspector {
     this.container.add(this.titleText);
 
     // Close button
-    const closeBtn = scene.add.text(PANEL_W - 28, 8, '✕', {
+    const closeBtn = scene.add.text(PANEL_W - 28, 8, '\u2715', {
       fontSize: '16px', fontFamily: 'monospace', color: '#888899',
     });
     closeBtn.setInteractive({ useHandCursor: true });
@@ -214,11 +215,11 @@ export class RoomInspector {
       statusLine = 'Status:     Vacant';
     }
 
-    const condBar = '█'.repeat(Math.round(room.condition / 10))
-      + '░'.repeat(10 - Math.round(room.condition / 10));
+    const condBar = '\u2588'.repeat(Math.round(room.condition / 10))
+      + '\u2591'.repeat(10 - Math.round(room.condition / 10));
 
-    const cleanBar = '█'.repeat(Math.round(room.cleanliness / 10))
-      + '░'.repeat(10 - Math.round(room.cleanliness / 10));
+    const cleanBar = '\u2588'.repeat(Math.round(room.cleanliness / 10))
+      + '\u2591'.repeat(10 - Math.round(room.cleanliness / 10));
 
     const noise = calculateRoomNoise(room, state);
     const noiseLabel = noise <= 0.2 ? 'Quiet'
@@ -252,7 +253,7 @@ export class RoomInspector {
 
     // Show demolish button when room is not occupied (allow during cleaning)
     this.demolishBtn.setVisible(room.status !== 'occupied');
-    const refund = Math.floor(ROOM_CONFIG[room.type].buildCost * 0.25);
+    const refund = getDemolishRefund(ROOM_CONFIG[room.type].buildCost);
     this.demolishBtn.setText(`Demolish (+$${refund})`);
   }
 

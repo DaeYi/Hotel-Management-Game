@@ -46,6 +46,7 @@ export const ECONOMY = {
   roomConditionDecayPerDay: 2, // condition points lost per day when occupied
   roomBreakdownThreshold: 0, // condition at which room goes out of order
   initialReviewScore: 5.0, // cold start: 5/10 (neutral)
+  demolishRefundRate: 0.25, // fraction of build cost refunded on demolish (rooms and facilities)
 };
 
 export const GUEST_TRAITS = {
@@ -54,6 +55,8 @@ export const GUEST_TRAITS = {
   lightSleeperNoiseMult: 1.5,
   bigSpenderBudgetMult: 1.5,
 };
+
+const REVIEW_WINDOW_DAYS = 30;
 
 export const REVIEW = {
   basePriceFairnessWeight: 2.0, // scaled for 0-10
@@ -64,7 +67,12 @@ export const REVIEW = {
   baseScore: 5.0, // neutral starting point on 0-10 scale
   minScore: 0,
   maxScore: 10,
-  reviewWindowDays: 30,
+  reviewWindowDays: REVIEW_WINDOW_DAYS,
+  // Single source of truth for the rolling review window: EconomyManager averages
+  // over this many recent bookings, and tick.ts retains at least this many —
+  // previously these were two independently-tuned multipliers (*10 vs *20) that
+  // could silently desync.
+  reviewWindowBookingCount: REVIEW_WINDOW_DAYS * 10,
   // Arrival rate uses reviewScore: arrivals = base * (reviewScore / 5)
   // So a 5/10 hotel gets base arrivals, 10/10 gets 2x, 0/10 gets 0
   arrivalScoreDivisor: 5.0,

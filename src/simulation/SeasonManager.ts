@@ -55,7 +55,14 @@ export function getSpecialEvent(day: number): string | null {
   const dayOfYear = ((day - 1) % SEASON.yearLength);
 
   for (const event of SEASON.specialEvents) {
-    if (dayOfYear >= event.startDay && dayOfYear < event.startDay + event.duration) {
+    const endDay = event.startDay + event.duration;
+    if (dayOfYear >= event.startDay && dayOfYear < endDay) {
+      return event.name;
+    }
+    // Event window wraps past year-end (e.g. New Year day 355 + 10 = day 365,
+    // but dayOfYear only ever reaches 359) — also match the wrapped remainder
+    // at the start of the next year.
+    if (endDay > SEASON.yearLength && dayOfYear < endDay - SEASON.yearLength) {
       return event.name;
     }
   }
