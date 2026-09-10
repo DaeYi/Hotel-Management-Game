@@ -15,7 +15,9 @@ const TOAST_MARGIN = 4;
 
 const EVENT_COLORS: Record<string, string> = {
   guest_arrived: '#2ecc71',
+  guest_returned: '#2ecc71',
   guest_departed: '#3498db',
+  guest_walked_out: '#e67e22',
   guest_turned_away: '#e67e22',
   guest_impatient: '#e67e22',
   review_score_changed: '#f1c40f',
@@ -26,7 +28,17 @@ const EVENT_COLORS: Record<string, string> = {
   daily_cleaning: '#3498db',
   maintenance_repair: '#f39c12',
   season_changed: '#9b59b6',
+  noise_complaint_filed: '#e67e22',
+  noise_complaint_escalated: '#e74c3c',
+  mid_stay_breakdown_resolved: '#2ecc71',
 };
+
+/** Incident-related event types (design-review D13): suppressed as toasts while
+ * the Story Log panel is open, since the player is already looking at them there. */
+export const INCIDENT_EVENT_TYPES = new Set([
+  'guest_returned', 'guest_walked_out', 'noise_complaint_filed',
+  'noise_complaint_escalated', 'mid_stay_breakdown_resolved',
+]);
 
 export class NotificationToast {
   private scene: Phaser.Scene;
@@ -47,7 +59,7 @@ export class NotificationToast {
   addEvents(events: GameEvent[]) {
     for (const event of events) {
       // Always show these immediately
-      if (event.type === 'bankrupt' || event.type === 'room_broken' || event.type === 'star_rating_changed' || event.type === 'season_changed') {
+      if (event.type === 'bankrupt' || event.type === 'room_broken' || event.type === 'star_rating_changed' || event.type === 'season_changed' || INCIDENT_EVENT_TYPES.has(event.type)) {
         this.showToast(event.message, EVENT_COLORS[event.type] ?? '#ffffff');
         continue;
       }

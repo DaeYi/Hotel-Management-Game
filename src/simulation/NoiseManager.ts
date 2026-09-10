@@ -68,6 +68,42 @@ export function calculateRoomNoise(
 }
 
 /**
+ * Identify the loudest occupied neighbor room's guest, for Noise Complaint's
+ * culprit attribution (design-review D9). Fails closed (returns null) when no
+ * neighbor contributes noise, or when the top two neighbors tie -- an
+ * ambiguous or arbitrary culprit is worse than no complaint firing that tick.
+ */
+export function getLoudestNeighborGuestId(room: Room, state: HotelState): string | null {
+  const neighbors = getNeighborCoords(room.gridX, room.gridY);
+  let topGuestId: string | null = null;
+  let topNoise = 0;
+  let tied = false;
+
+  for (const [nx, ny] of neighbors) {
+    const neighborRoom = state.rooms.find(r => r.gridX === nx && r.gridY === ny);
+    if (!neighborRoom || neighborRoom.status !== 'occupied' || !neighborRoom.guestId) continue;
+
+    const guest = state.guests.find(g => g.id === neighborRoom.guestId);
+    if (!guest) continue;
+
+    const outputMult = NOISE.traitNoiseOutput[guest.trait] ?? 1;
+    const neighborNoise = NOISE.baseOccupiedNoise * outputMult;
+
+    if (neighborNoise <= 0) continue;
+
+    if (neighborNoise > topNoise) {
+      topNoise = neighborNoise;
+      topGuestId = guest.id;
+      tied = false;
+    } else if (neighborNoise === topNoise) {
+      tied = true;
+    }
+  }
+
+  return tied ? null : topGuestId;
+}
+
+/**
  * Convert raw noise level to a rating penalty.
  * Factors in the guest's noise sensitivity trait.
  */

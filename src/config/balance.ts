@@ -47,7 +47,60 @@ export const ECONOMY = {
   roomBreakdownThreshold: 0, // condition at which room goes out of order
   initialReviewScore: 5.0, // cold start: 5/10 (neutral)
   demolishRefundRate: 0.25, // fraction of build cost refunded on demolish (rooms and facilities)
+  // Fraction of remaining-night revenue refunded as a comp when a guest departs early
+  // (Noise Complaint escalation, Mid-Stay Breakdown with no room to move to). Same
+  // named-constant pattern as demolishRefundRate -- not an ad hoc number.
+  earlyDepartureRefundRate: 0.5,
 };
+
+export const SATISFACTION = {
+  initial: 50, // matches Guest.satisfaction's starting value
+  // Below this, a guest becomes eligible for escalation-type incidents (the "powder keg").
+  incidentFuelThreshold: 35,
+  // At or above this at checkout, a guest is added to returningGuestPool.
+  returnEligibleThreshold: 65,
+  // Ambient drift (ST-D3): fraction of the gap to a stay-quality-derived target closed per tick.
+  ambientDriftWeight: 0.03,
+  noiseComplaintPenalty: 15, // satisfaction drop when a complaint is filed
+  noiseComplaintResolvedBonus: 10, // satisfaction gain when a complaint resolves on its own
+  midStayBreakdownMoveBonus: 12, // satisfaction gain from a successful room-move resolution
+  regularReturnBonus: 8, // small satisfaction lift on a recognized return-guest arrival
+};
+
+export const STORY = {
+  // Noise Complaint chain timing (design-review D10): grace period must reliably
+  // fit inside a 1-3 night (24-72h) stay -- pinned before implementation.
+  noiseComplaintGraceHours: 10,
+  // Pacing budget: max NEW incidents (chain origins) selected per day. Existing
+  // in-progress chains advancing doesn't count against this.
+  incidentDailyBudget: 2,
+  // "Quiet too long" pacing bias: once this many hours pass with zero new
+  // incidents, eligible candidates become near-certain to fire.
+  quietBiasHours: 14,
+  quietBiasMinChance: 0.15, // chance to fire immediately after a fresh incident
+  returningGuestPoolMaxSize: 15,
+  returningGuestPullChance: 0.12, // chance an arrival slot pulls from the pool instead of generating fresh
+  storyLogMaxChains: 12, // capped like returningGuestPool -- retains this many most-recent chains
+  // Word-of-mouth arrival multiplier (design-review D11): floor/ceiling so this
+  // doesn't compound unboundedly with reviewScore's own arrival penalty.
+  wordOfMouthFloorMultiplier: 0.85,
+  wordOfMouthCeilingMultiplier: 1.15,
+  // Mid-Stay Breakdown: shorter grace than Noise Complaint -- an operational
+  // failure should resolve/escalate faster than a social complaint.
+  midStayBreakdownGraceHours: 6,
+  // Review Goes Semi-Viral: a checkout below this reviewScore (0-10) may trigger it.
+  reviewSemiViralScoreThreshold: 3.0,
+  reviewSemiViralPenaltyMultiplier: 0.7, // 30% arrival reduction while active
+  reviewSemiViralPenaltyHours: 48, // 2 game-days
+};
+
+// Small hardcoded first-name pool (Satisfaction System Design, point 3). Known,
+// accepted limitation: with enough simultaneous guests, two can share a name.
+export const GUEST_NAMES = [
+  'Sam', 'Alex', 'Jordan', 'Taylor', 'Morgan', 'Casey', 'Riley', 'Jamie',
+  'Avery', 'Quinn', 'Priya', 'Malik', 'Elena', 'Kenji', 'Zara', 'Omar',
+  'Nadia', 'Leo', 'Ingrid', 'Deshawn',
+];
 
 export const GUEST_TRAITS = {
   lightSleeperChance: 0.2,
@@ -78,6 +131,9 @@ export const REVIEW = {
   // Arrival rate uses reviewScore: arrivals = base * (reviewScore / 5)
   // So a 5/10 hotel gets base arrivals, 10/10 gets 2x, 0/10 gets 0
   arrivalScoreDivisor: 5.0,
+  // Subtracted from calculateGuestReview's real score for an early-departure
+  // walkout Booking (eng-review D4) -- not a flat fixed low value.
+  walkoutIncidentPenalty: 2.0,
 };
 
 export const HOUSEKEEPING = {

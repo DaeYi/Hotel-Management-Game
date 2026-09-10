@@ -1,13 +1,18 @@
 import type { HotelState, TickResult, GameEvent, Booking } from './types.js';
 import type { PRNG } from './prng.js';
-import { processArrivals, processDepartures } from './GuestManager.js';
-import { processRevenue, processDailyCosts, updateReviewScore, checkBankruptcy, degradeRoomConditions } from './EconomyManager.js';
+import { processArrivals, processDepartures, calculateGuestReviewBreakdown } from './GuestManager.js';
+import { processRevenue, processDailyCosts, updateReviewScore, checkBankruptcy, degradeRoomConditions, calculateEarlyDepartureSettlement } from './EconomyManager.js';
 import { tickNoiseSources } from './NoiseManager.js';
 import { processCleaningTick, processDailyHousekeeping, degradeCleanliness, startTurnoverCleaning } from './HousekeepingManager.js';
 import { calculateStarRating } from './StarRatingManager.js';
 import { checkSeasonChange } from './SeasonManager.js';
 import { processMaintenanceTick, getStaffDailyCost } from './MaintenanceManager.js';
 import { ECONOMY, REVIEW, HOUSEKEEPING, STAFF } from '../config/balance.js';
+import {
+  driftSatisfaction, advanceIncidents, dropIncidentsForGuests, selectNewIncident,
+  recordReturnGuestEntries, checkReviewSemiViral, tickReputationPenalties,
+} from './StoryGenerator.js';
+import type { DepartedGuestReview } from './StoryGenerator.js';
 
 export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   const events: GameEvent[] = [];
@@ -32,19 +37,95 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
     ...current,
     guests: newGuests,
     rooms: updatedRooms,
+    returningGuestPool: arrivals.returningGuestPool,
     totalTurnedAway: current.totalTurnedAway + arrivals.turnedAway,
   };
 
-  // 2. Process guest departures
+  // "A Regular Returns" -- converts this tick's guest_returned arrivals into log entries
+  current = recordReturnGuestEntries(current, arrivals.events);
+
+  // 1.5 Ambient satisfaction drift (Satisfaction System Design point 1 / design-review D3)
+  current = driftSatisfaction(current);
+
+  // 1.6 Advance in-progress incidents (resolve / escalate / room-move), then
+  // select a new one if the pacing budget allows.
+  const advance = advanceIncidents(current, prng);
+  current = advance.state;
+  events.push(...advance.events);
+
+  const incidentSelection = selectNewIncident(current, prng);
+  current = incidentSelection.state;
+  events.push(...incidentSelection.events);
+
+  // 2. Early departures (eng-review D1/D7): runs immediately before the normal
+  // departure check below, folded into the SAME accumulation (departedGuestIds/
+  // newBookings/roomsAfterDeparture), never a parallel pipeline. Guarded against
+  // double-processing a guest whose normal checkout also fires this tick --
+  // the normal path takes priority, the guest is simply excluded here.
+  const normalCheckoutGuestIds = new Set(
+    current.guests
+      .filter(g => current.day - g.checkInDay >= g.stayLength)
+      .map(g => g.id)
+  );
+  const earlyDepartureGuestIds = new Set(
+    [...advance.earlyDepartureGuestIds].filter(id => !normalCheckoutGuestIds.has(id))
+  );
+
+  const walkoutBookings: Booking[] = [];
+  const walkoutReviews: DepartedGuestReview[] = [];
+  let walkoutCashDelta = 0;
+
+  for (const guestId of earlyDepartureGuestIds) {
+    const guest = current.guests.find(g => g.id === guestId);
+    const room = current.rooms.find(r => r.status === 'occupied' && r.guestId === guestId);
+    if (!guest || !room) continue;
+
+    const daysStayed = Math.max(1, current.day - guest.checkInDay);
+    const nightsRemaining = Math.max(0, guest.stayLength - daysStayed);
+    const settlement = calculateEarlyDepartureSettlement(room.pricePerNight, daysStayed, nightsRemaining);
+    walkoutCashDelta += settlement.cashDelta;
+
+    // Real breakdown, computed once (eng-review D2/D4) -- reused for both the
+    // walkout Booking's score and Review Semi-Viral's attribution below.
+    const breakdown = calculateGuestReviewBreakdown(room, current, guest, prng);
+    const score = Math.max(REVIEW.minScore, breakdown.finalScore - REVIEW.walkoutIncidentPenalty);
+
+    const booking: Booking = {
+      id: `booking-walkout-${guest.id}`,
+      roomId: room.id,
+      guestId: guest.id,
+      nightRate: room.pricePerNight,
+      reviewScore: score,
+      satisfactionAtCheckout: guest.satisfaction,
+    };
+    walkoutBookings.push(booking);
+    walkoutReviews.push({ guestName: guest.name, roomId: room.id, booking, breakdown });
+
+    events.push({
+      type: 'guest_walked_out',
+      message: `${guest.name} checked out early ($${settlement.cashDelta.toFixed(0)})`,
+      data: { guestId: guest.id, roomId: room.id, reviewScore: score, cashDelta: settlement.cashDelta },
+    });
+  }
+
+  // 2b. Normal departures
   const departures = processDepartures(current, prng);
   events.push(...departures.events);
+  current = { ...current, returningGuestPool: departures.returningGuestPool };
 
-  const departedGuestIds = new Set(departures.departed.map(d => d.guest.id));
-  const newBookings: Booking[] = departures.departed.map(d => d.booking);
+  const departedGuestIds = new Set<string>([
+    ...departures.departed.map(d => d.guest.id),
+    ...earlyDepartureGuestIds,
+  ]);
+  const newBookings: Booking[] = [...departures.departed.map(d => d.booking), ...walkoutBookings];
   let revenueThisTick = 0;
 
-  // Rooms enter cleaning state after checkout
-  // If no front desk staff, checkout paperwork adds delay to cleaning
+  // Teardown rule: drop any incident tied to a guest who departed this tick
+  // (normal or walkout) -- an already-departed guest can't escalate further.
+  current = { ...current, activeIncidents: dropIncidentsForGuests(current.activeIncidents, departedGuestIds) };
+
+  // Rooms enter cleaning state after checkout -- normal and walkout departures
+  // share this same accumulation (eng-review D7), not a separate pipeline.
   const checkoutDelay = current.staff.frontDesk > 0 ? 0 : STAFF.frontDesk.checkoutDelayWithoutStaff;
 
   const roomsAfterDeparture = current.rooms.map(room => {
@@ -56,10 +137,10 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   });
 
   const revenueResult = processRevenue(current, departures);
-  revenueThisTick += revenueResult.cashDelta;
+  revenueThisTick += revenueResult.cashDelta + walkoutCashDelta;
 
-  // Turnover cleaning costs
-  const roomsStartingCleaning = departures.departed.length;
+  // Turnover cleaning costs (normal + walkout rooms both enter cleaning)
+  const roomsStartingCleaning = departures.departed.length + earlyDepartureGuestIds.size;
   const turnoverCostPerRoom = HOUSEKEEPING.turnoverCost[current.housekeeping.turnoverQuality] ?? 30;
   const turnoverCost = roomsStartingCleaning * turnoverCostPerRoom;
 
@@ -71,6 +152,19 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
     cash: current.cash + revenueThisTick - turnoverCost,
     totalRevenue: current.totalRevenue + Math.max(0, revenueThisTick),
   };
+
+  // Review Goes Semi-Viral: check this tick's departures (normal + walkout)
+  // for an unusually bad checkout, budget-gated same as other new incidents.
+  const departureReviews: DepartedGuestReview[] = [
+    ...departures.departed.map(d => ({ guestName: d.guest.name, roomId: d.roomId, booking: d.booking, breakdown: d.breakdown })),
+    ...walkoutReviews,
+  ];
+  const semiViral = checkReviewSemiViral(current, departureReviews, prng);
+  current = semiViral.state;
+  events.push(...semiViral.events);
+
+  // Tick down any active reputation penalty from a prior Review Semi-Viral incident
+  current = tickReputationPenalties(current);
 
   // 3. Process cleaning tick
   const cleaningResult = processCleaningTick(current);

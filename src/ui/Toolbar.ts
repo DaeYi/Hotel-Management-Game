@@ -54,6 +54,7 @@ export class Toolbar {
     // View group
     curX = this.addGroupLabel(curX, 'View:', '#6a6a8a');
     curX = this.addButton(curX, { id: 'chart', label: '\ud83d\udcc8 Finance', group: 'view' });
+    curX = this.addButton(curX, { id: 'storylog', label: '\ud83d\udcd6 Story', group: 'view' });
     curX = this.addButton(curX, { id: 'noise', label: '\ud83d\udd0a Noise', group: 'view', toggle: true });
 
     curX += 12;
@@ -141,7 +142,7 @@ export class Toolbar {
     }
 
     // Panel buttons: only one panel open at a time
-    if (config.group === 'management' || config.id === 'chart') {
+    if (config.group === 'management' || config.id === 'chart' || config.id === 'storylog') {
       if (this.activePanel === config.id) {
         // Close current panel
         this.activePanel = null;

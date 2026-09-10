@@ -30,6 +30,10 @@ export function createHotelState(): HotelState {
     reviewScore: ECONOMY.initialReviewScore,
     totalTurnedAway: 0,
     totalRevenue: 0,
+    activeIncidents: [],
+    returningGuestPool: [],
+    storyLog: [],
+    activeReputationPenalties: [],
   };
 }
 
@@ -192,6 +196,17 @@ export function demolishFacility(state: HotelState, facilityId: string): HotelSt
     facilities: state.facilities.filter(f => f.id !== facilityId),
     noiseSources: [...state.noiseSources, createConstructionNoise(facility.gridX, facility.gridY, 'demolish')],
   };
+}
+
+/**
+ * Derive a hotel-style room number from grid position (floor = row, unit = column),
+ * e.g. row 2, column 4 -> "204". Pure formatting, no stored data (design-review D9) --
+ * used in RoomInspector's title, a grid tile label, and Story Log/toast message text.
+ */
+export function formatRoomLabel(gridX: number, gridY: number): string {
+  const floor = gridY + 1;
+  const unit = String(gridX + 1).padStart(2, '0');
+  return `${floor}${unit}`;
 }
 
 /** Get facilities adjacent to a room (within 1 tile, all 8 directions) */

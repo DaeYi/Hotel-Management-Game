@@ -1,10 +1,11 @@
-import type { Guest, GuestTrait, Room, HotelState, Booking, GameEvent } from './types.js';
+import type { Guest, GuestTrait, Room, HotelState, Booking, GameEvent, ReturningGuestProfile } from './types.js';
 import type { PRNG } from './prng.js';
-import { ECONOMY, GUEST_TRAITS, REVIEW, ROOM_CONFIG, HOUSEKEEPING, STAFF, AMENITIES, FACILITY_CONFIG } from '../config/balance.js';
+import { ECONOMY, GUEST_TRAITS, REVIEW, ROOM_CONFIG, HOUSEKEEPING, STAFF, AMENITIES, FACILITY_CONFIG, GUEST_NAMES, SATISFACTION, STORY } from '../config/balance.js';
 import { getAvailableRooms, getAdjacentFacilities } from './HotelState.js';
 import { calculateRoomNoise, noiseToRatingPenalty } from './NoiseManager.js';
 import { getExpectationMultiplier } from './StarRatingManager.js';
 import { getTotalDemandMultiplier, getCurrentSeason } from './SeasonManager.js';
+import { getReputationPenaltyMultiplier } from './StoryGenerator.js';
 
 export function generateGuestTrait(prng: PRNG): GuestTrait {
   const roll = prng.next();
@@ -14,7 +15,11 @@ export function generateGuestTrait(prng: PRNG): GuestTrait {
   return 'normal';
 }
 
-function generateGuest(prng: PRNG, day: number): Guest {
+function generateGuestName(prng: PRNG): string {
+  return GUEST_NAMES[Math.floor(prng.next() * GUEST_NAMES.length)];
+}
+
+function generateFreshGuest(prng: PRNG, day: number): Guest {
   const trait = generateGuestTrait(prng);
   let budget = prng.range(ECONOMY.guestMinBudget, ECONOMY.guestMaxBudget);
   if (trait === 'big_spender') {
@@ -23,12 +28,52 @@ function generateGuest(prng: PRNG, day: number): Guest {
 
   return {
     id: `guest-${day}-${Math.floor(prng.next() * 100000)}`,
+    name: generateGuestName(prng),
     budget,
     stayLength: prng.int(ECONOMY.guestMinStay, ECONOMY.guestMaxStay),
     trait,
-    satisfaction: 50,
+    satisfaction: SATISFACTION.initial,
     checkInDay: day,
+    isReturning: false,
+    hadNoiseComplaint: false,
   };
+}
+
+/** A guest pulled from returningGuestPool: same name/trait as their prior stay (design-review D7). */
+function generateReturningGuest(profile: ReturningGuestProfile, prng: PRNG, day: number): Guest {
+  let budget = prng.range(ECONOMY.guestMinBudget, ECONOMY.guestMaxBudget);
+  if (profile.trait === 'big_spender') {
+    budget *= GUEST_TRAITS.bigSpenderBudgetMult;
+  }
+
+  return {
+    id: `guest-${day}-${Math.floor(prng.next() * 100000)}`,
+    name: profile.name,
+    budget,
+    stayLength: prng.int(ECONOMY.guestMinStay, ECONOMY.guestMaxStay),
+    trait: profile.trait,
+    satisfaction: SATISFACTION.initial,
+    checkInDay: day,
+    isReturning: true,
+    hadNoiseComplaint: false,
+  };
+}
+
+/**
+ * Rolling word-of-mouth arrival multiplier, driven by satisfaction at checkout
+ * (Satisfaction System Design, point 4). Mirrors updateReviewScore's window and
+ * cold-start handling; floor/ceiling per eng-review D11 so this doesn't compound
+ * unboundedly with reviewScore's own arrival penalty on the same walkouts.
+ */
+export function getWordOfMouthMultiplier(state: HotelState): number {
+  if (state.bookings.length === 0) return 1.0;
+  const recent = state.bookings.slice(-REVIEW.reviewWindowBookingCount);
+  if (recent.length === 0) return 1.0;
+
+  const avgSatisfaction = recent.reduce((sum, b) => sum + b.satisfactionAtCheckout, 0) / recent.length;
+  const normalized = (avgSatisfaction - SATISFACTION.initial) / SATISFACTION.initial; // roughly -1..+1
+  const raw = 1.0 + normalized * (STORY.wordOfMouthCeilingMultiplier - 1.0);
+  return Math.max(STORY.wordOfMouthFloorMultiplier, Math.min(STORY.wordOfMouthCeilingMultiplier, raw));
 }
 
 function matchGuestToRoom(guest: Guest, availableRooms: Room[]): Room | null {
@@ -44,6 +89,7 @@ export interface ArrivalResult {
   checkedIn: Array<{ guest: Guest; roomId: string }>;
   turnedAway: number;
   events: GameEvent[];
+  returningGuestPool: ReturningGuestProfile[]; // after any pulls this hour
 }
 
 export function processArrivals(
@@ -51,16 +97,18 @@ export function processArrivals(
   hour: number,
   prng: PRNG
 ): ArrivalResult {
-  const result: ArrivalResult = { checkedIn: [], turnedAway: 0, events: [] };
+  const result: ArrivalResult = { checkedIn: [], turnedAway: 0, events: [], returningGuestPool: state.returningGuestPool };
 
   if (hour < ECONOMY.checkInStartHour || hour >= ECONOMY.checkInEndHour) {
     return result;
   }
 
   const hoursInWindow = ECONOMY.checkInEndHour - ECONOMY.checkInStartHour;
-  // Arrival rate: base * reviewScore factor * seasonal demand
+  // Arrival rate: base * reviewScore factor * seasonal demand * word-of-mouth
   const demandMult = getTotalDemandMultiplier(state.day);
-  const arrivalsPerDay = ECONOMY.baseArrivalsPerDay * (state.reviewScore / REVIEW.arrivalScoreDivisor) * demandMult;
+  const wordOfMouthMult = getWordOfMouthMultiplier(state);
+  const reputationMult = getReputationPenaltyMultiplier(state);
+  const arrivalsPerDay = ECONOMY.baseArrivalsPerDay * (state.reviewScore / REVIEW.arrivalScoreDivisor) * demandMult * wordOfMouthMult * reputationMult;
   const arrivalsThisHour = arrivalsPerDay / hoursInWindow;
 
   const guaranteed = Math.floor(arrivalsThisHour);
@@ -76,9 +124,18 @@ export function processArrivals(
   const available = getAvailableRooms(state);
   let availableIdx = 0;
   let checkedInThisHour = 0;
+  let pool = [...state.returningGuestPool];
 
   for (let i = 0; i < totalArrivals; i++) {
-    const guest = generateGuest(prng, state.day);
+    let guest: Guest;
+    if (pool.length > 0 && prng.chance(STORY.returningGuestPullChance)) {
+      const idx = Math.floor(prng.next() * pool.length);
+      const profile = pool[idx];
+      pool = [...pool.slice(0, idx), ...pool.slice(idx + 1)];
+      guest = generateReturningGuest(profile, prng, state.day);
+    } else {
+      guest = generateFreshGuest(prng, state.day);
+    }
 
     // Front desk at capacity: guest leaves impatiently
     if (checkedInThisHour >= checkInCapacity) {
@@ -104,6 +161,13 @@ export function processArrivals(
         message: `Guest checked into ${room.type} room`,
         data: { guestId: guest.id, roomId: room.id, trait: guest.trait },
       });
+      if (guest.isReturning) {
+        result.events.push({
+          type: 'guest_returned',
+          message: `${guest.name} is back for another stay!`,
+          data: { guestId: guest.id, roomId: room.id },
+        });
+      }
     } else {
       result.turnedAway++;
       result.events.push({
@@ -113,19 +177,22 @@ export function processArrivals(
     }
   }
 
+  result.returningGuestPool = pool;
   return result;
 }
 
 export interface DepartureResult {
-  departed: Array<{ guest: Guest; roomId: string; booking: Booking }>;
+  departed: Array<{ guest: Guest; roomId: string; booking: Booking; breakdown: GuestReviewBreakdown }>;
   events: GameEvent[];
+  returningGuestPool: ReturningGuestProfile[];
 }
 
 export function processDepartures(
   state: HotelState,
   prng: PRNG
 ): DepartureResult {
-  const result: DepartureResult = { departed: [], events: [] };
+  const result: DepartureResult = { departed: [], events: [], returningGuestPool: state.returningGuestPool };
+  let pool = [...state.returningGuestPool];
 
   for (const guest of state.guests) {
     const daysStayed = state.day - guest.checkInDay;
@@ -133,7 +200,8 @@ export function processDepartures(
       const room = state.rooms.find(r => r.status === 'occupied' && r.guestId === guest.id);
       if (!room) continue;
 
-      const score = calculateGuestReview(room, state, guest, prng);
+      const breakdown = calculateGuestReviewBreakdown(room, state, guest, prng);
+      const score = breakdown.finalScore;
       const totalPaid = room.pricePerNight * guest.stayLength;
 
       const booking: Booking = {
@@ -142,31 +210,53 @@ export function processDepartures(
         guestId: guest.id,
         nightRate: room.pricePerNight,
         reviewScore: score,
+        satisfactionAtCheckout: guest.satisfaction,
       };
 
-      result.departed.push({ guest, roomId: room.id, booking });
+      result.departed.push({ guest, roomId: room.id, booking, breakdown });
       result.events.push({
         type: 'guest_departed',
         message: `Guest checked out (${score.toFixed(1)}/10, $${totalPaid})`,
         data: { guestId: guest.id, roomId: room.id, reviewScore: score, totalPaid },
       });
+
+      // Satisfied guests become eligible to return later (Satisfaction System Design, point 3)
+      if (guest.satisfaction >= SATISFACTION.returnEligibleThreshold) {
+        const profile: ReturningGuestProfile = { name: guest.name, trait: guest.trait, roomType: room.type };
+        pool = [...pool, profile].slice(-STORY.returningGuestPoolMaxSize);
+      }
     }
   }
 
+  result.returningGuestPool = pool;
   return result;
 }
 
+export interface GuestReviewBreakdown {
+  noisePenalty: number;
+  conditionBonus: number;
+  cleanlinessBonus: number;
+  amenityPenalty: number;
+  priceFairness: number; // raw fairness ratio (1 = perfect match, lower = worse in either direction)
+  guestVariance: number;
+  facilityBonus: number;
+  amenityBonus: number;
+  finalScore: number;
+}
+
 /**
- * Calculate a guest's review score (0-10).
- * Higher star hotels have higher expectations, so the same service
- * produces lower scores at a 5-star vs a 2-star hotel.
+ * Calculate a guest's review score (0-10), and the components that produced
+ * it (design-review-required refactor, eng-review D4: attribution rule for
+ * Review Goes Semi-Viral, and walkout Bookings need the real breakdown, not
+ * just the final score). Higher star hotels have higher expectations, so the
+ * same service produces lower scores at a 5-star vs a 2-star hotel.
  */
-export function calculateGuestReview(
+export function calculateGuestReviewBreakdown(
   room: Room,
   state: HotelState,
   guest: Guest,
   prng: PRNG
-): number {
+): GuestReviewBreakdown {
   const expectedPrice = ROOM_CONFIG[room.type].expectedPrice;
   const priceFairness = 1 - Math.abs(room.pricePerNight - expectedPrice) / expectedPrice;
 
@@ -237,6 +327,31 @@ export function calculateGuestReview(
   const expectationAdjustment = penalties * (expectation - 1);
 
   const finalScore = rawScore - expectationAdjustment;
+  const clampedScore = Math.max(REVIEW.minScore, Math.min(REVIEW.maxScore, finalScore));
 
-  return Math.max(REVIEW.minScore, Math.min(REVIEW.maxScore, finalScore));
+  return {
+    noisePenalty,
+    conditionBonus,
+    cleanlinessBonus,
+    amenityPenalty,
+    priceFairness,
+    guestVariance,
+    facilityBonus,
+    amenityBonus,
+    finalScore: clampedScore,
+  };
+}
+
+/**
+ * Calculate a guest's review score (0-10). Byte-identical to the pre-refactor
+ * implementation -- callers that only need the final number don't need to
+ * change; use calculateGuestReviewBreakdown when the components matter.
+ */
+export function calculateGuestReview(
+  room: Room,
+  state: HotelState,
+  guest: Guest,
+  prng: PRNG
+): number {
+  return calculateGuestReviewBreakdown(room, state, guest, prng).finalScore;
 }

@@ -34,11 +34,14 @@ export interface StaffConfig {
 
 export interface Guest {
   id: string;
+  name: string;
   budget: number;
   stayLength: number; // nights
   trait: GuestTrait;
   satisfaction: number; // 0-100
   checkInDay: number;
+  isReturning: boolean; // true if this arrival was pulled from returningGuestPool
+  hadNoiseComplaint: boolean; // cooldown: one Noise Complaint arc per guest per stay
 }
 
 export interface Booking {
@@ -47,6 +50,39 @@ export interface Booking {
   guestId: string;
   nightRate: number;
   reviewScore: number; // 0-10 guest review score
+  satisfactionAtCheckout: number; // 0-100, feeds the word-of-mouth rolling window
+}
+
+/** A guest profile remembered after a satisfied checkout, for the return-guest mechanic. */
+export interface ReturningGuestProfile {
+  name: string;
+  trait: GuestTrait;
+  roomType: RoomType; // cosmetic/log-flavor only -- does not influence matchGuestToRoom
+}
+
+export type IncidentType = 'noise_complaint' | 'mid_stay_breakdown';
+export type IncidentStage = 'active' | 'escalated' | 'resolved';
+
+export interface ActiveIncident {
+  id: string;
+  type: IncidentType;
+  guestId: string; // the affected/complaining guest
+  culpritGuestId?: string; // noise_complaint only (D9) -- the loudest contributing neighbor
+  roomId: string;
+  stage: IncidentStage;
+  hoursRemaining: number; // grace period countdown before escalation
+  chainId: string; // links this incident's stages to their StoryLogEntry thread
+}
+
+export interface StoryLogEntry {
+  id: string;
+  day: number;
+  hour: number;
+  type: string; // e.g. 'noise_complaint', 'noise_complaint_escalated', 'regular_returns'
+  guestName?: string;
+  roomId?: string;
+  message: string; // player-facing text, already includes any room reference
+  chainId?: string; // shared across an incident's stages so the UI renders one thread
 }
 
 export interface Facility {
@@ -81,6 +117,16 @@ export interface HotelState {
   reviewScore: number; // 0-10, guest satisfaction (how you perform)
   totalTurnedAway: number;
   totalRevenue: number;
+  activeIncidents: ActiveIncident[];
+  returningGuestPool: ReturningGuestProfile[]; // capped, oldest dropped first
+  storyLog: StoryLogEntry[]; // capped by chain (see StoryGenerator.ts)
+  activeReputationPenalties: ReputationPenalty[]; // Review Goes Semi-Viral's temporary arrival penalty
+}
+
+/** A temporary arrival-multiplier penalty from a Review Goes Semi-Viral incident. */
+export interface ReputationPenalty {
+  multiplier: number; // < 1.0, applied to arrivalsPerDay while active
+  hoursRemaining: number;
 }
 
 export interface SimulationSummary {
@@ -101,7 +147,7 @@ export interface TickResult {
 }
 
 export interface GameEvent {
-  type: 'guest_arrived' | 'guest_departed' | 'guest_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair';
+  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved';
   message: string;
   data?: Record<string, unknown>;
 }

@@ -3,7 +3,7 @@ import type { HotelState, Room } from '../simulation/types';
 import { ROOM_CONFIG, ECONOMY, AMENITIES } from '../config/balance';
 import { TILE_SIZE, GRID_OFFSET_X, GRID_OFFSET_Y } from './GridRenderer';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
-import { getDemolishRefund } from '../simulation/HotelState';
+import { getDemolishRefund, formatRoomLabel } from '../simulation/HotelState';
 
 const PANEL_W = 220;
 const PANEL_H = 260;
@@ -200,8 +200,9 @@ export class RoomInspector {
   private updateContent(room: Room, state: HotelState) {
     const config = ROOM_CONFIG[room.type];
     const typeName = room.type.charAt(0).toUpperCase() + room.type.slice(1);
+    const roomLabel = formatRoomLabel(room.gridX, room.gridY);
 
-    this.titleText.setText(`${typeName} Room`);
+    this.titleText.setText(`${typeName} Room ${roomLabel}`);
 
     const guest = state.guests.find(g => g.id === room.guestId);
     let statusLine: string;

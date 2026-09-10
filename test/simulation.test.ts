@@ -1,9 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { PRNG } from '../src/simulation/prng.js';
-import { createHotelState, addRoom, getOccupancyRate, demolishRoom, demolishFacility, addFacility, getDemolishRefund } from '../src/simulation/HotelState.js';
-import { processArrivals, processDepartures, calculateGuestReview, generateGuestTrait } from '../src/simulation/GuestManager.js';
-import { processDailyCosts, checkBankruptcy, updateReviewScore } from '../src/simulation/EconomyManager.js';
-import { calculateRoomNoise, noiseToRatingPenalty, createConstructionNoise, tickNoiseSources } from '../src/simulation/NoiseManager.js';
+import { createHotelState, addRoom, getOccupancyRate, demolishRoom, demolishFacility, addFacility, getDemolishRefund, formatRoomLabel } from '../src/simulation/HotelState.js';
+import { processArrivals, processDepartures, calculateGuestReview, calculateGuestReviewBreakdown, generateGuestTrait, getWordOfMouthMultiplier } from '../src/simulation/GuestManager.js';
+import { processDailyCosts, checkBankruptcy, updateReviewScore, calculateEarlyDepartureSettlement } from '../src/simulation/EconomyManager.js';
+import { calculateRoomNoise, noiseToRatingPenalty, createConstructionNoise, tickNoiseSources, getLoudestNeighborGuestId } from '../src/simulation/NoiseManager.js';
+import {
+  driftSatisfaction, advanceIncidents, selectNewIncident, groupByChain,
+  attributeReviewCause, checkReviewSemiViral, getReputationPenaltyMultiplier,
+} from '../src/simulation/StoryGenerator.js';
 import { startTurnoverCleaning, processCleaningTick, processDailyHousekeeping, checkHousekeepingCompliance } from '../src/simulation/HousekeepingManager.js';
 import { processMaintenanceTick } from '../src/simulation/MaintenanceManager.js';
 import { saveGame, loadGame, hasSavedGame, deleteSave } from '../src/simulation/SaveManager.js';
@@ -11,8 +15,8 @@ import { calculateStarRating, calculateStarPoints, getNextStarRequirements } fro
 import { getSpecialEvent, getTotalDemandMultiplier } from '../src/simulation/SeasonManager.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import { simulate } from '../src/simulation/simulate.js';
-import { ECONOMY, REVIEW, ROOM_CONFIG, FACILITY_CONFIG, GUEST_TRAITS, NOISE, HOUSEKEEPING } from '../src/config/balance.js';
-import type { Room, Guest, Booking, GuestTrait } from '../src/simulation/types.js';
+import { ECONOMY, REVIEW, ROOM_CONFIG, FACILITY_CONFIG, GUEST_TRAITS, NOISE, HOUSEKEEPING, SATISFACTION, STORY } from '../src/config/balance.js';
+import type { Room, Guest, Booking, GuestTrait, ActiveIncident, StoryLogEntry } from '../src/simulation/types.js';
 import { getGuestDotColor } from '../src/ui/GridRenderer';
 
 describe('PRNG', () => {
@@ -114,7 +118,13 @@ describe('SaveManager', () => {
     const v1Save = {
       version: 1, prngState: 42, timestamp: 0,
       state: {
-        cash: 1000, day: 1, hour: 0, rooms: [], guests: [], bookings: [],
+        cash: 1000, day: 1, hour: 0, rooms: [],
+        // In-progress guest predating Guest.name/isReturning/hadNoiseComplaint
+        // (v9 shape) -- intentionally has none of these fields, so this
+        // actually exercises the v9->v10 backfill rather than passing
+        // trivially regardless of whether the migration line exists.
+        guests: [{ id: 'g1', budget: 100, stayLength: 2, trait: 'normal', satisfaction: 50, checkInDay: 1 }],
+        bookings: [],
         // noiseSources and facilities intentionally absent (v1 shape, predates
         // both fields) — this is what actually exercises the v8->v9 step;
         // previously this fixture pre-populated facilities: [], which made
@@ -130,9 +140,19 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(9);
+    expect(loaded!.version).toBe(10);
     expect(loaded!.state.noiseSources).toEqual([]);
     expect(loaded!.state.facilities).toEqual([]); // added by the v8->v9 step
+    expect(loaded!.state.activeIncidents).toEqual([]);
+    expect(loaded!.state.returningGuestPool).toEqual([]);
+    expect(loaded!.state.storyLog).toEqual([]);
+    expect(loaded!.state.activeReputationPenalties).toEqual([]);
+    // v9->v10 backfill: an in-progress guest loaded from a pre-v10 save gets
+    // a generated name and default flags, not left undefined (design-review D5/D10).
+    expect(typeof loaded!.state.guests[0].name).toBe('string');
+    expect(loaded!.state.guests[0].name.length).toBeGreaterThan(0);
+    expect(loaded!.state.guests[0].isReturning).toBe(false);
+    expect(loaded!.state.guests[0].hadNoiseComplaint).toBe(false);
   });
 
   it('migrates v3 reputationScore and booking rating into starRating/reviewScore correctly', () => {
@@ -153,12 +173,14 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(9);
+    expect(loaded!.version).toBe(10);
     expect(loaded!.state.reviewScore).toBeCloseTo(7.2, 5); // 72 / 10
     expect((loaded!.state as any).reputationScore).toBeUndefined();
     expect(loaded!.state.bookings[0].reviewScore).toBe(8); // rating 4 * 2
     expect(loaded!.state.staff.frontDesk).toBe(1); // filled by v6->v7
     expect(loaded!.state.amenities).toEqual({ standard: 'basic', deluxe: 'basic', suite: 'basic' }); // filled by v7->v8
+    // v9->v10 backfill: a pre-v10 booking predates satisfactionAtCheckout.
+    expect(loaded!.state.bookings[0].satisfactionAtCheckout).toBe(50);
   });
 });
 
@@ -285,7 +307,7 @@ describe('GuestManager', () => {
     };
     const guest: Guest = {
       id: 'g1', budget: 100, stayLength: 1, trait: 'normal',
-      satisfaction: 50, checkInDay: 1,
+      satisfaction: 50, checkInDay: 1, name: 'TestGuest', isReturning: false, hadNoiseComplaint: false,
     };
     const state = createHotelState();
 
@@ -306,7 +328,7 @@ describe('GuestManager', () => {
     };
     const guest: Guest = {
       id: 'g1', budget: 200, stayLength: 1, trait: 'normal',
-      satisfaction: 50, checkInDay: 1,
+      satisfaction: 50, checkInDay: 1, name: 'TestGuest', isReturning: false, hadNoiseComplaint: false,
     };
     const state = createHotelState();
 
@@ -322,7 +344,7 @@ describe('GuestManager', () => {
     const prng2 = new PRNG(42);
     const guest: Guest = {
       id: 'g1', budget: 200, stayLength: 1, trait: 'normal',
-      satisfaction: 50, checkInDay: 1,
+      satisfaction: 50, checkInDay: 1, name: 'TestGuest', isReturning: false, hadNoiseComplaint: false,
     };
     const state = createHotelState();
 
@@ -606,7 +628,7 @@ describe('NoiseManager', () => {
     // Occupy the neighbor
     const guest: Guest = {
       id: 'g1', budget: 100, stayLength: 1, trait: 'normal',
-      satisfaction: 50, checkInDay: 1,
+      satisfaction: 50, checkInDay: 1, name: 'TestGuest', isReturning: false, hadNoiseComplaint: false,
     };
     state = {
       ...state,
@@ -627,7 +649,7 @@ describe('NoiseManager', () => {
     state = { ...state, noiseSources: [] };
     const guest: Guest = {
       id: 'g1', budget: 100, stayLength: 1, trait: 'normal',
-      satisfaction: 50, checkInDay: 1,
+      satisfaction: 50, checkInDay: 1, name: 'TestGuest', isReturning: false, hadNoiseComplaint: false,
     };
     state = {
       ...state,
@@ -648,7 +670,7 @@ describe('NoiseManager', () => {
     state = addRoom(state, 'standard', 6, 5)!;
     state = {
       ...state,
-      guests: [{ id: 'g1', budget: 100, stayLength: 1, trait: 'normal', satisfaction: 50, checkInDay: 1 }],
+      guests: [{ id: 'g1', budget: 100, stayLength: 1, trait: 'normal', satisfaction: 50, checkInDay: 1, name: 'TestGuest', isReturning: false, hadNoiseComplaint: false }],
       rooms: state.rooms.map(r =>
         r.gridX === 6 ? { ...r, occupied: true, guestId: 'g1' } : r
       ),
@@ -659,7 +681,7 @@ describe('NoiseManager', () => {
     state = addRoom(state, 'standard', 4, 5)!;
     state = {
       ...state,
-      guests: [...state.guests, { id: 'g2', budget: 100, stayLength: 1, trait: 'normal', satisfaction: 50, checkInDay: 1 }],
+      guests: [...state.guests, { id: 'g2', budget: 100, stayLength: 1, trait: 'normal', satisfaction: 50, checkInDay: 1, name: 'TestGuest2', isReturning: false, hadNoiseComplaint: false }],
       rooms: state.rooms.map(r =>
         r.gridX === 4 && r.gridY === 5 ? { ...r, status: 'occupied' as const, guestId: 'g2', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0 } : r
       ),
@@ -693,8 +715,8 @@ describe('NoiseManager', () => {
   });
 
   it('light sleeper gets higher penalty from same noise', () => {
-    const normalGuest: Guest = { id: 'g1', budget: 100, stayLength: 1, trait: 'normal', satisfaction: 50, checkInDay: 1 };
-    const lightSleeper: Guest = { id: 'g2', budget: 100, stayLength: 1, trait: 'light_sleeper', satisfaction: 50, checkInDay: 1 };
+    const normalGuest: Guest = { id: 'g1', budget: 100, stayLength: 1, trait: 'normal', satisfaction: 50, checkInDay: 1, name: 'TestGuest', isReturning: false, hadNoiseComplaint: false };
+    const lightSleeper: Guest = { id: 'g2', budget: 100, stayLength: 1, trait: 'light_sleeper', satisfaction: 50, checkInDay: 1, name: 'TestGuest2', isReturning: false, hadNoiseComplaint: false };
     const noise = 1.0;
     const normalPenalty = noiseToRatingPenalty(noise, normalGuest);
     const lsPenalty = noiseToRatingPenalty(noise, lightSleeper);
@@ -702,7 +724,7 @@ describe('NoiseManager', () => {
   });
 
   it('noise below threshold causes no penalty', () => {
-    const guest: Guest = { id: 'g1', budget: 100, stayLength: 1, trait: 'normal', satisfaction: 50, checkInDay: 1 };
+    const guest: Guest = { id: 'g1', budget: 100, stayLength: 1, trait: 'normal', satisfaction: 50, checkInDay: 1, name: 'TestGuest', isReturning: false, hadNoiseComplaint: false };
     const penalty = noiseToRatingPenalty(0.2, guest);
     expect(penalty).toBe(0);
   });
@@ -862,7 +884,7 @@ describe('tickSimulation', () => {
     const prng = new PRNG(1);
     let state = createHotelState();
     const dummyBookings: Booking[] = Array.from({ length: 400 }, (_, i) => ({
-      id: `b${i}`, roomId: 'r', guestId: 'g', nightRate: 100, reviewScore: 5,
+      id: `b${i}`, roomId: 'r', guestId: 'g', nightRate: 100, reviewScore: 5, satisfactionAtCheckout: 50,
     }));
     state = { ...state, bookings: dummyBookings };
 
@@ -890,6 +912,337 @@ describe('tickSimulation', () => {
     }
 
     expect(totalArrivals).toBeGreaterThan(0);
+  });
+
+  it('early-departure guard: a guest whose normal checkout and an incident escalation both fire the same tick is removed exactly once (eng-review D1 regression)', () => {
+    const prng = new PRNG(7);
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 0, 0)!;
+    const room = state.rooms[0];
+
+    const guest: Guest = {
+      id: 'g1', name: 'Sam', budget: 200, stayLength: 1, trait: 'light_sleeper',
+      satisfaction: 10, checkInDay: 1, isReturning: false, hadNoiseComplaint: false,
+    };
+    const incident: ActiveIncident = {
+      id: 'incident-1', type: 'noise_complaint', guestId: 'g1', roomId: room.id,
+      stage: 'active', hoursRemaining: 1, chainId: 'incident-1',
+    };
+
+    state = {
+      ...state,
+      day: 2, hour: 0, // day 2, guest checked in day 1, stayLength 1 -> normal checkout fires this tick
+      guests: [guest],
+      rooms: state.rooms.map(r => r.id === room.id ? { ...r, status: 'occupied' as const, guestId: 'g1' } : r),
+      activeIncidents: [incident], // hoursRemaining 1 -> decrements to 0 -> would escalate this same tick
+    };
+
+    const result = tickSimulation(state, prng);
+
+    // Guest is gone exactly once -- not double-processed into two Bookings.
+    expect(result.state.guests.find(g => g.id === 'g1')).toBeUndefined();
+    const bookingsForGuest = result.state.bookings.filter(b => b.guestId === 'g1');
+    expect(bookingsForGuest).toHaveLength(1);
+    // The normal checkout path won the race (per D1's guard: normal path takes priority).
+    expect(bookingsForGuest[0].id).toBe('booking-g1');
+  });
+});
+
+describe('StoryGenerator', () => {
+  function makeGuest(overrides: Partial<Guest> = {}): Guest {
+    return {
+      id: 'g1', name: 'Sam', budget: 200, stayLength: 2, trait: 'normal',
+      satisfaction: 50, checkInDay: 1, isReturning: false, hadNoiseComplaint: false,
+      ...overrides,
+    };
+  }
+
+  function makeRoom(overrides: Partial<Room> = {}): Room {
+    return {
+      id: 'r1', type: 'standard', gridX: 1, gridY: 1, pricePerNight: 80,
+      condition: 100, cleanliness: 100, status: 'occupied', guestId: 'g1',
+      cleaningHoursRemaining: 0, lastDailyCleanDay: 0,
+      ...overrides,
+    };
+  }
+
+  it('formatRoomLabel derives a hotel-style number from grid position', () => {
+    expect(formatRoomLabel(3, 1)).toBe('204'); // floor 2 (row+1), unit 04 (col+1)
+    expect(formatRoomLabel(0, 0)).toBe('101');
+    expect(formatRoomLabel(19, 14)).toBe('1520');
+  });
+
+  it('getLoudestNeighborGuestId fails closed (null) when there is no eligible neighbor', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 1, 1)!;
+    expect(getLoudestNeighborGuestId(state.rooms[0], state)).toBeNull();
+  });
+
+  it('getLoudestNeighborGuestId identifies the single loudest occupied neighbor', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 1, 1)!; // center
+    state = addRoom(state, 'standard', 2, 1)!; // normal neighbor
+    state = addRoom(state, 'standard', 0, 1)!; // party_guest neighbor (louder)
+
+    state = {
+      ...state,
+      guests: [
+        makeGuest({ id: 'quiet', trait: 'normal' }),
+        makeGuest({ id: 'loud', trait: 'party_guest' }),
+      ],
+      rooms: state.rooms.map(r => {
+        if (r.gridX === 2 && r.gridY === 1) return { ...r, status: 'occupied' as const, guestId: 'quiet' };
+        if (r.gridX === 0 && r.gridY === 1) return { ...r, status: 'occupied' as const, guestId: 'loud' };
+        return r;
+      }),
+    };
+
+    const center = state.rooms.find(r => r.gridX === 1 && r.gridY === 1)!;
+    expect(getLoudestNeighborGuestId(center, state)).toBe('loud');
+  });
+
+  it('getLoudestNeighborGuestId fails closed (null) on a tie between neighbors', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 1, 1)!;
+    state = addRoom(state, 'standard', 2, 1)!;
+    state = addRoom(state, 'standard', 0, 1)!;
+
+    state = {
+      ...state,
+      guests: [makeGuest({ id: 'a', trait: 'normal' }), makeGuest({ id: 'b', trait: 'normal' })],
+      rooms: state.rooms.map(r => {
+        if (r.gridX === 2 && r.gridY === 1) return { ...r, status: 'occupied' as const, guestId: 'a' };
+        if (r.gridX === 0 && r.gridY === 1) return { ...r, status: 'occupied' as const, guestId: 'b' };
+        return r;
+      }),
+    };
+
+    const center = state.rooms.find(r => r.gridX === 1 && r.gridY === 1)!;
+    expect(getLoudestNeighborGuestId(center, state)).toBeNull();
+  });
+
+  it('calculateGuestReview stays byte-identical to calculateGuestReviewBreakdown().finalScore (regression)', () => {
+    const prng1 = new PRNG(99);
+    const prng2 = new PRNG(99);
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 0, 0)!;
+    const room = { ...state.rooms[0], status: 'occupied' as const, guestId: 'g1' };
+    const guest = makeGuest();
+
+    for (let i = 0; i < 50; i++) {
+      const score = calculateGuestReview(room, state, guest, prng1);
+      const breakdown = calculateGuestReviewBreakdown(room, state, guest, prng2);
+      expect(score).toBe(breakdown.finalScore);
+    }
+  });
+
+  it('driftSatisfaction nudges satisfaction toward a stay-quality target, not instantly', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 0, 0)!;
+    state = {
+      ...state,
+      guests: [makeGuest({ satisfaction: 50 })],
+      rooms: state.rooms.map(r => ({ ...r, status: 'occupied' as const, guestId: 'g1', condition: 100, cleanliness: 100 })),
+      noiseSources: [], // addRoom leaves temporary construction noise on the new room -- clear it to isolate ambient drift
+    };
+
+    const after = driftSatisfaction(state);
+    const drifted = after.guests[0].satisfaction;
+    // Good room conditions push the target above 50 -- satisfaction should rise, but not jump all the way there in one tick.
+    expect(drifted).toBeGreaterThan(50);
+    expect(drifted).toBeLessThan(100);
+  });
+
+  it('advanceIncidents resolves a Noise Complaint once room noise drops below threshold', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 5, 5)!; // isolated room, no occupied neighbors -> zero noise
+    const room = state.rooms[0];
+    const incident: ActiveIncident = {
+      id: 'inc-1', type: 'noise_complaint', guestId: 'g1', culpritGuestId: 'g2',
+      roomId: room.id, stage: 'active', hoursRemaining: 5, chainId: 'inc-1',
+    };
+    state = {
+      ...state,
+      guests: [makeGuest({ satisfaction: 20 })],
+      rooms: state.rooms.map(r => ({ ...r, status: 'occupied' as const, guestId: 'g1' })),
+      activeIncidents: [incident],
+      noiseSources: [], // addRoom leaves temporary construction noise on the new room -- clear it so noise is actually zero
+    };
+
+    const result = advanceIncidents(state, new PRNG(1));
+    expect(result.state.activeIncidents).toHaveLength(0);
+    expect(result.earlyDepartureGuestIds.size).toBe(0);
+    expect(result.state.guests[0].satisfaction).toBeGreaterThan(20); // resolved bonus applied
+    const resolvedEntry = result.state.storyLog.find(e => e.type === 'noise_complaint_resolved');
+    expect(resolvedEntry).toBeDefined();
+    expect(resolvedEntry!.chainId).toBe('inc-1');
+  });
+
+  it('advanceIncidents escalates a Noise Complaint to early departure when the grace period runs out', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 5, 5)!;
+    state = addRoom(state, 'standard', 6, 5)!; // occupied neighbor keeps noise above threshold
+    const room = state.rooms[0];
+    const incident: ActiveIncident = {
+      id: 'inc-1', type: 'noise_complaint', guestId: 'g1', culpritGuestId: 'g2',
+      roomId: room.id, stage: 'active', hoursRemaining: 1, chainId: 'inc-1',
+    };
+    state = {
+      ...state,
+      guests: [makeGuest({ id: 'g1', satisfaction: 20 }), makeGuest({ id: 'g2', trait: 'party_guest' })],
+      rooms: state.rooms.map(r =>
+        r.gridX === 5 ? { ...r, status: 'occupied' as const, guestId: 'g1' }
+        : { ...r, status: 'occupied' as const, guestId: 'g2' }
+      ),
+      activeIncidents: [incident],
+    };
+
+    const result = advanceIncidents(state, new PRNG(1));
+    expect(result.earlyDepartureGuestIds.has('g1')).toBe(true);
+    expect(result.state.activeIncidents).toHaveLength(0); // dropped, early-departure pathway takes over
+    const escalatedEntry = result.state.storyLog.find(e => e.type === 'noise_complaint_escalated');
+    expect(escalatedEntry).toBeDefined();
+    expect(escalatedEntry!.chainId).toBe('inc-1'); // same thread as the origin complaint
+  });
+
+  it('advanceIncidents moves a guest to a healthy same-type room on Mid-Stay Breakdown', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 0, 0)!; // broken room
+    state = addRoom(state, 'standard', 1, 0)!; // healthy vacant same-type room
+    const brokenRoom = state.rooms[0];
+    const healthyRoom = state.rooms[1];
+    const incident: ActiveIncident = {
+      id: 'inc-1', type: 'mid_stay_breakdown', guestId: 'g1', roomId: brokenRoom.id,
+      stage: 'active', hoursRemaining: 3, chainId: 'inc-1',
+    };
+    state = {
+      ...state,
+      guests: [makeGuest({ satisfaction: 50 })],
+      rooms: state.rooms.map(r => r.id === brokenRoom.id
+        ? { ...r, status: 'occupied' as const, guestId: 'g1', condition: 0 }
+        : r),
+      activeIncidents: [incident],
+    };
+
+    const result = advanceIncidents(state, new PRNG(1));
+    expect(result.earlyDepartureGuestIds.size).toBe(0);
+    const movedRoom = result.state.rooms.find(r => r.id === healthyRoom.id)!;
+    const oldRoom = result.state.rooms.find(r => r.id === brokenRoom.id)!;
+    expect(movedRoom.guestId).toBe('g1');
+    expect(movedRoom.status).toBe('occupied');
+    expect(oldRoom.guestId).toBeUndefined();
+    expect(oldRoom.status).toBe('vacant');
+    expect(result.state.guests[0].satisfaction).toBeGreaterThan(50);
+  });
+
+  it('selectNewIncident respects the daily incident budget', () => {
+    let state = createHotelState();
+    state = addRoom(state, 'standard', 5, 5)!;
+    state = addRoom(state, 'standard', 6, 5)!;
+    const complainer = state.rooms[0];
+    state = {
+      ...state,
+      guests: [makeGuest({ id: 'g1', satisfaction: 10, trait: 'light_sleeper' }), makeGuest({ id: 'g2', trait: 'party_guest' })],
+      rooms: state.rooms.map(r =>
+        r.gridX === 5 ? { ...r, status: 'occupied' as const, guestId: 'g1' }
+        : { ...r, status: 'occupied' as const, guestId: 'g2' }
+      ),
+      // Already at budget for today -- a prior origin entry exists for day 1.
+      storyLog: [{ id: 'prior', day: 1, hour: 0, type: 'noise_complaint', message: 'x', chainId: 'prior' },
+                 { id: 'prior2', day: 1, hour: 0, type: 'mid_stay_breakdown', message: 'x', chainId: 'prior2' }] as StoryLogEntry[],
+    };
+
+    const result = selectNewIncident(state, new PRNG(1));
+    expect(result.state.activeIncidents).toHaveLength(0);
+  });
+
+  it('groupByChain orders chains newest-first and keeps a chain\'s stages together', () => {
+    const entries: StoryLogEntry[] = [
+      { id: 'a', day: 1, hour: 0, type: 'noise_complaint', message: 'origin', chainId: 'chain-a' },
+      { id: 'b', day: 1, hour: 5, type: 'noise_complaint_escalated', message: 'escalation', chainId: 'chain-a' },
+      { id: 'c', day: 2, hour: 0, type: 'regular_returns', message: 'return', chainId: 'c' },
+    ];
+    const chains = groupByChain(entries);
+    expect(chains).toHaveLength(2);
+    expect(chains[0].chainId).toBe('c'); // newest (day 2) first
+    expect(chains[1].chainId).toBe('chain-a');
+    expect(chains[1].entries.map(e => e.id)).toEqual(['a', 'b']); // chronological within the chain
+  });
+
+  it('groupByChain cap-eviction never orphans an escalation from its origin (design-review D11)', () => {
+    const oldChain: StoryLogEntry[] = [
+      { id: 'old-a', day: 1, hour: 0, type: 'noise_complaint', message: 'origin', chainId: 'old' },
+      { id: 'old-b', day: 1, hour: 5, type: 'noise_complaint_escalated', message: 'escalation', chainId: 'old' },
+    ];
+    // Fill enough newer standalone entries to push "old" out of the cap.
+    const filler: StoryLogEntry[] = Array.from({ length: STORY.storyLogMaxChains }, (_, i) => ({
+      id: `f${i}`, day: 2, hour: i, type: 'regular_returns', message: 'x', chainId: `f${i}`,
+    }));
+    const chains = groupByChain([...oldChain, ...filler]).slice(0, STORY.storyLogMaxChains);
+    const oldChainRetained = chains.find(c => c.chainId === 'old');
+    // Either the whole chain is gone, or both its entries are present -- never just one.
+    if (oldChainRetained) {
+      expect(oldChainRetained.entries.map(e => e.id).sort()).toEqual(['old-a', 'old-b']);
+    } else {
+      expect(oldChainRetained).toBeUndefined();
+    }
+  });
+
+  it('attributeReviewCause picks the largest negative contributor with a fixed tie-break order', () => {
+    const base = { noisePenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 5 };
+    expect(attributeReviewCause({ ...base, noisePenalty: 2 })).toBe('noise');
+    expect(attributeReviewCause({ ...base, conditionBonus: -2 })).toBe('room condition');
+    expect(attributeReviewCause({ ...base, cleanlinessBonus: -2 })).toBe('cleanliness');
+    expect(attributeReviewCause({ ...base, amenityPenalty: 2 })).toBe('amenities');
+    expect(attributeReviewCause({ ...base, priceFairness: 0 })).toBe('pricing');
+    // Tie between noise and condition -- fixed order picks noise (declared first).
+    expect(attributeReviewCause({ ...base, noisePenalty: 2, conditionBonus: -2 })).toBe('noise');
+  });
+
+  it('checkReviewSemiViral fires a temporary reputation penalty on an unusually bad checkout', () => {
+    let state = createHotelState();
+    const breakdown = { noisePenalty: 3, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 1 };
+    const booking: Booking = { id: 'b1', roomId: 'r1', guestId: 'g1', nightRate: 80, reviewScore: 1, satisfactionAtCheckout: 10 };
+
+    const result = checkReviewSemiViral(state, [{ guestName: 'Sam', roomId: 'r1', booking, breakdown }], new PRNG(1));
+    expect(result.state.activeReputationPenalties).toHaveLength(1);
+    expect(getReputationPenaltyMultiplier(result.state)).toBeLessThan(1.0);
+    expect(result.state.storyLog.some(e => e.type === 'review_semi_viral')).toBe(true);
+  });
+
+  it('checkReviewSemiViral does nothing when no checkout was unusually bad', () => {
+    const state = createHotelState();
+    const breakdown = { noisePenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 8 };
+    const booking: Booking = { id: 'b1', roomId: 'r1', guestId: 'g1', nightRate: 80, reviewScore: 8, satisfactionAtCheckout: 80 };
+
+    const result = checkReviewSemiViral(state, [{ guestName: 'Sam', roomId: 'r1', booking, breakdown }], new PRNG(1));
+    expect(result.state.activeReputationPenalties).toEqual(state.activeReputationPenalties);
+    expect(getReputationPenaltyMultiplier(result.state)).toBe(1.0);
+  });
+
+  it('getWordOfMouthMultiplier is neutral (1.0) at the cold-start default and with no bookings', () => {
+    const state = createHotelState();
+    expect(getWordOfMouthMultiplier(state)).toBe(1.0);
+  });
+
+  it('getWordOfMouthMultiplier rises with higher average satisfaction and stays within the design-review D11 floor/ceiling', () => {
+    let state = createHotelState();
+    state = {
+      ...state,
+      bookings: Array.from({ length: 10 }, (_, i) => ({
+        id: `b${i}`, roomId: 'r', guestId: 'g', nightRate: 100, reviewScore: 8, satisfactionAtCheckout: 90,
+      })),
+    };
+    const mult = getWordOfMouthMultiplier(state);
+    expect(mult).toBeGreaterThan(1.0);
+    expect(mult).toBeLessThanOrEqual(STORY.wordOfMouthCeilingMultiplier);
+  });
+
+  it('calculateEarlyDepartureSettlement pays for nights stayed minus a comp on nights remaining', () => {
+    const settlement = calculateEarlyDepartureSettlement(100, 1, 2);
+    expect(settlement.revenue).toBe(100);
+    expect(settlement.comp).toBe(ECONOMY.earlyDepartureRefundRate * 100 * 2);
+    expect(settlement.cashDelta).toBe(settlement.revenue - settlement.comp);
   });
 });
 
@@ -943,10 +1296,10 @@ describe('simulate (headless)', () => {
     // that divergence (checked by temporarily reintroducing the old *20
     // multiplier and confirming this test fails).
     const staleZeros: Booking[] = Array.from({ length: 200 }, (_, i) => ({
-      id: `stale${i}`, roomId: 'r', guestId: 'g', nightRate: 100, reviewScore: 0,
+      id: `stale${i}`, roomId: 'r', guestId: 'g', nightRate: 100, reviewScore: 0, satisfactionAtCheckout: 50,
     }));
     const recentTens: Booking[] = Array.from({ length: 300 }, (_, i) => ({
-      id: `recent${i}`, roomId: 'r', guestId: 'g', nightRate: 100, reviewScore: 10,
+      id: `recent${i}`, roomId: 'r', guestId: 'g', nightRate: 100, reviewScore: 10, satisfactionAtCheckout: 50,
     }));
 
     const result = simulate(1, 42, (state) => ({
@@ -979,5 +1332,44 @@ describe('simulate (headless)', () => {
     });
     expect(result.finalCash).not.toBeNaN();
     expect(result.totalRevenue).toBeGreaterThan(0);
+  });
+
+  it('Story Generator: a long run stays bounded and does not spiral into zero arrivals (design-review D11 balance check)', () => {
+    const prng = new PRNG(123);
+    let state = createHotelState();
+    for (let i = 0; i < 9; i++) {
+      const type = i < 5 ? 'standard' : i < 8 ? 'deluxe' : 'suite';
+      state = addRoom(state, type as 'standard' | 'deluxe' | 'suite', i, 0)!;
+    }
+
+    const arrivalsPerWeek: number[] = [];
+    let arrivalsThisWeek = 0;
+    for (let hour = 0; hour < 90 * 24; hour++) {
+      const before = state.guests.length;
+      const result = tickSimulation(state, prng);
+      state = result.state;
+      const arrived = result.events.filter(e => e.type === 'guest_arrived').length;
+      arrivalsThisWeek += arrived;
+
+      expect(state.cash).not.toBeNaN();
+      expect(state.reviewScore).not.toBeNaN();
+      // Bounded state: story log and active incidents never grow unbounded.
+      expect(state.returningGuestPool.length).toBeLessThanOrEqual(STORY.returningGuestPoolMaxSize);
+
+      if (hour % (7 * 24) === 0 && hour > 0) {
+        arrivalsPerWeek.push(arrivalsThisWeek);
+        arrivalsThisWeek = 0;
+      }
+    }
+
+    const chains = groupByChain(state.storyLog);
+    expect(chains.length).toBeLessThanOrEqual(STORY.storyLogMaxChains);
+
+    // Death-spiral check: arrivals in the final weeks shouldn't have collapsed
+    // to near-zero relative to the run's own typical week (a self-relative
+    // check, robust to whatever the base arrival rate happens to be).
+    const typicalWeek = arrivalsPerWeek.slice(0, 4).reduce((s, w) => s + w, 0) / 4;
+    const finalWeek = arrivalsPerWeek[arrivalsPerWeek.length - 1];
+    expect(finalWeek).toBeGreaterThan(typicalWeek * 0.15);
   });
 });

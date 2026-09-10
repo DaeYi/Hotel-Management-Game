@@ -77,6 +77,27 @@ export function updateReviewScore(state: HotelState): number {
   return Math.max(REVIEW.minScore, Math.min(REVIEW.maxScore, avg));
 }
 
+export interface EarlyDepartureSettlement {
+  revenue: number;
+  comp: number;
+  cashDelta: number;
+}
+
+/**
+ * Early Departure & Refund Mechanic: revenue for nights actually stayed, minus
+ * a comp on the remaining nights -- new logic parallel to (not a modification
+ * of) the normal full-stay lump sum in processRevenue.
+ */
+export function calculateEarlyDepartureSettlement(
+  nightRate: number,
+  daysStayed: number,
+  nightsRemaining: number
+): EarlyDepartureSettlement {
+  const revenue = nightRate * daysStayed;
+  const comp = ECONOMY.earlyDepartureRefundRate * nightRate * nightsRemaining;
+  return { revenue, comp, cashDelta: revenue - comp };
+}
+
 export function checkBankruptcy(state: HotelState): boolean {
   return state.cash <= ECONOMY.bankruptcyThreshold;
 }

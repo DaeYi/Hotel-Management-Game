@@ -40,6 +40,44 @@
 **Priority:** P3
 **Depends on:** Facility parity (inspector UI) shipping first, so there's a UI surface to show condition/repair on.
 
+## Story Generator
+
+### Always-on incident HUD/glanceability
+
+**What:** Surface active-incident state (e.g. a Noise Complaint's escalation countdown) somewhere always visible, not just inside the toggle-able story log panel.
+
+**Why:** The Story Generator design doc's Premise 3 calls the story log "persistent," but D6 (plan-eng-review, 2026-09-09) clarified this means retained scroll history, not always-on-screen — it follows the existing Finance/Staff toggle-overlay pattern (`GameScene.ts`). That means an in-progress incident's countdown is invisible unless the player has the panel open.
+
+**Context:** Surfaced by the outside-voice pass during the Story Generator's plan-eng-review. Deliberately deferred rather than solved now — building new always-on screen real estate is real, unscoped layout work, and it's worth seeing whether toggle-panel visibility actually bothers anyone in play before committing to it.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** The story log panel + at least one live incident chain (Noise Complaint) shipping first, so there's something to make glanceable.
+
+### Guest name collision disambiguator
+
+**What:** Add a disambiguator (e.g. a room-number suffix) for the story log when two simultaneously-checked-in guests share a generated name.
+
+**Why:** `Guest.name` is drawn from a small hardcoded first-name pool (Satisfaction System Design, point 3) — with enough simultaneous guests, two can share a name, making a log entry like "Sam complained about noise" momentarily ambiguous about which Sam.
+
+**Context:** Flagged as a known, accepted limitation in the design doc's third review round — not worth solving in the Story Generator milestone itself. Tracked here so it isn't rediscovered as confusing during a playtest.
+
+**Effort:** S
+**Priority:** P4
+**Depends on:** `Guest.name` shipping first (Story Generator milestone).
+
+### Remembered room-type influences return-guest matching
+
+**What:** Make a returning guest's remembered room-type (from their prior stay) actually influence `matchGuestToRoom`'s assignment logic, instead of being log-flavor only.
+
+**Why:** Satisfaction System Design, point 3 explicitly scopes the remembered room-type as cosmetic this pass ("Sam is back, hoping for another suite" is flavor text only) — it doesn't change which room Sam actually gets assigned.
+
+**Context:** Explicitly named as future work in the design doc, consistent with Premise 5 (small starter catalog now, expand later). Tracked here so it's a deliberate backlog item rather than lost once the milestone ships.
+
+**Effort:** S
+**Priority:** P4
+**Depends on:** `returningGuestPool` + arrival-generation hook shipping first (Story Generator milestone).
+
 ## Infrastructure
 
 ### Deploy pipeline / distribution

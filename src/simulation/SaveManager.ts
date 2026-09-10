@@ -1,8 +1,9 @@
 import type { HotelState } from './types.js';
 import type { PRNG } from './prng.js';
+import { GUEST_NAMES } from '../config/balance.js';
 
 const SAVE_KEY = 'hotel-game-save';
-const SAVE_VERSION = 9; // v9: added building facilities
+const SAVE_VERSION = 10; // v10: added Story Generator milestone (satisfaction, incidents, story log)
 
 interface SaveData {
   version: number;
@@ -108,6 +109,30 @@ export function loadGame(): SaveData | null {
       data.state.facilities = data.state.facilities ?? [];
       data.version = 9;
       console.log('Migrated save from v8 to v9');
+    }
+
+    if (data.version === 9) {
+      data.state.activeIncidents = data.state.activeIncidents ?? [];
+      data.state.returningGuestPool = data.state.returningGuestPool ?? [];
+      data.state.storyLog = data.state.storyLog ?? [];
+      data.state.activeReputationPenalties = data.state.activeReputationPenalties ?? [];
+      // Guests already checked in inside a loaded save predate Guest.name/isReturning/
+      // hadNoiseComplaint -- backfill a generated name (design doc's Save Compatibility
+      // section) and default the new flags, mirroring v2->v3's per-room backfill pattern.
+      data.state.guests = data.state.guests.map((g: any) => ({
+        ...g,
+        name: g.name ?? GUEST_NAMES[Math.floor(Math.random() * GUEST_NAMES.length)],
+        isReturning: g.isReturning ?? false,
+        hadNoiseComplaint: g.hadNoiseComplaint ?? false,
+      }));
+      // Existing bookings predate satisfactionAtCheckout -- backfill a neutral value
+      // so the word-of-mouth rolling window doesn't choke on missing data.
+      data.state.bookings = data.state.bookings.map((b: any) => ({
+        ...b,
+        satisfactionAtCheckout: b.satisfactionAtCheckout ?? 50,
+      }));
+      data.version = 10;
+      console.log('Migrated save from v9 to v10');
     }
 
     if (data.version !== SAVE_VERSION) {

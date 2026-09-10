@@ -1,0 +1,493 @@
+import type { HotelState, Room, Guest, ActiveIncident, StoryLogEntry, GameEvent, Booking } from './types.js';
+import type { PRNG } from './prng.js';
+import type { GuestReviewBreakdown } from './GuestManager.js';
+import { SATISFACTION, STORY, NOISE, ECONOMY, REVIEW, HOUSEKEEPING } from '../config/balance.js';
+import { calculateRoomNoise, noiseToRatingPenalty, getLoudestNeighborGuestId } from './NoiseManager.js';
+import { formatRoomLabel } from './HotelState.js';
+
+// ============================================================================
+// Story log: append + chain-aware cap/eviction (design-review D11).
+// ============================================================================
+
+export interface StoryLogChain {
+  chainId: string;
+  entries: StoryLogEntry[]; // chronological within the chain (oldest first)
+  mostRecentAbsHour: number;
+}
+
+/** Group storyLog entries into chains, newest-first by each chain's most recent event. */
+export function groupByChain(storyLog: StoryLogEntry[]): StoryLogChain[] {
+  const map = new Map<string, StoryLogEntry[]>();
+  for (const entry of storyLog) {
+    const key = entry.chainId ?? entry.id;
+    const arr = map.get(key) ?? [];
+    arr.push(entry);
+    map.set(key, arr);
+  }
+  const chains: StoryLogChain[] = [];
+  for (const [chainId, entries] of map) {
+    entries.sort((a, b) => (a.day * 24 + a.hour) - (b.day * 24 + b.hour));
+    const mostRecentAbsHour = entries.reduce((max, e) => Math.max(max, e.day * 24 + e.hour), 0);
+    chains.push({ chainId, entries, mostRecentAbsHour });
+  }
+  chains.sort((a, b) => b.mostRecentAbsHour - a.mostRecentAbsHour);
+  return chains;
+}
+
+/** Cap-eviction operates on whole chains, never orphaning an escalation from its origin (D11). */
+function pruneToMaxChains(storyLog: StoryLogEntry[], maxChains: number): StoryLogEntry[] {
+  const chains = groupByChain(storyLog);
+  if (chains.length <= maxChains) return storyLog;
+  const keep = new Set(chains.slice(0, maxChains).map(c => c.chainId));
+  return storyLog.filter(e => keep.has(e.chainId ?? e.id));
+}
+
+let logIdCounter = 0;
+function nextLogId(state: HotelState): string {
+  logIdCounter++;
+  return `log-${state.day}-${state.hour}-${logIdCounter}`;
+}
+
+interface NewEntryInput {
+  type: string;
+  guestName?: string;
+  roomId?: string;
+  message: string;
+  chainId?: string; // omit for a standalone entry or a new chain's origin (defaults to its own id)
+}
+
+function appendStoryLogEntry(state: HotelState, input: NewEntryInput): { state: HotelState; entry: StoryLogEntry } {
+  const id = nextLogId(state);
+  const entry: StoryLogEntry = {
+    id,
+    day: state.day,
+    hour: state.hour,
+    type: input.type,
+    guestName: input.guestName,
+    roomId: input.roomId,
+    message: input.message,
+    chainId: input.chainId ?? id,
+  };
+  const storyLog = pruneToMaxChains([...state.storyLog, entry], STORY.storyLogMaxChains);
+  return { state: { ...state, storyLog }, entry };
+}
+
+// ============================================================================
+// Ambient satisfaction drift (D3).
+// ============================================================================
+
+function deriveSatisfactionTarget(room: Room, state: HotelState, guest: Guest): number {
+  const roomNoise = calculateRoomNoise(room, state);
+  const noisePenalty = noiseToRatingPenalty(roomNoise, guest);
+  const conditionBonus = (room.condition - REVIEW.conditionMidpoint) / REVIEW.conditionScale * REVIEW.conditionWeight;
+  const cleanlinessBonus = (room.cleanliness - HOUSEKEEPING.cleanlinessMidpoint) / HOUSEKEEPING.cleanlinessScale * HOUSEKEEPING.cleanlinessWeight;
+  const raw = conditionBonus + cleanlinessBonus - noisePenalty;
+  return Math.max(0, Math.min(100, SATISFACTION.initial + raw * 10));
+}
+
+/** Small per-tick nudge toward a stay-quality-derived target, independent of incidents. */
+export function driftSatisfaction(state: HotelState): HotelState {
+  const guests = state.guests.map(guest => {
+    const room = state.rooms.find(r => r.status === 'occupied' && r.guestId === guest.id);
+    if (!room) return guest;
+    const target = deriveSatisfactionTarget(room, state, guest);
+    const next = guest.satisfaction + (target - guest.satisfaction) * SATISFACTION.ambientDriftWeight;
+    return { ...guest, satisfaction: Math.max(0, Math.min(100, next)) };
+  });
+  return { ...state, guests };
+}
+
+// ============================================================================
+// Advance existing activeIncidents (resolve / escalate / room-move).
+// ============================================================================
+
+export interface AdvanceResult {
+  state: HotelState;
+  events: GameEvent[];
+  earlyDepartureGuestIds: Set<string>;
+}
+
+function findHealthySameTypeRoom(state: HotelState, exclude: Room): Room | null {
+  return state.rooms.find(r =>
+    r.id !== exclude.id
+    && r.type === exclude.type
+    && r.status === 'vacant'
+    && r.condition > ECONOMY.roomBreakdownThreshold
+  ) ?? null;
+}
+
+export function advanceIncidents(state: HotelState, prng: PRNG): AdvanceResult {
+  const events: GameEvent[] = [];
+  const earlyDepartureGuestIds = new Set<string>();
+  let current = state;
+  const remaining: ActiveIncident[] = [];
+  let guests = [...current.guests];
+  let rooms = [...current.rooms];
+
+  for (const incident of current.activeIncidents) {
+    const guest = guests.find(g => g.id === incident.guestId);
+    const room = rooms.find(r => r.id === incident.roomId);
+
+    // Teardown: guest already gone, or their own room vacated some other way.
+    if (!guest || !room || room.guestId !== guest.id) {
+      continue;
+    }
+
+    if (incident.type === 'noise_complaint') {
+      const roomNoise = calculateRoomNoise(room, current);
+      if (roomNoise <= NOISE.penaltyThreshold) {
+        // Resolved on its own: noise dropped below the threshold.
+        guests = guests.map(g => g.id === guest.id
+          ? { ...g, satisfaction: Math.min(100, g.satisfaction + SATISFACTION.noiseComplaintResolvedBonus) }
+          : g);
+        const roomLabel = formatRoomLabel(room.gridX, room.gridY);
+        const appended = appendStoryLogEntry(current, {
+          type: 'noise_complaint_resolved',
+          guestName: guest.name,
+          roomId: room.id,
+          message: `The noise around Room ${roomLabel} died down -- ${guest.name}'s complaint resolved.`,
+          chainId: incident.chainId,
+        });
+        current = appended.state;
+        continue;
+      }
+
+      const hoursRemaining = incident.hoursRemaining - 1;
+      if (hoursRemaining <= 0) {
+        earlyDepartureGuestIds.add(guest.id);
+        const roomLabel = formatRoomLabel(room.gridX, room.gridY);
+        const appended = appendStoryLogEntry(current, {
+          type: 'noise_complaint_escalated',
+          guestName: guest.name,
+          roomId: room.id,
+          message: `Complaint unresolved -- ${guest.name} is checking out early from Room ${roomLabel}.`,
+          chainId: incident.chainId,
+        });
+        current = appended.state;
+        events.push({
+          type: 'noise_complaint_escalated',
+          message: `${guest.name}'s noise complaint escalated -- checking out early`,
+          data: { guestId: guest.id, roomId: room.id },
+        });
+        // Dropped: escalated incidents don't persist in activeIncidents; the
+        // early-departure pathway (tick.ts) takes over from here.
+        continue;
+      }
+
+      remaining.push({ ...incident, hoursRemaining });
+      continue;
+    }
+
+    // mid_stay_breakdown
+    if (room.condition > ECONOMY.roomBreakdownThreshold) {
+      // Repaired before we had to act -- drop quietly, no log spam.
+      continue;
+    }
+
+    const target = findHealthySameTypeRoom(current, room);
+    if (target) {
+      const oldRoomId = room.id;
+      const oldLabel = formatRoomLabel(room.gridX, room.gridY);
+      const newLabel = formatRoomLabel(target.gridX, target.gridY);
+      rooms = rooms.map(r => {
+        if (r.id === oldRoomId) return { ...r, status: 'vacant' as const, guestId: undefined };
+        if (r.id === target.id) return { ...r, status: 'occupied' as const, guestId: guest.id };
+        return r;
+      });
+      guests = guests.map(g => g.id === guest.id
+        ? { ...g, satisfaction: Math.min(100, g.satisfaction + SATISFACTION.midStayBreakdownMoveBonus) }
+        : g);
+      const appended = appendStoryLogEntry(current, {
+        type: 'mid_stay_breakdown_resolved',
+        guestName: guest.name,
+        roomId: target.id,
+        message: `${guest.name} was moved to Room ${newLabel} after Room ${oldLabel} broke down.`,
+        chainId: incident.chainId,
+      });
+      current = appended.state;
+      events.push({
+        type: 'mid_stay_breakdown_resolved',
+        message: `${guest.name} moved to Room ${newLabel} after a breakdown`,
+        data: { guestId: guest.id, fromRoomId: oldRoomId, toRoomId: target.id },
+      });
+      continue;
+    }
+
+    const hoursRemaining = incident.hoursRemaining - 1;
+    if (hoursRemaining <= 0) {
+      earlyDepartureGuestIds.add(guest.id);
+      const roomLabel = formatRoomLabel(room.gridX, room.gridY);
+      const appended = appendStoryLogEntry(current, {
+        type: 'mid_stay_breakdown_escalated',
+        guestName: guest.name,
+        roomId: room.id,
+        message: `No rooms available -- ${guest.name} had to leave Room ${roomLabel} early.`,
+        chainId: incident.chainId,
+      });
+      current = appended.state;
+      events.push({
+        type: 'noise_complaint_escalated', // reuses the "incident escalated" toast styling
+        message: `${guest.name} is leaving early -- no room to move to after a breakdown`,
+        data: { guestId: guest.id, roomId: room.id },
+      });
+      continue;
+    }
+
+    remaining.push({ ...incident, hoursRemaining });
+  }
+
+  current = { ...current, guests, rooms, activeIncidents: remaining };
+  return { state: current, events, earlyDepartureGuestIds };
+}
+
+/** Teardown rule: drop any activeIncident tied to a guest who departed this tick
+ * (normal checkout or walkout) -- an already-departed guest can't escalate further. */
+export function dropIncidentsForGuests(activeIncidents: ActiveIncident[], departedGuestIds: Set<string>): ActiveIncident[] {
+  return activeIncidents.filter(i => !departedGuestIds.has(i.guestId));
+}
+
+// ============================================================================
+// Select new incidents (pacing budget + "quiet too long" bias).
+// ============================================================================
+
+const ORIGIN_TYPES = new Set(['noise_complaint', 'mid_stay_breakdown', 'review_semi_viral', 'regular_returns']);
+
+function countOriginsToday(storyLog: StoryLogEntry[], day: number): number {
+  return storyLog.filter(e => e.day === day && ORIGIN_TYPES.has(e.type) && e.chainId === e.id).length;
+}
+
+function mostRecentOriginAbsHour(storyLog: StoryLogEntry[]): number | null {
+  let max: number | null = null;
+  for (const e of storyLog) {
+    if (!ORIGIN_TYPES.has(e.type) || e.chainId !== e.id) continue;
+    const absHour = e.day * 24 + e.hour;
+    if (max === null || absHour > max) max = absHour;
+  }
+  return max;
+}
+
+type Candidate =
+  | { kind: 'noise_complaint'; guest: Guest; room: Room; culpritGuestId: string }
+  | { kind: 'mid_stay_breakdown'; guest: Guest; room: Room };
+
+function collectCandidates(state: HotelState): Candidate[] {
+  const candidates: Candidate[] = [];
+  const activeGuestIds = new Set(state.activeIncidents.map(i => i.guestId));
+
+  for (const guest of state.guests) {
+    if (activeGuestIds.has(guest.id)) continue;
+    const room = state.rooms.find(r => r.status === 'occupied' && r.guestId === guest.id);
+    if (!room) continue;
+
+    if (!guest.hadNoiseComplaint && guest.satisfaction < SATISFACTION.incidentFuelThreshold) {
+      const roomNoise = calculateRoomNoise(room, state);
+      if (roomNoise > NOISE.penaltyThreshold) {
+        const culpritGuestId = getLoudestNeighborGuestId(room, state);
+        if (culpritGuestId) {
+          candidates.push({ kind: 'noise_complaint', guest, room, culpritGuestId });
+        }
+      }
+    }
+
+    if (room.condition <= ECONOMY.roomBreakdownThreshold) {
+      candidates.push({ kind: 'mid_stay_breakdown', guest, room });
+    }
+  }
+
+  return candidates;
+}
+
+export function selectNewIncident(state: HotelState, prng: PRNG): { state: HotelState; events: GameEvent[] } {
+  const todayCount = countOriginsToday(state.storyLog, state.day);
+  if (todayCount >= STORY.incidentDailyBudget) {
+    return { state, events: [] };
+  }
+
+  const lastOrigin = mostRecentOriginAbsHour(state.storyLog);
+  const currentAbsHour = state.day * 24 + state.hour;
+  const quietHours = lastOrigin === null ? Infinity : currentAbsHour - lastOrigin;
+  const fireChance = quietHours >= STORY.quietBiasHours
+    ? 1.0
+    : STORY.quietBiasMinChance + (1 - STORY.quietBiasMinChance) * (quietHours / STORY.quietBiasHours);
+
+  if (!prng.chance(fireChance)) {
+    return { state, events: [] };
+  }
+
+  const candidates = collectCandidates(state);
+  if (candidates.length === 0) {
+    return { state, events: [] };
+  }
+
+  const picked = candidates[Math.floor(prng.next() * candidates.length)];
+  const events: GameEvent[] = [];
+  let current = state;
+
+  if (picked.kind === 'noise_complaint') {
+    const { guest, room, culpritGuestId } = picked;
+    const roomLabel = formatRoomLabel(room.gridX, room.gridY);
+    const appended = appendStoryLogEntry(current, {
+      type: 'noise_complaint',
+      guestName: guest.name,
+      roomId: room.id,
+      message: `${guest.name} filed a noise complaint about Room ${roomLabel}.`,
+    });
+    current = appended.state;
+
+    const incident: ActiveIncident = {
+      id: `incident-${appended.entry.id}`,
+      type: 'noise_complaint',
+      guestId: guest.id,
+      culpritGuestId,
+      roomId: room.id,
+      stage: 'active',
+      hoursRemaining: STORY.noiseComplaintGraceHours,
+      chainId: appended.entry.chainId!,
+    };
+    current = {
+      ...current,
+      activeIncidents: [...current.activeIncidents, incident],
+      guests: current.guests.map(g => g.id === guest.id
+        ? { ...g, hadNoiseComplaint: true, satisfaction: Math.max(0, g.satisfaction - SATISFACTION.noiseComplaintPenalty) }
+        : g),
+    };
+    events.push({
+      type: 'noise_complaint_filed',
+      message: `${guest.name} filed a noise complaint (Room ${roomLabel})`,
+      data: { guestId: guest.id, culpritGuestId, roomId: room.id },
+    });
+  } else {
+    const { guest, room } = picked;
+    const roomLabel = formatRoomLabel(room.gridX, room.gridY);
+    const appended = appendStoryLogEntry(current, {
+      type: 'mid_stay_breakdown',
+      guestName: guest.name,
+      roomId: room.id,
+      message: `Room ${roomLabel} broke down while ${guest.name} was staying.`,
+    });
+    current = appended.state;
+
+    const incident: ActiveIncident = {
+      id: `incident-${appended.entry.id}`,
+      type: 'mid_stay_breakdown',
+      guestId: guest.id,
+      roomId: room.id,
+      stage: 'active',
+      hoursRemaining: STORY.midStayBreakdownGraceHours,
+      chainId: appended.entry.chainId!,
+    };
+    current = { ...current, activeIncidents: [...current.activeIncidents, incident] };
+  }
+
+  return { state: current, events };
+}
+
+// ============================================================================
+// A Regular Returns: converts the 'guest_returned' arrival event into a log entry.
+// ============================================================================
+
+export function recordReturnGuestEntries(state: HotelState, events: GameEvent[]): HotelState {
+  let current = state;
+  for (const event of events) {
+    if (event.type !== 'guest_returned' || !event.data) continue;
+    const guestId = event.data.guestId as string;
+    const roomId = event.data.roomId as string;
+    const guest = current.guests.find(g => g.id === guestId);
+    if (!guest) continue;
+
+    const appended = appendStoryLogEntry(current, {
+      type: 'regular_returns',
+      guestName: guest.name,
+      roomId,
+      message: event.message,
+    });
+    current = {
+      ...appended.state,
+      guests: appended.state.guests.map(g => g.id === guestId
+        ? { ...g, satisfaction: Math.min(100, g.satisfaction + SATISFACTION.regularReturnBonus) }
+        : g),
+    };
+  }
+  return current;
+}
+
+// ============================================================================
+// Review Goes Semi-Viral: attribution rule + temporary arrival penalty.
+// ============================================================================
+
+/** Fixed tie-break order: noise, condition, cleanliness, amenities, price (design doc). */
+export function attributeReviewCause(b: GuestReviewBreakdown): string {
+  const candidates = [
+    { label: 'noise', magnitude: b.noisePenalty },
+    { label: 'room condition', magnitude: Math.max(0, -b.conditionBonus) },
+    { label: 'cleanliness', magnitude: Math.max(0, -b.cleanlinessBonus) },
+    { label: 'amenities', magnitude: b.amenityPenalty },
+    { label: 'pricing', magnitude: (1 - b.priceFairness) * REVIEW.basePriceFairnessWeight },
+  ];
+  let winner = candidates[0];
+  for (const c of candidates.slice(1)) {
+    if (c.magnitude > winner.magnitude) winner = c;
+  }
+  return winner.label;
+}
+
+export interface DepartedGuestReview {
+  guestName: string;
+  roomId: string;
+  booking: Booking;
+  breakdown: GuestReviewBreakdown;
+}
+
+export function checkReviewSemiViral(
+  state: HotelState,
+  departures: DepartedGuestReview[],
+  prng: PRNG
+): { state: HotelState; events: GameEvent[] } {
+  const todayCount = countOriginsToday(state.storyLog, state.day);
+  if (todayCount >= STORY.incidentDailyBudget) {
+    return { state, events: [] };
+  }
+
+  const bad = departures.filter(d => d.booking.reviewScore < STORY.reviewSemiViralScoreThreshold);
+  if (bad.length === 0) {
+    return { state, events: [] };
+  }
+
+  const chosen = bad[Math.floor(prng.next() * bad.length)];
+  const cause = attributeReviewCause(chosen.breakdown);
+  const appended = appendStoryLogEntry(state, {
+    type: 'review_semi_viral',
+    guestName: chosen.guestName,
+    roomId: chosen.roomId,
+    message: `${chosen.guestName}'s bad review (${cause}) is hurting bookings.`,
+  });
+
+  const nextState: HotelState = {
+    ...appended.state,
+    activeReputationPenalties: [
+      ...appended.state.activeReputationPenalties,
+      { multiplier: STORY.reviewSemiViralPenaltyMultiplier, hoursRemaining: STORY.reviewSemiViralPenaltyHours },
+    ],
+  };
+
+  return {
+    state: nextState,
+    events: [{
+      type: 'review_score_changed',
+      message: `A review about ${cause} is spreading -- arrivals dip for a while`,
+      data: { cause },
+    }],
+  };
+}
+
+/** Combined multiplier from all active temporary reputation penalties (Review Goes Semi-Viral). */
+export function getReputationPenaltyMultiplier(state: HotelState): number {
+  return state.activeReputationPenalties.reduce((mult, p) => mult * p.multiplier, 1.0);
+}
+
+export function tickReputationPenalties(state: HotelState): HotelState {
+  const activeReputationPenalties = state.activeReputationPenalties
+    .map(p => ({ ...p, hoursRemaining: p.hoursRemaining - 1 }))
+    .filter(p => p.hoursRemaining > 0);
+  return { ...state, activeReputationPenalties };
+}

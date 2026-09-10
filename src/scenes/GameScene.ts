@@ -11,7 +11,8 @@ import { InfoBar } from '../ui/InfoBar';
 import { GridRenderer, GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE } from '../ui/GridRenderer';
 import { RoomInspector } from '../ui/RoomInspector';
 import { FacilityInspector } from '../ui/FacilityInspector';
-import { NotificationToast } from '../ui/NotificationToast';
+import { NotificationToast, INCIDENT_EVENT_TYPES } from '../ui/NotificationToast';
+import { StoryLogPanel } from '../ui/StoryLogPanel';
 import { FinanceChart } from '../ui/FinanceChart';
 import { Tutorial } from '../ui/Tutorial';
 import { BankruptcyOverlay, NoVacancySign, ZeroRoomsPrompt } from '../ui/Overlays';
@@ -36,6 +37,7 @@ export class GameScene extends Phaser.Scene {
   private roomInspector!: RoomInspector;
   private facilityInspector!: FacilityInspector;
   private toasts!: NotificationToast;
+  private storyLogPanel!: StoryLogPanel;
   private chart!: FinanceChart;
   private noVacancy!: NoVacancySign;
   private zeroRooms!: ZeroRoomsPrompt;
@@ -108,6 +110,9 @@ export class GameScene extends Phaser.Scene {
 
     // Notification toasts
     this.toasts = new NotificationToast(this, GRID_OFFSET_X, bottomY - 12);
+
+    // Story log panel (toggle, controlled by toolbar -- design-review D6)
+    this.storyLogPanel = new StoryLogPanel(this, PANEL_X, PANEL_Y);
 
     // Finance chart (no toggle button, controlled by toolbar)
     this.chart = new FinanceChart(
@@ -191,6 +196,7 @@ export class GameScene extends Phaser.Scene {
     this.housekeepingPanel.update(this.state);
     this.staffPanel.update(this.state);
     this.amenitiesPanel.update(this.state);
+    this.storyLogPanel.update(this.state);
     this.toasts.update(delta);
 
     const occupied = this.state.rooms.filter(r => r.status === 'occupied').length;
@@ -209,7 +215,12 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    this.toasts.addEvents(events);
+    // Incident toasts are redundant (and can visually collide with the panel,
+    // design-review D13) while the player already has the Story Log open.
+    const toastEvents = this.storyLogPanel.isVisible()
+      ? events.filter(e => !INCIDENT_EVENT_TYPES.has(e.type))
+      : events;
+    this.toasts.addEvents(toastEvents);
 
     if (this.state.day !== prevDay && this.state.day > this.lastRecordedDay) {
       this.chart.recordDay(this.dailyRevenue, this.state.reviewScore);
@@ -261,6 +272,14 @@ export class GameScene extends Phaser.Scene {
           this.chart.hide();
         }
         break;
+      case 'storylog':
+        if (active) {
+          this.hideAllPanels();
+          this.storyLogPanel.show();
+        } else {
+          this.storyLogPanel.hide();
+        }
+        break;
       case 'noise':
         this.grid.toggleNoiseOverlay();
         break;
@@ -293,6 +312,7 @@ export class GameScene extends Phaser.Scene {
     this.housekeepingPanel.hide();
     this.amenitiesPanel.hide();
     this.chart.hide();
+    this.storyLogPanel.hide();
   }
 
   // === Click handlers ===

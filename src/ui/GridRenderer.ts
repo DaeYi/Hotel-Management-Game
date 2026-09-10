@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import type { HotelState, RoomType, FacilityType, GuestTrait } from '../simulation/types';
 import { GRID, ECONOMY, NOISE, FACILITY_CONFIG } from '../config/balance';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
+import { formatRoomLabel } from '../simulation/HotelState';
 
 /** Guest dot color by trait, in one place so every trait gets an explicit,
  * distinct color instead of silently falling through to the default. */
@@ -42,6 +43,9 @@ export class GridRenderer {
   private dayNightOverlay: Phaser.GameObjects.Rectangle;
   private feedbackTimer = 0;
   private showNoiseOverlay = false;
+  // Pooled per-room number labels (design-review D9) -- reused across frames,
+  // never recreated, since renderRooms() runs every frame.
+  private roomLabels: Map<string, Phaser.GameObjects.Text> = new Map();
 
   constructor(scene: Phaser.Scene) {
     this.scene = scene;
@@ -148,6 +152,7 @@ export class GridRenderer {
 
   renderRooms(state: HotelState) {
     this.roomGraphics.clear();
+    const seenRoomIds = new Set<string>();
 
     for (const room of state.rooms) {
       const x = GRID_OFFSET_X + room.gridX * TILE_SIZE;
@@ -166,6 +171,25 @@ export class GridRenderer {
         const barColor = room.condition < 30 ? 0xe74c3c : 0xf39c12;
         this.roomGraphics.fillStyle(barColor, 0.8);
         this.roomGraphics.fillRect(x + 2, y + TILE_SIZE - 4, barWidth, 2);
+      }
+
+      seenRoomIds.add(room.id);
+      let label = this.roomLabels.get(room.id);
+      if (!label) {
+        label = this.scene.add.text(0, 0, '', {
+          fontSize: '7px', fontFamily: 'monospace', color: '#ffffff',
+        }).setAlpha(0.55).setDepth(2);
+        this.roomLabels.set(room.id, label);
+      }
+      label.setText(formatRoomLabel(room.gridX, room.gridY));
+      label.setPosition(x + 2, y + 1);
+    }
+
+    // A demolished room's label is removed rather than left dangling.
+    for (const [roomId, label] of this.roomLabels) {
+      if (!seenRoomIds.has(roomId)) {
+        label.destroy();
+        this.roomLabels.delete(roomId);
       }
     }
   }
@@ -232,6 +256,13 @@ export class GridRenderer {
 
       this.guestGraphics.fillStyle(dotColor, 0.9);
       this.guestGraphics.fillCircle(x, y, 4);
+
+      // Return-guest marker (design-review D7/D10): a thin ring around the
+      // existing trait-color dot, visible on the grid during actual play.
+      if (guest.isReturning) {
+        this.guestGraphics.lineStyle(1.5, 0xffffff, 0.9);
+        this.guestGraphics.strokeCircle(x, y, 6.5);
+      }
     }
   }
 
