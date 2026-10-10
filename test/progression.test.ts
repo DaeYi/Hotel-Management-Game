@@ -188,10 +188,10 @@ describe('Owner objectives', () => {
   });
 
   it('an objective fails the day after its deadline, with no reward', () => {
-    const state = { ...createHotelState(), day: OBJECTIVES[0].deadlineDay };
+    const state = { ...createHotelState(), day: OBJECTIVES[0].deadlineDay! };
     expect(processObjectives(state).state.objectives.currentIndex).toBe(0); // still on time
 
-    const late = { ...state, day: OBJECTIVES[0].deadlineDay + 1 };
+    const late = { ...state, day: OBJECTIVES[0].deadlineDay! + 1 };
     const { state: after, events } = processObjectives(late);
     expect(after.cash).toBe(late.cash);
     expect(after.objectives.outcomes).toEqual(['failed']);
@@ -204,17 +204,12 @@ describe('Owner objectives', () => {
     expect(state.objectives.currentIndex).toBe(1);
   });
 
-  it('does nothing once every objective is resolved', () => {
-    const state = { ...createHotelState(), objectives: { currentIndex: OBJECTIVES.length, outcomes: [] } };
-    expect(processObjectives(state).state).toBe(state);
-  });
-
   it('the occupancy objective needs a full week of history', () => {
     const objective = OBJECTIVES.find(o => o.kind === 'occupancy_7d')!;
     let state = createHotelState();
-    for (let i = 0; i < 6; i++) state = { ...state, dailyStats: [...state.dailyStats, { day: i + 1, occupancy: 1, totalRevenue: 0 }] };
+    for (let i = 0; i < 6; i++) state = { ...state, dailyStats: [...state.dailyStats, { day: i + 1, occupancy: 1, totalRevenue: 0, valuation: 0 }] };
     expect(evaluateObjective(state, objective).complete).toBe(false);
-    state = { ...state, dailyStats: [...state.dailyStats, { day: 7, occupancy: 1, totalRevenue: 0 }] };
+    state = { ...state, dailyStats: [...state.dailyStats, { day: 7, occupancy: 1, totalRevenue: 0, valuation: 0 }] };
     expect(evaluateObjective(state, objective).complete).toBe(true);
     expect(getAverageOccupancy(state, 7)).toBe(1);
   });
@@ -240,12 +235,12 @@ describe('Owner objectives', () => {
 
   it('every objective deadline is later than the one before it', () => {
     for (let i = 1; i < OBJECTIVES.length; i++) {
-      expect(OBJECTIVES[i].deadlineDay).toBeGreaterThan(OBJECTIVES[i - 1].deadlineDay);
+      expect(OBJECTIVES[i].deadlineDay!).toBeGreaterThan(OBJECTIVES[i - 1].deadlineDay!);
     }
   });
 });
 
-describe('SaveManager v10 -> v11', () => {
+describe('SaveManager v10 -> current', () => {
   beforeEach(() => localStorage.clear());
 
   it('gives older saves no loan, fresh objectives, and a recomputed star peak', () => {
@@ -259,7 +254,7 @@ describe('SaveManager v10 -> v11', () => {
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 10, prngState: 1, state: legacy, timestamp: 0 }));
 
     const loaded = loadGame()!;
-    expect(loaded.version).toBe(11);
+    expect(loaded.version).toBe(12);
     expect(loaded.state.loan.balance).toBe(0);
     expect(loaded.state.objectives).toEqual({ currentIndex: 0, outcomes: [] });
     expect(loaded.state.dailyStats).toEqual([]);

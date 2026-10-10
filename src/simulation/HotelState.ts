@@ -1,7 +1,7 @@
 import type { HotelState, Room, RoomType, Facility, FacilityType, TileType } from './types.js';
-import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN } from '../config/balance.js';
+import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS } from '../config/balance.js';
 import { createConstructionNoise } from './NoiseManager.js';
-import { getExpectedPrice } from './StarRatingManager.js';
+import { getExpectedPrice, getPriceMultiplier } from './StarRatingManager.js';
 
 export function createHotelState(): HotelState {
   return {
@@ -43,6 +43,8 @@ export function createHotelState(): HotelState {
     },
     objectives: { currentIndex: 0, outcomes: [] },
     dailyStats: [],
+    activeCampaign: null,
+    daysAtFiveStars: 0,
   };
 }
 
@@ -98,6 +100,8 @@ export function addRoom(
     status: 'vacant',
     cleaningHoursRemaining: 0,
     lastDailyCleanDay: 0,
+    decor: 100,
+    renovationHoursRemaining: 0,
   };
 
   return {
@@ -163,6 +167,70 @@ export function repairRoom(state: HotelState, roomId: string): HotelState | null
   };
 }
 
+/** Renovation cost: a share of build cost, scaled up at higher star levels. */
+export function getRenovationCost(buildCost: number, starRating: number): number {
+  return Math.round(buildCost * RENOVATION.costRate * getPriceMultiplier(starRating));
+}
+
+/**
+ * Start renovating a vacant room: it goes offline for RENOVATION.durationHours,
+ * then comes back with fresh decor, full condition and cleanliness (see
+ * processRenovationTick). Makes construction noise for the neighbors.
+ */
+export function renovateRoom(state: HotelState, roomId: string): HotelState | null {
+  const room = state.rooms.find(r => r.id === roomId);
+  if (!room || room.status !== 'vacant') return null;
+  const cost = getRenovationCost(ROOM_CONFIG[room.type].buildCost, state.starRating);
+  if (state.cash < cost) return null;
+
+  return {
+    ...state,
+    cash: state.cash - cost,
+    rooms: state.rooms.map(r =>
+      r.id === roomId ? { ...r, status: 'renovating' as const, renovationHoursRemaining: RENOVATION.durationHours } : r
+    ),
+    noiseSources: [...state.noiseSources, createConstructionNoise(room.gridX, room.gridY, 'renovate')],
+  };
+}
+
+/** Renovate a facility: instant (facilities stay open), restores decor to 100. */
+export function renovateFacility(state: HotelState, facilityId: string): HotelState | null {
+  const facility = state.facilities.find(f => f.id === facilityId);
+  if (!facility || facility.decor >= 100) return null;
+  const cost = getRenovationCost(FACILITY_CONFIG[facility.type].buildCost, state.starRating);
+  if (state.cash < cost) return null;
+
+  return {
+    ...state,
+    cash: state.cash - cost,
+    facilities: state.facilities.map(f => f.id === facilityId ? { ...f, decor: 100 } : f),
+    noiseSources: [...state.noiseSources, createConstructionNoise(facility.gridX, facility.gridY, 'renovate')],
+  };
+}
+
+/** Cost to take a facility to its next level, or null if it's already maxed. */
+export function getFacilityUpgradeCost(facility: Facility): number | null {
+  const next = FACILITY_LEVELS[facility.level];
+  if (!next) return null;
+  return Math.round(FACILITY_CONFIG[facility.type].buildCost * next.upgradeCostRate);
+}
+
+/** Upgrade a facility one level. Needs the level's star rating (peak) and the cash. Comes with fresh decor. */
+export function upgradeFacility(state: HotelState, facilityId: string): HotelState | null {
+  const facility = state.facilities.find(f => f.id === facilityId);
+  if (!facility) return null;
+  const cost = getFacilityUpgradeCost(facility);
+  if (cost === null || state.cash < cost) return null;
+  if (state.peakStarRating < FACILITY_LEVELS[facility.level].requiredStars) return null;
+
+  return {
+    ...state,
+    cash: state.cash - cost,
+    facilities: state.facilities.map(f => f.id === facilityId ? { ...f, level: f.level + 1, decor: 100 } : f),
+    noiseSources: [...state.noiseSources, createConstructionNoise(facility.gridX, facility.gridY, 'renovate')],
+  };
+}
+
 export function getOccupancyRate(state: HotelState): number {
   if (state.rooms.length === 0) return 0;
   const occupied = state.rooms.filter(r => r.status === 'occupied').length;
@@ -201,6 +269,8 @@ export function addFacility(
     gridX,
     gridY,
     condition: 100,
+    decor: 100,
+    level: 1,
   };
 
   return {

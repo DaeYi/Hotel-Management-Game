@@ -2,12 +2,13 @@ import Phaser from 'phaser';
 import type { HotelState } from '../simulation/types';
 import { OBJECTIVES, LOAN } from '../config/balance';
 import { getNextLoanPaymentDay } from '../simulation/EconomyManager';
-import { formatObjectiveProgress } from './ObjectiveTracker';
+import { formatObjectiveProgress, formatMoneyShort } from './ObjectiveTracker';
+import { getCurrentObjective, isLegacyPhase, calculateValuation } from '../simulation/ObjectivesManager';
 
 // Toggle panel in the Finance/Staff/Story family: owner goals plus the bank
 // loan. Design tokens match StoryLogPanel (fill #1a1a3e/95%, border #6a6a8a).
 const PANEL_W = 300;
-const PANEL_H = 410;
+const PANEL_H = 440;
 const ROW_H = 30;
 const LIST_TOP = 34;
 
@@ -21,6 +22,7 @@ const STATUS_COLORS = {
 export class GoalsPanel {
   private container: Phaser.GameObjects.Container;
   private rows: Phaser.GameObjects.Text[] = [];
+  private legacyText: Phaser.GameObjects.Text;
   private loanText: Phaser.GameObjects.Text;
   private payStepBtn: Phaser.GameObjects.Text;
   private payOffBtn: Phaser.GameObjects.Text;
@@ -56,7 +58,13 @@ export class GoalsPanel {
       this.rows.push(row);
     }
 
-    const loanTop = LIST_TOP + OBJECTIVES.length * ROW_H + 4;
+    // Legacy goals (after the owner goals) plus the hotel's valuation
+    this.legacyText = scene.add.text(12, LIST_TOP + OBJECTIVES.length * ROW_H, '', {
+      fontSize: '11px', fontFamily: 'monospace', color: '#f1c40f', lineSpacing: 2,
+    });
+    this.container.add(this.legacyText);
+
+    const loanTop = LIST_TOP + (OBJECTIVES.length + 1) * ROW_H + 4;
     const divider = scene.add.graphics();
     divider.lineStyle(1, 0x3a3a5a, 0.8);
     divider.lineBetween(12, loanTop, PANEL_W - 12, loanTop);
@@ -111,6 +119,14 @@ export class GoalsPanel {
         row.setColor(STATUS_COLORS.upcoming);
       }
     });
+
+    if (isLegacyPhase(state)) {
+      const done = state.objectives.currentIndex - OBJECTIVES.length;
+      const goal = getCurrentObjective(state);
+      this.legacyText.setText(`▶ ${goal.title}  (${done} legacy done)\n  ${formatObjectiveProgress(state, goal)}`);
+    } else {
+      this.legacyText.setText(`· Legacy goals unlock after these\n  Hotel worth ${formatMoneyShort(calculateValuation(state))}`);
+    }
 
     const { loan } = state;
     if (loan.balance <= 0) {

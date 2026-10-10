@@ -3,6 +3,8 @@ import type { PRNG } from './prng.js';
 import { processArrivals, processDepartures, calculateGuestReviewBreakdown } from './GuestManager.js';
 import { processRevenue, processDailyCosts, updateReviewScore, checkBankruptcy, degradeRoomConditions, calculateEarlyDepartureSettlement, isLoanPaymentDay, processLoanPayment } from './EconomyManager.js';
 import { processObjectives, recordDailyStat } from './ObjectivesManager.js';
+import { decayDecor, processRenovationTick } from './DecorManager.js';
+import { tickCampaign } from './MarketingManager.js';
 import { tickNoiseSources } from './NoiseManager.js';
 import { processCleaningTick, processDailyHousekeeping, degradeCleanliness, startTurnoverCleaning } from './HousekeepingManager.js';
 import { calculateStarRating } from './StarRatingManager.js';
@@ -188,6 +190,15 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   // 4.6. Tick down construction noise
   current = { ...current, noiseSources: tickNoiseSources(current.noiseSources) };
 
+  // 4.7. Renovating rooms count down and reopen; marketing campaign counts down
+  const renovationResult = processRenovationTick(current);
+  current = renovationResult.state;
+  events.push(...renovationResult.events);
+
+  const campaignResult = tickCampaign(current);
+  current = campaignResult.state;
+  events.push(...campaignResult.events);
+
   // Check for broken rooms
   for (const room of current.rooms) {
     if (room.condition <= ECONOMY.roomBreakdownThreshold && room.status === 'occupied') {
@@ -205,6 +216,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
     const staffCost = getStaffDailyCost(current);
     current = { ...current, cash: current.cash + costs.cashDelta - staffCost };
     current = degradeCleanliness(current);
+    current = decayDecor(current);
 
     if (isLoanPaymentDay(current.day)) {
       const loanResult = processLoanPayment(current);

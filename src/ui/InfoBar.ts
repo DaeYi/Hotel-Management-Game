@@ -3,6 +3,8 @@ import type { HotelState } from '../simulation/types';
 import { getOccupancyRate } from '../simulation/HotelState';
 import { getSeasonInfo } from '../simulation/SeasonManager';
 import { getNextLoanPaymentDay } from '../simulation/EconomyManager';
+import { calculateValuation } from '../simulation/ObjectivesManager';
+import { formatMoneyShort } from './ObjectiveTracker';
 
 const SEASON_ICONS: Record<string, string> = {
   spring: '\ud83c\udf38',
@@ -52,7 +54,8 @@ export class InfoBar {
 
     this.infoText.setText(
       `$${Math.floor(state.cash).toLocaleString()}  |  ` +
-      `${starDisplay}  ${reviewDisplay}/10  |  ${speedLabel}`
+      `${starDisplay}  ${reviewDisplay}/10  |  ` +
+      `Worth ${formatMoneyShort(calculateValuation(state))}  |  ${speedLabel}`
     );
     this.infoText.setColor(state.cash < 0 ? '#e74c3c' : '#e0e0e0');
 
@@ -74,7 +77,9 @@ export class InfoBar {
     // Bottom status bar
     const occupancy = (getOccupancyRate(state) * 100).toFixed(0);
     const cleaning = state.rooms.filter(r => r.status === 'cleaning').length;
-    const cleaningStr = cleaning > 0 ? `  |  Cleaning: ${cleaning}` : '';
+    const renovating = state.rooms.filter(r => r.status === 'renovating').length;
+    const cleaningStr = (cleaning > 0 ? `  |  Cleaning: ${cleaning}` : '')
+      + (renovating > 0 ? `  |  Renovating: ${renovating}` : '');
 
     const loanStr = state.loan.balance > 0
       ? `  |  Loan: $${Math.ceil(state.loan.balance).toLocaleString()} ($${state.loan.weeklyPayment.toLocaleString()} due day ${getNextLoanPaymentDay(state.day)})`

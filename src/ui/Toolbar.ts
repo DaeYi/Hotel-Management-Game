@@ -44,10 +44,11 @@ export class Toolbar {
     let curX = x + 4;
 
     // Management group
-    curX = this.addGroupLabel(curX, 'Management:', '#6a8a6a');
+    curX = this.addGroupLabel(curX, 'Manage:', '#6a8a6a');
     curX = this.addButton(curX, { id: 'staff', label: '\ud83d\udd27 Staff', group: 'management' });
     curX = this.addButton(curX, { id: 'housekeeping', label: '\ud83e\uddf9 Cleaning', group: 'management' });
     curX = this.addButton(curX, { id: 'amenities', label: '\ud83d\udecf\ufe0f Amenities', group: 'management' });
+    curX = this.addButton(curX, { id: 'marketing', label: '\ud83d\udce3 Ads', group: 'management' });
 
     curX += 12; // gap between groups
 

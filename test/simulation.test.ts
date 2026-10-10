@@ -146,7 +146,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(11);
+    expect(loaded!.version).toBe(12);
     expect(loaded!.state.noiseSources).toEqual([]);
     expect(loaded!.state.facilities).toEqual([]); // added by the v8->v9 step
     expect(loaded!.state.activeIncidents).toEqual([]);
@@ -179,7 +179,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(11);
+    expect(loaded!.version).toBe(12);
     expect(loaded!.state.reviewScore).toBeCloseTo(7.2, 5); // 72 / 10
     expect((loaded!.state as any).reputationScore).toBeUndefined();
     expect(loaded!.state.bookings[0].reviewScore).toBe(8); // rating 4 * 2
@@ -309,7 +309,7 @@ describe('GuestManager', () => {
     const prng = new PRNG(42);
     const room: Room = {
       id: 'test', type: 'standard', gridX: 0, gridY: 0,
-      pricePerNight: 80, condition: 50, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0,
+      pricePerNight: 80, condition: 50, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0,
     };
     const guest: Guest = {
       id: 'g1', budget: 100, stayLength: 1, trait: 'normal',
@@ -330,7 +330,7 @@ describe('GuestManager', () => {
     const prng = new PRNG(42);
     const room: Room = {
       id: 'test', type: 'standard', gridX: 0, gridY: 0,
-      pricePerNight: 80, condition: 100, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0,
+      pricePerNight: 80, condition: 100, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0,
     };
     const guest: Guest = {
       id: 'g1', budget: 200, stayLength: 1, trait: 'normal',
@@ -356,7 +356,7 @@ describe('GuestManager', () => {
 
     const lowRoom: Room = {
       id: 'test', type: 'standard', gridX: 0, gridY: 0,
-      pricePerNight: 80, condition: 10, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0,
+      pricePerNight: 80, condition: 10, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0,
     };
     const highRoom: Room = { ...lowRoom, condition: 90 };
 
@@ -417,7 +417,7 @@ describe('HousekeepingManager', () => {
     const baseRoom: Room = {
       id: 'r', type: 'standard', gridX: 0, gridY: 0, pricePerNight: 80,
       condition: 100, cleanliness: 0, status: 'occupied', guestId: 'g1',
-      cleaningHoursRemaining: 0, lastDailyCleanDay: 0,
+      cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0,
     };
 
     const quick = startTurnoverCleaning(baseRoom, 'quick');
@@ -840,7 +840,7 @@ describe('SeasonManager', () => {
 describe('EconomyManager', () => {
   it('applies debt interest when cash is negative', () => {
     const state = { ...createHotelState(), cash: -1000, rooms: [
-      { id: 'r1', type: 'standard' as const, gridX: 0, gridY: 0, pricePerNight: 80, condition: 100, cleanliness: 100, status: 'vacant' as const, cleaningHoursRemaining: 0, lastDailyCleanDay: 0 },
+      { id: 'r1', type: 'standard' as const, gridX: 0, gridY: 0, pricePerNight: 80, condition: 100, cleanliness: 100, status: 'vacant' as const, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0 },
     ] };
     const costs = processDailyCosts(state);
     // Interest on $1000 debt = $50, plus operating cost of 1 room = $10
@@ -973,7 +973,7 @@ describe('StoryGenerator', () => {
     return {
       id: 'r1', type: 'standard', gridX: 1, gridY: 1, pricePerNight: 80,
       condition: 100, cleanliness: 100, status: 'occupied', guestId: 'g1',
-      cleaningHoursRemaining: 0, lastDailyCleanDay: 0,
+      cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0,
       ...overrides,
     };
   }
@@ -1201,7 +1201,7 @@ describe('StoryGenerator', () => {
   });
 
   it('attributeReviewCause picks the largest negative contributor with a fixed tie-break order', () => {
-    const base = { noisePenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 5 };
+    const base = { noisePenalty: 0, decorPenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 5 };
     expect(attributeReviewCause({ ...base, noisePenalty: 2 })).toBe('noise');
     expect(attributeReviewCause({ ...base, conditionBonus: -2 })).toBe('room condition');
     expect(attributeReviewCause({ ...base, cleanlinessBonus: -2 })).toBe('cleanliness');
@@ -1213,7 +1213,7 @@ describe('StoryGenerator', () => {
 
   it('checkReviewSemiViral fires a temporary reputation penalty on an unusually bad checkout', () => {
     let state = createHotelState();
-    const breakdown = { noisePenalty: 3, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 1 };
+    const breakdown = { noisePenalty: 3, decorPenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 1 };
     const booking: Booking = { id: 'b1', roomId: 'r1', guestId: 'g1', nightRate: 80, reviewScore: 1, satisfactionAtCheckout: 10 };
 
     const result = checkReviewSemiViral(state, [{ guestName: 'Sam', roomId: 'r1', booking, breakdown }], new PRNG(1));
@@ -1224,7 +1224,7 @@ describe('StoryGenerator', () => {
 
   it('checkReviewSemiViral does nothing when no checkout was unusually bad', () => {
     const state = createHotelState();
-    const breakdown = { noisePenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 8 };
+    const breakdown = { noisePenalty: 0, decorPenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 8 };
     const booking: Booking = { id: 'b1', roomId: 'r1', guestId: 'g1', nightRate: 80, reviewScore: 8, satisfactionAtCheckout: 80 };
 
     const result = checkReviewSemiViral(state, [{ guestName: 'Sam', roomId: 'r1', booking, breakdown }], new PRNG(1));

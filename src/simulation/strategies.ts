@@ -1,6 +1,8 @@
 import type { HotelState, RoomType, FacilityType, AmenityTier } from './types.js';
 import { ROOM_CONFIG, FACILITY_CONFIG, GRID, LOAN } from '../config/balance.js';
-import { addRoom, addFacility, demolishRoom, isTileOccupied, isUnlocked, setRoomPrice } from './HotelState.js';
+import { addRoom, addFacility, demolishRoom, isTileOccupied, isUnlocked, setRoomPrice, renovateRoom, renovateFacility, upgradeFacility, getFacilityUpgradeCost } from './HotelState.js';
+import { startCampaign, getCampaignCost } from './MarketingManager.js';
+import { FACILITY_LEVELS } from '../config/balance.js';
 import { getExpectedPrice } from './StarRatingManager.js';
 import { repayLoan } from './EconomyManager.js';
 import { getAverageOccupancy } from './ObjectivesManager.js';
@@ -18,7 +20,13 @@ interface ManagedOptions {
   priceMultiplier: number; // relative to the fair price for the current star level
   cashReserve: number; // never spend below this on construction
   expandAtOccupancy: number; // build another room once 7-day occupancy reaches this
+  renovate: boolean; // renovate stale rooms and facilities
+  upgrade: boolean; // upgrade facilities when unlocked
+  market: boolean; // run marketing campaigns when rooms sit empty
 }
+
+const STALE_DECOR = 60; // reinvesting strategies renovate below this
+const MAX_RENOVATIONS_PER_DAY = 3; // don't take half the hotel offline at once
 
 /** First free tile in row-major order -- keeps the hotel compact, so facilities end up next to rooms. */
 function findFreeTile(state: HotelState): { x: number; y: number } | null {
@@ -103,6 +111,8 @@ function managedStrategy(opts: ManagedOptions): Strategy {
       if (cleared) s = addRoom(cleared, best, replaceable.gridX, replaceable.gridY) ?? s;
     }
 
+    s = reinvest(s, opts);
+
     // Surplus cash pays the loan down early
     while (s.loan.balance > 0 && s.cash - LOAN.earlyRepaymentStep >= opts.cashReserve * 3) {
       s = repayLoan(s, LOAN.earlyRepaymentStep) ?? s;
@@ -112,11 +122,67 @@ function managedStrategy(opts: ManagedOptions): Strategy {
   };
 }
 
-export const balancedStrategy = managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.75 });
-export const greedyStrategy = managedStrategy({ priceMultiplier: 1.6, cashReserve: 8000, expandAtOccupancy: 0.75 });
+/** Late-game spending: renovations, facility upgrades, and marketing when rooms sit empty. */
+function reinvest(state: HotelState, opts: ManagedOptions): HotelState {
+  let s = state;
+  const canSpend = (cost: number, reserveMult = 1) => s.cash - cost >= opts.cashReserve * reserveMult;
+  // Discretionary spending waits until there's enough banked to keep climbing
+  // (a suite swap needs cashReserve x 4 on top of the suite itself).
+  const surplusMult = 6;
+
+  if (opts.renovate) s = renovateStale(s, canSpend);
+
+  if (opts.upgrade) {
+    for (const facility of s.facilities) {
+      const cost = getFacilityUpgradeCost(facility);
+      const level = FACILITY_LEVELS[facility.level];
+      if (cost !== null && level && s.peakStarRating >= level.requiredStars && canSpend(cost, surplusMult)) {
+        s = upgradeFacility(s, facility.id) ?? s;
+      }
+    }
+  }
+
+  if (opts.market && !s.activeCampaign && getAverageOccupancy(s, 7) < 0.7) {
+    const campaign = ['national', 'online', 'local'].find(id => canSpend(getCampaignCost(s, id), surplusMult));
+    if (campaign) s = startCampaign(s, campaign) ?? s;
+  }
+
+  return s;
+}
+
+/** Renovations are upkeep, not luxury: they only need the normal cash reserve. */
+function renovateStale(state: HotelState, canSpend: (cost: number) => boolean): HotelState {
+  let s = state;
+  const stale = s.rooms
+    .filter(r => r.status === 'vacant' && r.decor < STALE_DECOR)
+    .sort((a, b) => a.decor - b.decor)
+    .slice(0, MAX_RENOVATIONS_PER_DAY);
+  for (const room of stale) {
+    const next = renovateRoom(s, room.id);
+    if (next && canSpend(s.cash - next.cash)) s = next;
+  }
+  for (const facility of s.facilities.filter(f => f.decor < STALE_DECOR)) {
+    const next = renovateFacility(s, facility.id);
+    if (next && canSpend(s.cash - next.cash)) s = next;
+  }
+  return s;
+}
+
+const ALL_SINKS = { renovate: true, upgrade: true, market: true };
+const NO_SINKS = { renovate: false, upgrade: false, market: false };
+
+export const balancedStrategy = managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.75, ...ALL_SINKS });
+export const greedyStrategy = managedStrategy({ priceMultiplier: 1.6, cashReserve: 8000, expandAtOccupancy: 0.75, ...ALL_SINKS });
+/** Balanced play that never renovates, upgrades, or markets -- just banks the cash. */
+export const hoarderStrategy = managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.75, ...NO_SINKS });
 
 export const STRATEGIES: Record<string, Strategy> = {
   idle: idleStrategy,
   balanced: balancedStrategy,
   greedy: greedyStrategy,
+  hoarder: hoarderStrategy,
+  // One sink at a time, for measuring what each is worth
+  renovateOnly: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.75, ...NO_SINKS, renovate: true }),
+  upgradeOnly: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.75, ...NO_SINKS, upgrade: true }),
+  marketOnly: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.75, ...NO_SINKS, market: true }),
 };

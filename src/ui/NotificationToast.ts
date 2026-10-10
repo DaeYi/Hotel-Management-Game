@@ -36,11 +36,14 @@ const EVENT_COLORS: Record<string, string> = {
   objective_completed: '#2ecc71',
   objective_failed: '#e74c3c',
   build_unlocked: '#9b59b6',
+  renovation_complete: '#2ecc71',
+  campaign_ended: '#f39c12',
 };
 
 /** Progression events: always shown right away, never batched or suppressed. */
 const PROGRESSION_EVENT_TYPES = new Set([
   'loan_payment', 'loan_paid_off', 'objective_completed', 'objective_failed', 'build_unlocked',
+  'campaign_ended',
 ]);
 
 /** Incident-related event types (design-review D13): suppressed as toasts while

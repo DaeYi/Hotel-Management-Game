@@ -1,13 +1,13 @@
 import Phaser from 'phaser';
 import type { HotelState, Room } from '../simulation/types';
-import { ROOM_CONFIG, ECONOMY, AMENITIES } from '../config/balance';
+import { ROOM_CONFIG, ECONOMY, AMENITIES, DECOR, RENOVATION } from '../config/balance';
 import { getExpectedPrice } from '../simulation/StarRatingManager';
 import { TILE_SIZE, GRID_OFFSET_X, GRID_OFFSET_Y } from './GridRenderer';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
-import { getDemolishRefund, formatRoomLabel } from '../simulation/HotelState';
+import { getDemolishRefund, formatRoomLabel, getRenovationCost } from '../simulation/HotelState';
 
 const PANEL_W = 220;
-const PANEL_H = 260;
+const PANEL_H = 275;
 
 export class RoomInspector {
   private scene: Phaser.Scene;
@@ -22,7 +22,7 @@ export class RoomInspector {
   private selectedRoomId: string | null = null;
   private dragging = false;
   private sliderX = 16;
-  private sliderY = 140;
+  private sliderY = 146;
   private sliderW = PANEL_W - 32;
 
   // Container world position (updated on show)
@@ -30,21 +30,25 @@ export class RoomInspector {
   private panelWorldY = 0;
 
   private repairBtn: Phaser.GameObjects.Text;
+  private renovateBtn: Phaser.GameObjects.Text;
   private demolishBtn: Phaser.GameObjects.Text;
 
   private onPriceChange: (roomId: string, pct: number) => void;
   private onRepair: (roomId: string) => void;
+  private onRenovate: (roomId: string) => void;
   private onDemolish: (roomId: string) => void;
 
   constructor(
     scene: Phaser.Scene,
     onPriceChange: (roomId: string, pct: number) => void,
     onRepair: (roomId: string) => void,
+    onRenovate: (roomId: string) => void,
     onDemolish: (roomId: string) => void
   ) {
     this.scene = scene;
     this.onPriceChange = onPriceChange;
     this.onRepair = onRepair;
+    this.onRenovate = onRenovate;
     this.onDemolish = onDemolish;
 
     this.container = scene.add.container(0, 0).setDepth(20).setVisible(false);
@@ -80,13 +84,13 @@ export class RoomInspector {
     this.container.add(this.statsText);
 
     // Price label
-    this.priceLabel = scene.add.text(12, 120, '', {
+    this.priceLabel = scene.add.text(12, 126, '', {
       fontSize: '11px', fontFamily: 'monospace', color: '#888899',
     });
     this.container.add(this.priceLabel);
 
     // Price value
-    this.priceValue = scene.add.text(PANEL_W - 16, 120, '', {
+    this.priceValue = scene.add.text(PANEL_W - 16, 126, '', {
       fontSize: '13px', fontFamily: 'monospace', color: '#f1c40f',
     }).setOrigin(1, 0);
     this.container.add(this.priceValue);
@@ -100,7 +104,7 @@ export class RoomInspector {
     this.container.add(this.sliderThumb);
 
     // Repair button (shown only for damaged/broken rooms)
-    this.repairBtn = scene.add.text(PANEL_W / 2, 175, `Repair ($${ECONOMY.roomRepairCost})`, {
+    this.repairBtn = scene.add.text(PANEL_W / 2, 185, `Repair ($${ECONOMY.roomRepairCost})`, {
       fontSize: '12px', fontFamily: 'monospace', color: '#2ecc71',
       backgroundColor: '#1a3a2e',
       padding: { x: 12, y: 6 },
@@ -112,8 +116,21 @@ export class RoomInspector {
     this.repairBtn.on('pointerout', () => this.repairBtn.setColor('#2ecc71'));
     this.container.add(this.repairBtn);
 
+    // Renovate button (vacant rooms whose decor has faded)
+    this.renovateBtn = scene.add.text(PANEL_W / 2, 215, 'Renovate', {
+      fontSize: '12px', fontFamily: 'monospace', color: '#e67e22',
+      backgroundColor: '#3a2a1a',
+      padding: { x: 12, y: 6 },
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    this.renovateBtn.on('pointerdown', () => {
+      if (this.selectedRoomId) this.onRenovate(this.selectedRoomId);
+    });
+    this.renovateBtn.on('pointerover', () => this.renovateBtn.setColor('#ffffff'));
+    this.renovateBtn.on('pointerout', () => this.renovateBtn.setColor('#e67e22'));
+    this.container.add(this.renovateBtn);
+
     // Demolish button
-    this.demolishBtn = scene.add.text(PANEL_W / 2, 205, 'Demolish', {
+    this.demolishBtn = scene.add.text(PANEL_W / 2, 245, 'Demolish', {
       fontSize: '12px', fontFamily: 'monospace', color: '#e74c3c',
       backgroundColor: '#3a1a1a',
       padding: { x: 12, y: 6 },
@@ -213,6 +230,8 @@ export class RoomInspector {
       statusLine = `Status:     Occupied (${guest?.trait ?? 'unknown'})`;
     } else if (room.status === 'cleaning') {
       statusLine = `Status:     Cleaning (${room.cleaningHoursRemaining}h left)`;
+    } else if (room.status === 'renovating') {
+      statusLine = `Status:     Renovating (${room.renovationHoursRemaining}h left)`;
     } else if (room.condition <= ECONOMY.roomBreakdownThreshold) {
       statusLine = 'Status:     OUT OF ORDER';
     } else {
@@ -224,6 +243,10 @@ export class RoomInspector {
 
     const cleanBar = '\u2588'.repeat(Math.round(room.cleanliness / 10))
       + '\u2591'.repeat(10 - Math.round(room.cleanliness / 10));
+
+    const decorBar = '\u2588'.repeat(Math.round(room.decor / 10))
+      + '\u2591'.repeat(10 - Math.round(room.decor / 10));
+    const decorNote = room.decor < DECOR.freshThreshold ? ' stale' : '';
 
     const noise = calculateRoomNoise(room, state);
     const noiseLabel = noise <= 0.2 ? 'Quiet'
@@ -239,6 +262,7 @@ export class RoomInspector {
       `${statusLine}\n` +
       `Condition:  ${condBar} ${room.condition.toFixed(0)}%\n` +
       `Cleanliness:${cleanBar} ${room.cleanliness.toFixed(0)}%\n` +
+      `Decor:      ${decorBar} ${room.decor.toFixed(0)}%${decorNote}\n` +
       `Amenities:  ${amenityLabel}  |  Noise: ${noiseLabel}`
     );
 
@@ -256,8 +280,18 @@ export class RoomInspector {
       this.repairBtn.setText(`Repair ($${ECONOMY.roomRepairCost})`);
     }
 
-    // Show demolish button when room is not occupied (allow during cleaning)
-    this.demolishBtn.setVisible(room.status !== 'occupied');
+    // Renovate once decor has started to fade; the room must be vacant
+    const canRenovate = room.status === 'vacant' && room.decor < 90;
+    this.renovateBtn.setVisible(canRenovate);
+    if (canRenovate) {
+      const cost = getRenovationCost(ROOM_CONFIG[room.type].buildCost, state.starRating);
+      const affordable = state.cash >= cost;
+      this.renovateBtn.setText(`Renovate ($${cost.toLocaleString()}, ${RENOVATION.durationHours}h)${affordable ? '' : " - can't afford"}`);
+      this.renovateBtn.setColor(affordable ? '#e67e22' : '#e74c3c');
+    }
+
+    // Show demolish button when room is not occupied or renovating (allow during cleaning)
+    this.demolishBtn.setVisible(room.status !== 'occupied' && room.status !== 'renovating');
     const refund = getDemolishRefund(ROOM_CONFIG[room.type].buildCost);
     this.demolishBtn.setText(`Demolish (+$${refund})`);
   }

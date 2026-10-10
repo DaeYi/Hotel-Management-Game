@@ -4,7 +4,7 @@ import { GUEST_NAMES, LOAN } from '../config/balance.js';
 import { calculateStarRating } from './StarRatingManager.js';
 
 const SAVE_KEY = 'hotel-game-save';
-const SAVE_VERSION = 11; // v11: opening loan, owner objectives, star-gated unlocks
+const SAVE_VERSION = 12; // v12: decor/renovation, facility levels, marketing, valuation
 
 interface SaveData {
   version: number;
@@ -147,6 +147,26 @@ export function loadGame(): SaveData | null {
       data.state.peakStarRating = data.state.peakStarRating ?? data.state.starRating;
       data.version = 11;
       console.log('Migrated save from v10 to v11');
+    }
+
+    if (data.version === 11) {
+      // Existing buildings start fresh rather than suddenly stale; facilities at level 1.
+      data.state.rooms = data.state.rooms.map((r: any) => ({
+        ...r,
+        decor: r.decor ?? 100,
+        renovationHoursRemaining: r.renovationHoursRemaining ?? 0,
+      }));
+      data.state.facilities = data.state.facilities.map((f: any) => ({
+        ...f,
+        decor: f.decor ?? 100,
+        level: f.level ?? 1,
+      }));
+      data.state.activeCampaign = data.state.activeCampaign ?? null;
+      data.state.daysAtFiveStars = data.state.daysAtFiveStars ?? 0;
+      // Older snapshots predate valuation; 0 is only used for history, never for goals
+      data.state.dailyStats = data.state.dailyStats.map((d: any) => ({ ...d, valuation: d.valuation ?? 0 }));
+      data.version = 12;
+      console.log('Migrated save from v11 to v12');
     }
 
     if (data.version !== SAVE_VERSION) {

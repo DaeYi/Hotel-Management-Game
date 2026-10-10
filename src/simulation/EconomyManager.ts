@@ -1,5 +1,6 @@
 import type { HotelState, GameEvent, RoomType } from './types.js';
-import { ECONOMY, REVIEW, AMENITIES, FACILITY_CONFIG, LOAN } from '../config/balance.js';
+import { ECONOMY, REVIEW, AMENITIES, FACILITY_CONFIG, FACILITY_LEVELS, LOAN } from '../config/balance.js';
+import { getUpkeepMultiplier } from './StarRatingManager.js';
 import type { DepartureResult } from './GuestManager.js';
 
 export interface EconomyResult {
@@ -25,8 +26,9 @@ export function processRevenue(
 export function processDailyCosts(state: HotelState): EconomyResult {
   const result: EconomyResult = { cashDelta: 0, events: [] };
 
-  // Operating costs per room
-  const operatingCosts = state.rooms.length * ECONOMY.dailyOperatingCostPerRoom;
+  // Operating costs per room, scaled by prestige upkeep
+  const upkeep = getUpkeepMultiplier(state.starRating);
+  const operatingCosts = state.rooms.length * ECONOMY.dailyOperatingCostPerRoom * upkeep;
   result.cashDelta -= operatingCosts;
 
   // In-room amenity costs per room (based on tier per room type)
@@ -42,11 +44,12 @@ export function processDailyCosts(state: HotelState): EconomyResult {
   for (const facility of state.facilities) {
     const fConfig = FACILITY_CONFIG[facility.type];
     if (fConfig) {
-      result.cashDelta -= fConfig.dailyOperatingCost;
+      const level = FACILITY_LEVELS[facility.level - 1];
+      result.cashDelta -= fConfig.dailyOperatingCost * level.operatingMult * upkeep;
       // Shops generate revenue per guest
       if (fConfig.dailyRevenue > 0) {
         const guestCount = state.guests.length;
-        result.cashDelta += fConfig.dailyRevenue * guestCount;
+        result.cashDelta += fConfig.dailyRevenue * level.revenueMult * guestCount;
       }
     }
   }

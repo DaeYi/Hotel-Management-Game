@@ -1,6 +1,8 @@
 import type { Guest, GuestTrait, Room, HotelState, Booking, GameEvent, ReturningGuestProfile } from './types.js';
 import type { PRNG } from './prng.js';
-import { ECONOMY, GUEST_TRAITS, REVIEW, HOUSEKEEPING, STAFF, AMENITIES, FACILITY_CONFIG, GUEST_NAMES, SATISFACTION, STORY } from '../config/balance.js';
+import { ECONOMY, GUEST_TRAITS, REVIEW, HOUSEKEEPING, STAFF, AMENITIES, FACILITY_CONFIG, FACILITY_LEVELS, GUEST_NAMES, SATISFACTION, STORY } from '../config/balance.js';
+import { getDecorReviewPenalty } from './DecorManager.js';
+import { getCampaignDemandMultiplier } from './MarketingManager.js';
 import { getAvailableRooms, getAdjacentFacilities } from './HotelState.js';
 import { calculateRoomNoise, noiseToRatingPenalty } from './NoiseManager.js';
 import { getExpectationMultiplier, getExpectedPrice, getPriceMultiplier, getStarDemandMultiplier } from './StarRatingManager.js';
@@ -93,7 +95,8 @@ export function getExpectedArrivalsPerDay(state: HotelState): number {
     * (state.reviewScore / REVIEW.arrivalScoreDivisor)
     * getTotalDemandMultiplier(state.day)
     * getWordOfMouthMultiplier(state)
-    * getReputationPenaltyMultiplier(state);
+    * getReputationPenaltyMultiplier(state)
+    * getCampaignDemandMultiplier(state);
 }
 
 /**
@@ -256,6 +259,7 @@ export function processDepartures(
 
 export interface GuestReviewBreakdown {
   noisePenalty: number;
+  decorPenalty: number;
   conditionBonus: number;
   cleanlinessBonus: number;
   amenityPenalty: number;
@@ -289,6 +293,7 @@ export function calculateGuestReviewBreakdown(
   // Condition and cleanliness
   const conditionBonus = (room.condition - REVIEW.conditionMidpoint) / REVIEW.conditionScale * REVIEW.conditionWeight;
   const cleanlinessBonus = (room.cleanliness - HOUSEKEEPING.cleanlinessMidpoint) / HOUSEKEEPING.cleanlinessScale * HOUSEKEEPING.cleanlinessWeight;
+  const decorPenalty = getDecorReviewPenalty(room.decor);
 
   // Building facility bonus (gym, restaurant, pool, shop adjacent to this room)
   let facilityBonus = 0;
@@ -299,7 +304,7 @@ export function calculateGuestReviewBreakdown(
     seenTypes.add(facility.type);
     const fConfig = FACILITY_CONFIG[facility.type];
     if (fConfig) {
-      let bonus = fConfig.adjacentReviewBonus;
+      let bonus = fConfig.adjacentReviewBonus * FACILITY_LEVELS[facility.level - 1].reviewMult;
       // Seasonal multiplier (pool is more valuable in summer)
       if (fConfig.seasonalMultiplier) {
         const season = getCurrentSeason(state.day);
@@ -335,6 +340,7 @@ export function calculateGuestReviewBreakdown(
   const rawScore = REVIEW.baseScore
     + priceFairness * REVIEW.basePriceFairnessWeight
     - noisePenalty
+    - decorPenalty
     + conditionBonus
     + cleanlinessBonus
     + amenityBonus
@@ -345,7 +351,7 @@ export function calculateGuestReviewBreakdown(
   // Apply star expectation multiplier to penalties
   // Higher star = penalties are amplified, bonuses stay the same
   const expectation = getExpectationMultiplier(state.starRating);
-  const penalties = noisePenalty + Math.max(0, -conditionBonus) + Math.max(0, -cleanlinessBonus) + amenityPenalty;
+  const penalties = noisePenalty + decorPenalty + Math.max(0, -conditionBonus) + Math.max(0, -cleanlinessBonus) + amenityPenalty;
   const expectationAdjustment = penalties * (expectation - 1);
 
   const finalScore = rawScore - expectationAdjustment;
@@ -353,6 +359,7 @@ export function calculateGuestReviewBreakdown(
 
   return {
     noisePenalty,
+    decorPenalty,
     conditionBonus,
     cleanlinessBonus,
     amenityPenalty,

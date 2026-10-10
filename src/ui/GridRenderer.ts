@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { HotelState, RoomType, FacilityType, GuestTrait } from '../simulation/types';
-import { GRID, ECONOMY, NOISE, FACILITY_CONFIG } from '../config/balance';
+import { GRID, ECONOMY, NOISE, FACILITY_CONFIG, DECOR } from '../config/balance';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
 import { formatRoomLabel } from '../simulation/HotelState';
 
@@ -159,11 +159,18 @@ export class GridRenderer {
       const y = GRID_OFFSET_Y + room.gridY * TILE_SIZE;
       const color = room.status === 'occupied' ? ROOM_OCCUPIED_COLORS[room.type]
         : room.status === 'cleaning' ? 0x888888
+        : room.status === 'renovating' ? 0xd35400
         : ROOM_COLORS[room.type];
       const alpha = room.condition <= ECONOMY.roomBreakdownThreshold ? 0.3 : 0.85;
 
       this.roomGraphics.fillStyle(color, alpha);
       this.roomGraphics.fillRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+
+      // Brown strip along the top once decor goes stale (renovate to clear it)
+      if (room.decor < DECOR.freshThreshold && room.status !== 'renovating') {
+        this.roomGraphics.fillStyle(0x8e6e53, 0.9);
+        this.roomGraphics.fillRect(x + 2, y + 2, TILE_SIZE - 4, 2);
+      }
 
       // Condition bar at bottom when below 80%
       if (room.condition < 80) {

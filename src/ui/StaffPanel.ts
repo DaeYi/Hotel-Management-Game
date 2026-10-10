@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
 import type { HotelState, StaffConfig } from '../simulation/types';
 import { STAFF } from '../config/balance';
-import { getMaintenanceStatus } from '../simulation/MaintenanceManager';
+import { getMaintenanceStatus, getStaffDailyCost } from '../simulation/MaintenanceManager';
+import { getUpkeepMultiplier } from '../simulation/StarRatingManager';
 import { getHousekeepingStatus } from '../simulation/HousekeepingManager';
 
 const PANEL_W = 280;
@@ -197,10 +198,10 @@ export class StaffPanel {
     );
 
     // Total cost
-    const totalDaily = state.staff.frontDesk * STAFF.frontDesk.dailyWage
-      + state.staff.housekeepers * STAFF.housekeeping.dailyWage
-      + state.staff.maintenanceWorkers * STAFF.maintenance.dailyWage;
-    this.totalCostText.setText(`Total staff: $${totalDaily}/day`);
+    // Wages scale with prestige upkeep; the per-role labels show base wages
+    const upkeep = getUpkeepMultiplier(state.starRating);
+    const upkeepNote = upkeep > 1 ? ` (${state.starRating}★ wages x${upkeep})` : '';
+    this.totalCostText.setText(`Total staff: $${Math.round(getStaffDailyCost(state))}/day${upkeepNote}`);
 
     // Most urgent recommendation
     const recommendations: string[] = [];

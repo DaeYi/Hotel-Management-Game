@@ -1,5 +1,6 @@
 import type { HotelState, Room, GameEvent } from './types.js';
 import { STAFF } from '../config/balance.js';
+import { getUpkeepMultiplier } from './StarRatingManager.js';
 
 /**
  * Process maintenance workers repairing rooms.
@@ -51,13 +52,14 @@ export function processMaintenanceTick(state: HotelState): { state: HotelState; 
 }
 
 /**
- * Calculate daily staff costs (all staff types).
+ * Calculate daily staff costs (all staff types). Wages scale with prestige
+ * upkeep -- a 5-star hotel pays more for the same headcount.
  */
 export function getStaffDailyCost(state: HotelState): number {
   const maintenanceCost = state.staff.maintenanceWorkers * STAFF.maintenance.dailyWage;
   const housekeepingCost = state.staff.housekeepers * STAFF.housekeeping.dailyWage;
   const frontDeskCost = state.staff.frontDesk * STAFF.frontDesk.dailyWage;
-  return maintenanceCost + housekeepingCost + frontDeskCost;
+  return (maintenanceCost + housekeepingCost + frontDeskCost) * getUpkeepMultiplier(state.starRating);
 }
 
 /**

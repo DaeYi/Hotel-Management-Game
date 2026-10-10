@@ -28,31 +28,17 @@
 
 ## Simulation
 
-### Facility condition decay/repair mechanic
+### Remove unused Facility.condition
 
-**What:** Give facilities condition decay and a `repairFacility()` function, mirroring how rooms already work.
+**What:** Delete `Facility.condition` (initialized to 100, never read) or fold it into `decor`.
 
-**Why:** Facilities currently never degrade — `condition` is initialized to 100 and never touched again. This is inconsistent with rooms and may feel incomplete once players notice a gym that's been open for 200 days still shows 100% condition.
+**Why:** The original "facility condition decay/repair" idea is covered by the late-game economy milestone: facilities now have `decor`, which fades daily and is restored by renovation. The old `condition` field is dead weight.
 
-**Context:** The design doc's "Facility Decay/Repair Decision" defaults to "no decay" specifically because the decay branch is substantially bigger than a UI toggle: `MaintenanceManager.processMaintenanceTick` only iterates `state.rooms` today, `repairFacility()` doesn't exist (only `repairRoom()` does), and `FACILITY_CONFIG`'s `adjacentReviewBonus`/`starPoints`/`noiseOutput` are flat values that don't scale with condition the way room pricing/reviews do. Verified directly against `HotelState.ts` and `MaintenanceManager.ts` during plan-eng-review. "No decay" may simply be the right permanent design for facilities, not a placeholder — revisit only if it starts to feel like a real gap in play.
-
-**Effort:** M
-**Priority:** P3
-**Depends on:** Facility parity (inspector UI) shipping first, so there's a UI surface to show condition/repair on.
+**Effort:** S
+**Priority:** P4
+**Depends on:** None
 
 ## Balance
-
-### Late-game money sinks
-
-**What:** Give a successful hotel something to spend on once it's past 4-5 stars: renovations, expansions to a second building, staff upgrades, or rising property taxes that scale with size.
-
-**Why:** After the stakes & progression milestone, the `balanced` bot is bankruptcy-proof and sits on ~$1.1M by day 400 (`npm run simulate -- 400`). Once the loan is paid and 5 stars reached, cash stops meaning anything.
-
-**Context:** The early game now has real pressure (opening loan, demand that tracks size and stars, overpricing loses guests). The late game has none. See docs/designs/stakes-and-progression.md.
-
-**Effort:** M
-**Priority:** P2
-**Depends on:** None
 
 ### Faster consequences for neglect
 
@@ -104,4 +90,5 @@
 
 ## Completed
 
+- **Late-game money sinks** (2026-10-10): prestige upkeep, decor + renovation, facility upgrades, marketing campaigns, valuation and endless legacy goals. See docs/designs/late-game-economy.md
 - **Deploy pipeline** (2026-10-10): GitHub Actions runs tests + build on every push/PR and deploys `dist` to GitHub Pages from `main` -- https://daeyi.github.io/Hotel-Management-Game/

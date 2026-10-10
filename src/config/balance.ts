@@ -307,6 +307,17 @@ export const STAR_RATING = {
     5: 2.0,
   } as Record<number, number>,
 
+  // Prestige upkeep: running a fancier hotel costs more. Multiplies per-room
+  // operating cost, staff wages, and facility operating costs. Without this,
+  // prices nearly double by 5 stars while costs stay flat.
+  upkeepMultiplier: {
+    1: 1.0,
+    2: 1.2,
+    3: 1.45,
+    4: 1.8,
+    5: 2.2,
+  } as Record<number, number>,
+
   // Expectation multiplier per star level
   // Higher star = guests expect more = penalties hit harder
   expectationMultiplier: {
@@ -464,7 +475,10 @@ export type ObjectiveKind =
   | 'review_score'    // review score >= target (0-10)
   | 'star_rating'     // star rating >= target
   | 'revenue_30d'     // revenue earned over the last 30 days >= target
-  | 'loan_paid_off';  // loan balance is zero
+  | 'loan_paid_off'   // loan balance is zero
+  | 'valuation'       // hotel valuation >= target
+  | 'five_star_days'  // held 5 stars for `target` consecutive days
+  | 'occupancy_30d';  // average overnight occupancy over the last 30 days >= target (0-1)
 
 export interface ObjectiveConfig {
   id: string;
@@ -472,7 +486,7 @@ export interface ObjectiveConfig {
   description: string;
   kind: ObjectiveKind;
   target: number;
-  deadlineDay: number; // absolute game day; missing it fails the objective and moves on
+  deadlineDay: number | null; // absolute game day; missing it fails the objective. null = no deadline
   reward: number; // cash paid on completion
 }
 
@@ -487,8 +501,63 @@ export const OBJECTIVES: ObjectiveConfig[] = [
   { id: 'three_stars', title: 'Three-Star Hotel', description: 'Reach 3 stars', kind: 'star_rating', target: 3, deadlineDay: 160, reward: 10000 },
   { id: 'debt_free', title: 'Debt Free', description: 'Pay off the bank loan', kind: 'loan_paid_off', target: 0, deadlineDay: 240, reward: 10000 },
   { id: 'four_stars', title: 'Four-Star Hotel', description: 'Reach 4 stars', kind: 'star_rating', target: 4, deadlineDay: 260, reward: 15000 },
-  { id: 'five_stars', title: 'Five-Star Legend', description: 'Reach 5 stars', kind: 'star_rating', target: 5, deadlineDay: 360, reward: 25000 },
+  { id: 'five_stars', title: 'Five-Star Legend', description: 'Reach 5 stars', kind: 'star_rating', target: 5, deadlineDay: 420, reward: 25000 },
 ];
+
+// Legacy goals: generated endlessly once OBJECTIVES are all resolved, cycling
+// through these kinds with targets that escalate each full cycle (tier).
+// No deadlines and no cash rewards -- cash is no longer the point by then.
+export const LEGACY = {
+  valuationBase: 1_000_000, // tier 0 target; doubles each tier
+  fiveStarDaysBase: 30, // tier 0 target; +30 each tier
+  occupancyBase: 0.75, // tier 0 target; +0.05 each tier, capped
+  occupancyCap: 0.95,
+  reviewBase: 8.5, // tier 0 target; +0.3 each tier, capped
+  reviewCap: 9.7,
+};
+
+// Room and facility decor fades every day. Below freshThreshold it costs star
+// points (up to maxStarPenalty at 0 decor) and drags guest reviews -- harder at
+// higher star levels via the existing expectation multiplier.
+export const DECOR = {
+  decayPerDay: 0.35, // 100 -> 70 (stale) in ~86 days
+  freshThreshold: 70,
+  maxStarPenalty: 3.0, // star points lost when average decor hits 0
+  reviewWeight: 2.5, // on the 0-10 scale: (decor - 70) / 70 * weight, penalty only
+};
+
+// Renovation restores a room's or facility's decor (and a room's condition and
+// cleanliness) to 100. Rooms go offline for durationHours; cost is a share of
+// build cost, scaled by the star price multiplier (luxury fit-outs cost more).
+export const RENOVATION = {
+  costRate: 0.25,
+  durationHours: 24,
+};
+
+// Marketing campaigns: pay up front for a temporary arrivals boost. One at a
+// time. Cost = baseCost + perRoomCost x rooms, so it scales with the hotel.
+export const MARKETING = {
+  campaigns: {
+    local: { label: 'Local Ads', baseCost: 1000, perRoomCost: 60, demandBoost: 1.2, durationDays: 14 },
+    online: { label: 'Travel Sites', baseCost: 4000, perRoomCost: 180, demandBoost: 1.4, durationDays: 14 },
+    national: { label: 'National Campaign', baseCost: 12000, perRoomCost: 450, demandBoost: 1.7, durationDays: 21 },
+  } as Record<string, { label: string; baseCost: number; perRoomCost: number; demandBoost: number; durationDays: number }>,
+};
+
+// Facility upgrades: index 0 is level 1 (as built). Each level multiplies the
+// facility's adjacent review bonus, star points, shop revenue, and operating cost.
+export const FACILITY_LEVELS = [
+  { requiredStars: 0, upgradeCostRate: 0, reviewMult: 1.0, starMult: 1.0, revenueMult: 1.0, operatingMult: 1.0 },
+  { requiredStars: 4, upgradeCostRate: 1.0, reviewMult: 1.5, starMult: 1.3, revenueMult: 1.5, operatingMult: 1.8 },
+  { requiredStars: 5, upgradeCostRate: 1.75, reviewMult: 2.0, starMult: 1.6, revenueMult: 2.0, operatingMult: 2.8 },
+];
+
+// Hotel valuation: property (build spend, discounted by stale decor) plus a
+// multiple of recent revenue (the business as a going concern) plus net cash.
+export const VALUATION = {
+  revenueMultiple: 6, // x last-30-day revenue
+  minDecorFactor: 0.5, // property value at 0 decor, as a fraction of build cost
+};
 
 export const DAILY_STATS_MAX_DAYS = 60; // covers the longest objective window (30 days) with room to spare
 

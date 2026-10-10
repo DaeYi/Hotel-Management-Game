@@ -2,7 +2,7 @@ export type RoomType = 'standard' | 'deluxe' | 'suite';
 export type FacilityType = 'gym' | 'restaurant' | 'pool' | 'shop';
 export type TileType = RoomType | FacilityType;
 export type GuestTrait = 'normal' | 'light_sleeper' | 'big_spender' | 'party_guest';
-export type RoomStatus = 'vacant' | 'occupied' | 'cleaning';
+export type RoomStatus = 'vacant' | 'occupied' | 'cleaning' | 'renovating';
 export type CleaningQuality = 'quick' | 'standard' | 'thorough';
 export type DailyCleaningCadence = 'daily' | 'every_other_day' | 'none';
 export type AmenityTier = 'basic' | 'premium' | 'luxury';
@@ -19,6 +19,8 @@ export interface Room {
   guestId?: string;
   cleaningHoursRemaining: number; // hours left in turnover cleaning
   lastDailyCleanDay: number; // last day daily housekeeping ran
+  decor: number; // 0-100, how fresh the furnishings are; fades daily, restored by renovation
+  renovationHoursRemaining: number; // hours left while status is 'renovating'
 }
 
 export interface HousekeepingConfig {
@@ -91,6 +93,8 @@ export interface Facility {
   gridX: number;
   gridY: number;
   condition: number; // 0-100
+  decor: number; // 0-100, same meaning as Room.decor
+  level: number; // 1-3, raised by upgradeFacility
 }
 
 export interface NoiseSource {
@@ -125,6 +129,13 @@ export interface HotelState {
   loan: Loan;
   objectives: ObjectiveProgress;
   dailyStats: DailyStat[]; // one entry per finished day, capped at DAILY_STATS_MAX_DAYS
+  activeCampaign: ActiveCampaign | null; // at most one marketing campaign runs at a time
+  daysAtFiveStars: number; // consecutive end-of-day snapshots at 5 stars (legacy goals)
+}
+
+export interface ActiveCampaign {
+  id: string; // key into MARKETING.campaigns
+  hoursRemaining: number;
 }
 
 /** The opening bank loan: a fixed weekly payment covers interest first, then principal. */
@@ -147,6 +158,7 @@ export interface DailyStat {
   day: number;
   occupancy: number; // 0-1, rooms occupied overnight
   totalRevenue: number; // HotelState.totalRevenue at end of day (cumulative)
+  valuation: number; // hotel valuation at end of day (see ValuationManager)
 }
 
 /** A temporary arrival-multiplier penalty from a Review Goes Semi-Viral incident. */
@@ -169,6 +181,7 @@ export interface SimulationSummary {
   objectivesCompleted: number;
   objectivesFailed: number;
   loanBalance: number;
+  finalValuation: number;
   bankruptDay: number | null;
 }
 
@@ -178,7 +191,7 @@ export interface TickResult {
 }
 
 export interface GameEvent {
-  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked';
+  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked' | 'renovation_complete' | 'campaign_ended';
   message: string;
   data?: Record<string, unknown>;
 }

@@ -1,5 +1,6 @@
 import type { HotelState, RoomType } from './types.js';
-import { STAR_RATING, AMENITIES, FACILITY_CONFIG, ROOM_CONFIG } from '../config/balance.js';
+import { STAR_RATING, AMENITIES, FACILITY_CONFIG, ROOM_CONFIG, FACILITY_LEVELS } from '../config/balance.js';
+import { getDecorStarPenalty } from './DecorManager.js';
 
 /**
  * Accumulate the hotel's raw star points from everything it has: room type
@@ -48,16 +49,21 @@ export function calculateStarPoints(state: HotelState): number {
     }
   }
 
-  // Building facilities (gym, restaurant, pool, shop)
-  const seenFacilityTypes = new Set<string>();
+  // Building facilities (gym, restaurant, pool, shop): each type counts once,
+  // at its best-upgraded instance
+  const bestLevel = new Map<string, number>();
   for (const facility of state.facilities) {
-    if (seenFacilityTypes.has(facility.type)) continue; // only count each type once
-    seenFacilityTypes.add(facility.type);
-    const fConfig = FACILITY_CONFIG[facility.type];
+    bestLevel.set(facility.type, Math.max(bestLevel.get(facility.type) ?? 0, facility.level));
+  }
+  for (const [type, level] of bestLevel) {
+    const fConfig = FACILITY_CONFIG[type];
     if (fConfig) {
-      points += fConfig.starPoints;
+      points += fConfig.starPoints * FACILITY_LEVELS[level - 1].starMult;
     }
   }
+
+  // Stale decor costs points (renovate to recover them)
+  points -= getDecorStarPenalty(state);
 
   return points;
 }
@@ -92,6 +98,10 @@ export function getExpectedPrice(type: RoomType, starRating: number): number {
 
 export function getPriceMultiplier(starRating: number): number {
   return STAR_RATING.priceMultiplier[starRating] ?? 1.0;
+}
+
+export function getUpkeepMultiplier(starRating: number): number {
+  return STAR_RATING.upkeepMultiplier[starRating] ?? 1.0;
 }
 
 export function getStarDemandMultiplier(starRating: number): number {
@@ -157,6 +167,10 @@ export function getNextStarRequirements(state: HotelState): string | null {
       }
     }
   }
+  if (getDecorStarPenalty(state) > 0) {
+    hints.push('Renovate stale rooms and facilities');
+  }
+
   // Hints only point at things that are already unlocked on the way to `target`
   // (see requiredStars in balance.ts), so a 1-star hotel is never told to build a pool.
   if (target >= 2 && state.housekeeping.turnoverQuality !== 'thorough') {

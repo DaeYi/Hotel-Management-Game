@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
-import { createHotelState, addRoom, setRoomPrice, repairRoom, demolishRoom, addFacility, demolishFacility, isTileOccupied, isUnlocked } from '../simulation/HotelState';
+import { createHotelState, addRoom, setRoomPrice, repairRoom, demolishRoom, addFacility, demolishFacility, isTileOccupied, isUnlocked, renovateRoom, renovateFacility, upgradeFacility } from '../simulation/HotelState';
+import { startCampaign } from '../simulation/MarketingManager';
 import { tickSimulation } from '../simulation/tick';
 import { checkBankruptcy, repayLoan } from '../simulation/EconomyManager';
 import { PRNG } from '../simulation/prng';
@@ -14,6 +15,7 @@ import { FacilityInspector } from '../ui/FacilityInspector';
 import { NotificationToast, INCIDENT_EVENT_TYPES } from '../ui/NotificationToast';
 import { StoryLogPanel } from '../ui/StoryLogPanel';
 import { GoalsPanel } from '../ui/GoalsPanel';
+import { MarketingPanel } from '../ui/MarketingPanel';
 import { ObjectiveTracker } from '../ui/ObjectiveTracker';
 import { FinanceChart } from '../ui/FinanceChart';
 import { Tutorial } from '../ui/Tutorial';
@@ -41,6 +43,7 @@ export class GameScene extends Phaser.Scene {
   private toasts!: NotificationToast;
   private storyLogPanel!: StoryLogPanel;
   private goalsPanel!: GoalsPanel;
+  private marketingPanel!: MarketingPanel;
   private objectiveTracker!: ObjectiveTracker;
   private chart!: FinanceChart;
   private noVacancy!: NoVacancySign;
@@ -103,12 +106,15 @@ export class GameScene extends Phaser.Scene {
       this,
       (roomId, pct) => this.handlePriceChange(roomId, pct),
       (roomId) => this.handleRepair(roomId),
+      (roomId) => this.applyAction(renovateRoom(this.state, roomId)),
       (roomId) => this.handleDemolish(roomId)
     );
 
     // Facility inspector (popup on facility click)
     this.facilityInspector = new FacilityInspector(
       this,
+      (facilityId) => this.applyAction(upgradeFacility(this.state, facilityId)),
+      (facilityId) => this.applyAction(renovateFacility(this.state, facilityId)),
       (facilityId) => this.handleDemolishFacility(facilityId)
     );
 
@@ -150,6 +156,11 @@ export class GameScene extends Phaser.Scene {
       -100, -100,
       PANEL_X, PANEL_Y,
       (staff) => this.handleStaffChange(staff)
+    );
+
+    this.marketingPanel = new MarketingPanel(
+      this, PANEL_X, PANEL_Y,
+      (campaignId) => this.applyAction(startCampaign(this.state, campaignId)),
     );
 
     this.amenitiesPanel = new AmenitiesPanel(
@@ -214,6 +225,7 @@ export class GameScene extends Phaser.Scene {
     this.buildPanel.update(this.state);
     this.objectiveTracker.update(this.state);
     this.goalsPanel.update(this.state);
+    this.marketingPanel.update(this.state);
     this.roomInspector.update(this.state);
     this.facilityInspector.update(this.state);
     this.housekeepingPanel.update(this.state);
@@ -287,6 +299,14 @@ export class GameScene extends Phaser.Scene {
           this.amenitiesPanel.hide();
         }
         break;
+      case 'marketing':
+        if (active) {
+          this.hideAllPanels();
+          this.marketingPanel.show();
+        } else {
+          this.marketingPanel.hide();
+        }
+        break;
       case 'chart':
         if (active) {
           this.hideAllPanels();
@@ -337,6 +357,7 @@ export class GameScene extends Phaser.Scene {
     this.chart.hide();
     this.storyLogPanel.hide();
     this.goalsPanel.hide();
+    this.marketingPanel.hide();
   }
 
   // === Click handlers ===
@@ -384,7 +405,7 @@ export class GameScene extends Phaser.Scene {
       );
       if (facility) {
         this.roomInspector.hide();
-        this.facilityInspector.show(facility);
+        this.facilityInspector.show(facility, this.state);
         return;
       }
 
@@ -434,6 +455,11 @@ export class GameScene extends Phaser.Scene {
       ...this.state,
       housekeeping: { turnoverQuality: quality, dailyCadence: cadence },
     };
+  }
+
+  /** Apply a player action that returns null when it isn't allowed (can't afford, wrong state). */
+  private applyAction(result: HotelState | null) {
+    if (result) this.state = result;
   }
 
   private handleRepayLoan(amount: number) {

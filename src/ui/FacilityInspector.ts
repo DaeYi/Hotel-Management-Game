@@ -1,21 +1,26 @@
 import Phaser from 'phaser';
 import type { HotelState, Facility } from '../simulation/types';
-import { FACILITY_CONFIG } from '../config/balance';
+import { FACILITY_CONFIG, FACILITY_LEVELS, DECOR } from '../config/balance';
 import { TILE_SIZE, GRID_OFFSET_X, GRID_OFFSET_Y } from './GridRenderer';
-import { getDemolishRefund } from '../simulation/HotelState';
+import { getDemolishRefund, getRenovationCost, getFacilityUpgradeCost } from '../simulation/HotelState';
+import { getUpkeepMultiplier } from '../simulation/StarRatingManager';
 
-// Facilities currently don't decay or need repair (see design doc's Facility
-// Decay/Repair Decision — "no decay" is the default). This panel is
-// intentionally smaller than RoomInspector: no price slider (facilities
-// don't have a per-night price) and no condition bar/repair button.
-const PANEL_W = 220;
-const PANEL_H = 140;
+// Smaller than RoomInspector: no price slider (facilities don't have a
+// per-night price). Facilities don't wear down like rooms, but their decor
+// fades and they can be upgraded twice (levels 2 and 3, gated by stars).
+const PANEL_W = 240;
+const PANEL_H = 228;
+
+const BUTTON_STYLE = {
+  fontSize: '12px', fontFamily: 'monospace', padding: { x: 12, y: 6 },
+};
 
 export class FacilityInspector {
-  private scene: Phaser.Scene;
   private container: Phaser.GameObjects.Container;
   private titleText: Phaser.GameObjects.Text;
   private statsText: Phaser.GameObjects.Text;
+  private upgradeBtn: Phaser.GameObjects.Text;
+  private renovateBtn: Phaser.GameObjects.Text;
   private demolishBtn: Phaser.GameObjects.Text;
 
   private selectedFacilityId: string | null = null;
@@ -24,15 +29,12 @@ export class FacilityInspector {
   private panelWorldX = 0;
   private panelWorldY = 0;
 
-  private onDemolish: (facilityId: string) => void;
-
   constructor(
     scene: Phaser.Scene,
+    onUpgrade: (facilityId: string) => void,
+    onRenovate: (facilityId: string) => void,
     onDemolish: (facilityId: string) => void
   ) {
-    this.scene = scene;
-    this.onDemolish = onDemolish;
-
     this.container = scene.add.container(0, 0).setDepth(20).setVisible(false);
 
     // Background
@@ -62,27 +64,32 @@ export class FacilityInspector {
     // Stats
     this.statsText = scene.add.text(12, 34, '', {
       fontSize: '12px', fontFamily: 'monospace', color: '#aaaacc', lineSpacing: 4,
+      wordWrap: { width: PANEL_W - 24 },
     });
     this.container.add(this.statsText);
 
-    // Demolish button
-    this.demolishBtn = scene.add.text(PANEL_W / 2, 100, 'Demolish', {
-      fontSize: '12px', fontFamily: 'monospace', color: '#e74c3c',
-      backgroundColor: '#3a1a1a',
-      padding: { x: 12, y: 6 },
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-    this.demolishBtn.on('pointerdown', () => {
-      if (this.selectedFacilityId) {
-        this.onDemolish(this.selectedFacilityId);
-        this.hide();
-      }
+    const makeButton = (y: number, color: string, bgColor: string, onClick: (id: string) => void) => {
+      const btn = scene.add.text(PANEL_W / 2, y, '', { ...BUTTON_STYLE, color, backgroundColor: bgColor })
+        .setOrigin(0.5).setInteractive({ useHandCursor: true });
+      btn.on('pointerdown', () => {
+        if (this.selectedFacilityId) onClick(this.selectedFacilityId);
+      });
+      btn.on('pointerover', () => btn.setColor('#ffffff'));
+      btn.on('pointerout', () => btn.setColor(btn.getData('color') ?? color));
+      btn.setData('color', color);
+      this.container.add(btn);
+      return btn;
+    };
+
+    this.upgradeBtn = makeButton(144, '#4a90d9', '#1a2a4a', onUpgrade);
+    this.renovateBtn = makeButton(174, '#e67e22', '#3a2a1a', onRenovate);
+    this.demolishBtn = makeButton(204, '#e74c3c', '#3a1a1a', id => {
+      onDemolish(id);
+      this.hide();
     });
-    this.demolishBtn.on('pointerover', () => this.demolishBtn.setColor('#ffffff'));
-    this.demolishBtn.on('pointerout', () => this.demolishBtn.setColor('#e74c3c'));
-    this.container.add(this.demolishBtn);
   }
 
-  show(facility: Facility) {
+  show(facility: Facility, state: HotelState) {
     this.selectedFacilityId = facility.id;
 
     // Position near the facility but keep on screen
@@ -92,7 +99,7 @@ export class FacilityInspector {
     this.panelWorldY = Math.min(Math.max(facilityScreenY, 8), 640 - PANEL_H - 8);
     this.container.setPosition(this.panelWorldX, this.panelWorldY);
 
-    this.updateContent(facility);
+    this.updateContent(facility, state);
     this.container.setVisible(true);
   }
 
@@ -125,19 +132,50 @@ export class FacilityInspector {
       this.hide();
       return;
     }
-    this.updateContent(facility);
+    this.updateContent(facility, state);
   }
 
-  private updateContent(facility: Facility) {
+  private updateContent(facility: Facility, state: HotelState) {
     const config = FACILITY_CONFIG[facility.type];
-    this.titleText.setText(config?.label ?? facility.type);
+    const level = FACILITY_LEVELS[facility.level - 1];
+    this.titleText.setText(`${config.label}  (Lv ${facility.level}/${FACILITY_LEVELS.length})`);
 
+    const operating = Math.round(config.dailyOperatingCost * level.operatingMult * getUpkeepMultiplier(state.starRating));
+    const decorNote = facility.decor < DECOR.freshThreshold ? ' (stale)' : '';
     this.statsText.setText(
-      `${config?.description ?? ''}\n` +
-      `Operating cost: $${config?.dailyOperatingCost ?? 0}/day`
+      `${config.description}\n` +
+      `Operating cost: $${operating}/day\n` +
+      `Decor: ${facility.decor.toFixed(0)}%${decorNote}`
     );
 
-    const refund = getDemolishRefund(config?.buildCost ?? 0);
-    this.demolishBtn.setText(`Demolish (+$${refund})`);
+    // Upgrade: hidden at max level; shows the star requirement while locked
+    const upgradeCost = getFacilityUpgradeCost(facility);
+    const next = FACILITY_LEVELS[facility.level];
+    this.upgradeBtn.setVisible(upgradeCost !== null);
+    if (upgradeCost !== null && next) {
+      if (state.peakStarRating < next.requiredStars) {
+        this.setButton(this.upgradeBtn, `Upgrade to Lv ${facility.level + 1}: needs ${next.requiredStars}★`, '#666688');
+      } else {
+        const affordable = state.cash >= upgradeCost;
+        this.setButton(this.upgradeBtn, `Upgrade to Lv ${facility.level + 1} ($${upgradeCost.toLocaleString()})`, affordable ? '#4a90d9' : '#e74c3c');
+      }
+    }
+
+    // Renovate once decor has started to fade
+    const canRenovate = facility.decor < 90;
+    this.renovateBtn.setVisible(canRenovate);
+    if (canRenovate) {
+      const cost = getRenovationCost(config.buildCost, state.starRating);
+      this.setButton(this.renovateBtn, `Renovate ($${cost.toLocaleString()})`, state.cash >= cost ? '#e67e22' : '#e74c3c');
+    }
+
+    const refund = getDemolishRefund(config.buildCost);
+    this.demolishBtn.setText(`Demolish (+$${refund.toLocaleString()})`);
+  }
+
+  private setButton(btn: Phaser.GameObjects.Text, text: string, color: string) {
+    btn.setText(text);
+    btn.setColor(color);
+    btn.setData('color', color);
   }
 }

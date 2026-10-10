@@ -1,7 +1,6 @@
 import Phaser from 'phaser';
 import type { HotelState } from '../simulation/types';
 import type { ObjectiveConfig } from '../config/balance';
-import { OBJECTIVES } from '../config/balance';
 import { evaluateObjective, getCurrentObjective } from '../simulation/ObjectivesManager';
 
 // Always-on goal tracker in the top-right corner. Unlike the toggle panels,
@@ -21,7 +20,17 @@ export function formatObjectiveProgress(state: HotelState, objective: ObjectiveC
     case 'star_rating': return `${current}★ / ${target}★`;
     case 'revenue_30d': return `$${Math.round(current).toLocaleString()} / $${target.toLocaleString()}`;
     case 'loan_paid_off': return `$${Math.round(current).toLocaleString()} owed`;
+    case 'valuation': return `${formatMoneyShort(current)} / ${formatMoneyShort(target)} value`;
+    case 'five_star_days': return `${current} / ${target} days at 5★`;
+    case 'occupancy_30d': return `${Math.round(current * 100)}% / ${Math.round(target * 100)}% (30-day)`;
   }
+}
+
+/** Compact money for tight spaces: $950k, $1.25M. */
+export function formatMoneyShort(n: number): string {
+  if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  if (Math.abs(n) >= 10_000) return `$${Math.round(n / 1000)}k`;
+  return `$${Math.round(n).toLocaleString()}`;
 }
 
 export class ObjectiveTracker {
@@ -52,25 +61,17 @@ export class ObjectiveTracker {
 
   update(state: HotelState) {
     const objective = getCurrentObjective(state);
-
-    if (!objective) {
-      const completed = state.objectives.outcomes.filter(o => o === 'completed').length;
-      this.titleText.setText(`🏆 ${completed}/${OBJECTIVES.length} goals complete`);
-      this.detailText.setText('Keep building your legacy');
-      this.detailText.setColor('#888899');
-      this.drawBar(1, 0x2ecc71);
-      return;
-    }
-
     const status = evaluateObjective(state, objective);
-    const daysLeft = objective.deadlineDay - state.day;
-    const urgent = daysLeft <= URGENT_DAYS;
 
-    this.titleText.setText(`🎯 ${objective.title}`);
-    this.detailText.setText(
-      `${formatObjectiveProgress(state, objective)}  |  ` +
-      `${daysLeft <= 0 ? 'last day' : `${daysLeft}d left`}  |  +$${objective.reward.toLocaleString()}`
-    );
+    // Owner goals have a deadline and reward; legacy goals have neither
+    const daysLeft = objective.deadlineDay === null ? null : objective.deadlineDay - state.day;
+    const urgent = daysLeft !== null && daysLeft <= URGENT_DAYS;
+    const parts = [formatObjectiveProgress(state, objective)];
+    if (daysLeft !== null) parts.push(daysLeft <= 0 ? 'last day' : `${daysLeft}d left`);
+    if (objective.reward > 0) parts.push(`+$${objective.reward.toLocaleString()}`);
+
+    this.titleText.setText(`${daysLeft === null ? '🏆' : '🎯'} ${objective.title}`);
+    this.detailText.setText(parts.join('  |  '));
     this.detailText.setColor(urgent ? '#e74c3c' : '#888899');
     this.drawBar(status.fraction, status.complete ? 0x2ecc71 : urgent ? 0xe74c3c : 0x4a90d9);
   }

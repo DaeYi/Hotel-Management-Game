@@ -419,6 +419,7 @@ export function recordReturnGuestEntries(state: HotelState, events: GameEvent[])
 export function attributeReviewCause(b: GuestReviewBreakdown): string {
   const candidates = [
     { label: 'noise', magnitude: b.noisePenalty },
+    { label: 'tired decor', magnitude: b.decorPenalty },
     { label: 'room condition', magnitude: Math.max(0, -b.conditionBonus) },
     { label: 'cleanliness', magnitude: Math.max(0, -b.cleanlinessBonus) },
     { label: 'amenities', magnitude: b.amenityPenalty },

@@ -2,6 +2,7 @@ import type { SimulationSummary } from './types.js';
 import { PRNG } from './prng.js';
 import { createHotelState, addRoom } from './HotelState.js';
 import { tickSimulation } from './tick.js';
+import { calculateValuation } from './ObjectivesManager.js';
 import { ECONOMY } from '../config/balance.js';
 import { STRATEGIES, idleStrategy } from './strategies.js';
 import type { Strategy } from './strategies.js';
@@ -73,6 +74,7 @@ export function simulate(
     objectivesFailed: state.objectives.outcomes.filter(o => o === 'failed').length,
     loanBalance: state.loan.balance,
     bankruptDay: wentBankrupt ? state.day : null,
+    finalValuation: calculateValuation(state),
   };
 }
 
@@ -122,6 +124,7 @@ if (isMainModule) {
     console.log(`  Rooms:           ${avg(results.map(r => r.finalRoomCount)).toFixed(1)} avg`);
     console.log(`  Stars:           ${starCounts.map((c, i) => `${i + 1}*:${pct(c)}`).join('  ')}`);
     console.log(`  Goals done:      ${avg(results.map(r => r.objectivesCompleted)).toFixed(1)} avg, ${avg(results.map(r => r.objectivesFailed)).toFixed(1)} missed`);
+    console.log(`  Valuation:       p10 ${money(quantile(results.map(r => r.finalValuation), 0.1))} / median ${money(quantile(results.map(r => r.finalValuation), 0.5))} / p90 ${money(quantile(results.map(r => r.finalValuation), 0.9))}`);
     console.log(`  Loan left:       ${money(avg(results.map(r => r.loanBalance)))} avg, paid off in ${pct(results.filter(r => r.loanBalance <= 0).length)}`);
     console.log();
   }
