@@ -17,7 +17,7 @@ import { tickSimulation } from '../src/simulation/tick.js';
 import { simulate } from '../src/simulation/simulate.js';
 import { ECONOMY, REVIEW, ROOM_CONFIG, FACILITY_CONFIG, GUEST_TRAITS, NOISE, HOUSEKEEPING, SATISFACTION, STORY } from '../src/config/balance.js';
 import type { Room, Guest, Booking, GuestTrait, ActiveIncident, StoryLogEntry } from '../src/simulation/types.js';
-import { getGuestDotColor } from '../src/ui/GridRenderer';
+import { getGuestDotColor } from '../src/render/GridRenderer';
 
 /** A fresh hotel with every room type and facility unlocked and cash to spare,
  * for tests that aren't about progression (see requiredStars in balance.ts). */

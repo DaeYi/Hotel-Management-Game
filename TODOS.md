@@ -2,13 +2,11 @@
 
 ## Testing
 
-### UI/Phaser visual test infrastructure
+### Screenshot test for the world renderer
 
-**What:** Set up jsdom or Playwright so `GridRenderer`/`RoomInspector`/`FacilityInspector` rendering can be automated-tested.
+**What:** Add a Playwright (or similar) screenshot test that loads a fixed save and checks the Phaser canvas draws the floor plan, hallways, rooms, and walkers.
 
-**Why:** Right now all UI-layer claims (`party_guest`'s render color, the new facility inspector panel) are manual-QA only — zero regression protection on the entire Phaser layer.
-
-**Context:** No jsdom/Playwright in `devDependencies` today. `test/simulation.test.ts` only covers the headless simulation layer via vitest's default Node environment; the UI layer has never had automated coverage. Surfaced during the plan-eng-review of the "Close the Gaps Before Story Generator" design doc when `party_guest`'s color-rendering and the new `FacilityInspector` both landed as manual-QA-only test items.
+**Why:** The HTML interface and the GameController are now covered by DOM and unit tests (test/ui.test.tsx, test/controller.test.ts), but the canvas renderer (src/render) has no automated coverage. Worth having before the 3D renderer replaces it, as a reference for what must still be drawn.
 
 **Effort:** M
 **Priority:** P3
@@ -112,6 +110,7 @@
 
 ## Completed
 
+- **HTML interface** (2026-10-10): GameController owns state and actions, Phaser only draws the world, the interface is Preact + CSS with DOM tests. See docs/designs/html-interface.md
 - **Housekeeping balance** (2026-10-10): one housekeeping pool for turnovers and daily cleans, demand with diminishing returns on size, amenities per occupied room, demand-based bot staffing. Right-sized staffing now beats under- and over-staffing. See docs/designs/housekeeping-balance.md
 - **Staff travel time** (2026-10-10): staff walk from the lobby or a staff closet; the walk costs cleaning and repair time. See docs/designs/hallways-and-people.md
 - **Hallways, check-in desks, and people** (2026-10-10): hallway-connected rooms, desks staffed by front desk, walking guests and staff, bulldoze tool. See docs/designs/hallways-and-people.md

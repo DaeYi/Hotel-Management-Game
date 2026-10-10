@@ -16,8 +16,11 @@ export function getGuestDotColor(trait: GuestTrait): number {
 }
 
 export const TILE_SIZE = 52;
-export const GRID_OFFSET_X = 16;
-export const GRID_OFFSET_Y = 72;
+// The canvas is just the floor plan: the HTML interface lives around it.
+export const GRID_OFFSET_X = 0;
+export const GRID_OFFSET_Y = 0;
+export const WORLD_WIDTH = GRID.width * TILE_SIZE;
+export const WORLD_HEIGHT = GRID.height * TILE_SIZE;
 
 const ROOM_COLORS: Record<RoomType, number> = {
   standard: 0x4a90d9,
@@ -348,10 +351,10 @@ export class GridRenderer {
     }
   }
 
-  toggleNoiseOverlay() {
-    this.showNoiseOverlay = !this.showNoiseOverlay;
-    if (!this.showNoiseOverlay) this.noiseGraphics.clear();
-    return this.showNoiseOverlay;
+  setNoiseOverlay(on: boolean) {
+    if (on === this.showNoiseOverlay) return;
+    this.showNoiseOverlay = on;
+    if (!on) this.noiseGraphics.clear();
   }
 
   /** Render noise levels as a color overlay on one floor's rooms */

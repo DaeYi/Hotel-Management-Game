@@ -192,6 +192,7 @@ export function recordDailyStat(state: HotelState): HotelState {
     occupancy: getOccupancyRate(state),
     totalRevenue: state.totalRevenue,
     valuation: calculateValuation(state),
+    reviewScore: state.reviewScore,
   };
   return {
     ...state,

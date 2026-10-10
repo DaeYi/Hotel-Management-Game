@@ -184,6 +184,7 @@ export interface DailyStat {
   occupancy: number; // 0-1, rooms occupied overnight
   totalRevenue: number; // HotelState.totalRevenue at end of day (cumulative)
   valuation: number; // hotel valuation at end of day (see ValuationManager)
+  reviewScore?: number; // review score at end of day (absent in saves from before it was recorded)
 }
 
 /** A temporary arrival-multiplier penalty from a Review Goes Semi-Viral incident. */
