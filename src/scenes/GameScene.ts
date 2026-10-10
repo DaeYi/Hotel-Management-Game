@@ -173,6 +173,11 @@ export class GameScene extends Phaser.Scene {
       this.handleGridHover(pointer);
     });
 
+    // Draw unlock state and the current goal once up front: update() skips
+    // rendering while the tutorial is open, and step 4 points at both.
+    this.buildPanel.update(this.state);
+    this.objectiveTracker.update(this.state);
+
     // Tutorial
     if (!save) {
       new Tutorial(this, () => {
