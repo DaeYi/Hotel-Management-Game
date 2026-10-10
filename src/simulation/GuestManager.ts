@@ -3,6 +3,7 @@ import type { PRNG } from './prng.js';
 import { ECONOMY, GUEST_TRAITS, REVIEW, HOUSEKEEPING, STAFF, AMENITIES, FACILITY_CONFIG, FACILITY_LEVELS, GUEST_NAMES, SATISFACTION, STORY } from '../config/balance.js';
 import { getDecorReviewPenalty } from './DecorManager.js';
 import { getCampaignDemandMultiplier } from './MarketingManager.js';
+import { getCheckInCapacity } from './Layout.js';
 import { getAvailableRooms, getAdjacentFacilities, getElevatorWaitPenalty } from './HotelState.js';
 import { calculateRoomNoise, noiseToRatingPenalty } from './NoiseManager.js';
 import { getExpectationMultiplier, getExpectedPrice, getPriceMultiplier, getStarDemandMultiplier } from './StarRatingManager.js';
@@ -139,11 +140,8 @@ export function processArrivals(
   const extra = prng.chance(arrivalsThisHour - guaranteed) ? 1 : 0;
   const totalArrivals = guaranteed + extra;
 
-  // Front desk capacity limits how many guests can actually check in this hour
-  const frontDeskWorkers = state.staff.frontDesk;
-  const checkInCapacity = frontDeskWorkers > 0
-    ? frontDeskWorkers * STAFF.frontDesk.checkInsPerHour
-    : STAFF.frontDesk.selfServiceCapacity; // kiosk fallback
+  // Check-ins happen at a reachable desk, at the pace of the front desk staff seated there
+  const checkInCapacity = getCheckInCapacity(state);
 
   const available = getAvailableRooms(state);
   let availableIdx = 0;

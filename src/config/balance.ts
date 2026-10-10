@@ -253,8 +253,7 @@ export const STAFF = {
   },
   frontDesk: {
     dailyWage: 70, // per front desk worker per day
-    checkInsPerHour: 3, // guests a worker can check in per hour
-    selfServiceCapacity: 1, // check-ins per hour with 0 staff (kiosk)
+    checkInsPerHour: 3, // guests a worker can check in per hour (needs a check-in desk to work at)
     checkoutDelayWithoutStaff: 2, // extra hours added to cleaning if no front desk
     // Front desk works 24/7 (someone must always be at the desk)
   },
@@ -564,10 +563,39 @@ export const VALUATION = {
 
 export const DAILY_STATS_MAX_DAYS = 60; // covers the longest objective window (30 days) with room to spare
 
-// One floor plan. Small enough that a growing hotel has to build upward.
+// One floor plan. Small enough that a growing hotel has to build upward, wide
+// enough for two hallway rows with rooms on both sides (see STARTER_LAYOUT).
 export const GRID = {
-  width: 8,
-  height: 5,
+  width: 10,
+  height: 6,
+};
+
+// Hallways connect rooms to the street entrance (any walkable tile on the ground
+// floor's outer edge) and to elevators. A room needs a door onto a connected
+// hallway to be bookable.
+export const HALLWAY = {
+  buildCost: 300, // per tile
+};
+
+// Guests check in at a desk on the ground floor; each desk seats a limited
+// number of front desk staff. No reachable desk, no check-ins.
+export const DESK = {
+  buildCost: 4000,
+  staffPerDesk: 2,
+};
+
+// The default floor layout: two full-width hallway rows with rooms above and
+// below each (rooms on rows 0, 2, 3, 5), joined by a short spine at the right
+// end so both rows connect to the elevator on every floor. New games, migrated
+// saves, and the balance bots all use it; players can build any layout they like.
+const STARTER_HALLWAY_ROWS = [1, 4];
+export const STARTER_LAYOUT = {
+  hallwayTiles: [
+    ...STARTER_HALLWAY_ROWS.flatMap(y => Array.from({ length: GRID.width }, (_, x): [number, number] => [x, y])),
+    [GRID.width - 1, 2], [GRID.width - 1, 3],
+  ] as Array<[number, number]>,
+  deskTiles: [[3, 0], [4, 0]] as Array<[number, number]>, // ground floor; the first comes free
+  elevatorTiles: [[0, 0], [1, 0], [2, 0]] as Array<[number, number]>, // kept clear for shafts
 };
 
 // Floors stack on the ground floor (floor 0). Each new floor costs more than the

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { PRNG } from '../src/simulation/prng.js';
-import { createHotelState, addRoom, getOccupancyRate, demolishRoom, demolishFacility, addFacility, getDemolishRefund, formatRoomLabel } from '../src/simulation/HotelState.js';
+import { createHotelState, createStarterHotel, addRoom, getOccupancyRate, demolishRoom, demolishFacility, addFacility, getDemolishRefund, formatRoomLabel } from '../src/simulation/HotelState.js';
 import { processArrivals, processDepartures, calculateGuestReview, calculateGuestReviewBreakdown, generateGuestTrait, getWordOfMouthMultiplier } from '../src/simulation/GuestManager.js';
 import { processDailyCosts, checkBankruptcy, updateReviewScore, calculateEarlyDepartureSettlement } from '../src/simulation/EconomyManager.js';
 import { calculateRoomNoise, noiseToRatingPenalty, createConstructionNoise, tickNoiseSources, getLoudestNeighborGuestId } from '../src/simulation/NoiseManager.js';
@@ -146,7 +146,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(13);
+    expect(loaded!.version).toBe(14);
     expect(loaded!.state.noiseSources).toEqual([]);
     expect(loaded!.state.facilities).toEqual([]); // added by the v8->v9 step
     expect(loaded!.state.activeIncidents).toEqual([]);
@@ -179,7 +179,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(13);
+    expect(loaded!.version).toBe(14);
     expect(loaded!.state.reviewScore).toBeCloseTo(7.2, 5); // 72 / 10
     expect((loaded!.state as any).reputationScore).toBeUndefined();
     expect(loaded!.state.bookings[0].reviewScore).toBe(8); // rating 4 * 2
@@ -220,8 +220,8 @@ describe('HotelState', () => {
   it('rejects out-of-bounds placement', () => {
     const state = createHotelState();
     expect(addRoom(state, 'standard', -1, 0)).toBeNull();
-    expect(addRoom(state, 'standard', 8, 0)).toBeNull();
-    expect(addRoom(state, 'standard', 0, 5)).toBeNull();
+    expect(addRoom(state, 'standard', 10, 0)).toBeNull();
+    expect(addRoom(state, 'standard', 0, 6)).toBeNull();
     expect(addRoom(state, 'standard', 0, 0, 1)).toBeNull(); // floor not built yet
   });
 
@@ -907,10 +907,10 @@ describe('tickSimulation', () => {
 
   it('cold start: guests arrive on day 1 with seeded reputation', () => {
     const prng = new PRNG(42);
-    let state = createHotelState();
+    let state = createStarterHotel(); // guests need the lobby desk and hallways
     // Build some rooms
     for (let i = 0; i < 5; i++) {
-      state = addRoom(state, 'standard', i, 0)!;
+      state = addRoom(state, 'standard', i, 2)!;
     }
 
     expect(state.reviewScore).toBe(ECONOMY.initialReviewScore);
@@ -980,9 +980,9 @@ describe('StoryGenerator', () => {
   }
 
   it('formatRoomLabel derives a hotel-style number from grid position', () => {
-    expect(formatRoomLabel(3, 1, 1)).toBe('212'); // floor 2, unit 12 (row 1 x 8 wide + col 3 + 1)
+    expect(formatRoomLabel(3, 1, 1)).toBe('214'); // floor 2, unit 14 (row 1 x 10 wide + col 3 + 1)
     expect(formatRoomLabel(0, 0, 0)).toBe('101');
-    expect(formatRoomLabel(7, 4, 7)).toBe('840'); // top floor, last tile
+    expect(formatRoomLabel(9, 5, 7)).toBe('860'); // top floor, last tile
   });
 
   it('getLoudestNeighborGuestId fails closed (null) when there is no eligible neighbor', () => {
@@ -1349,10 +1349,10 @@ describe('simulate (headless)', () => {
 
   it('Story Generator: a long run stays bounded and does not spiral into zero arrivals (design-review D11 balance check)', () => {
     const prng = new PRNG(123);
-    let state = unlockedState();
+    let state = { ...createStarterHotel(), peakStarRating: 5, cash: 200000 };
     for (let i = 0; i < 9; i++) {
       const type = i < 5 ? 'standard' : i < 8 ? 'deluxe' : 'suite';
-      state = addRoom(state, type as 'standard' | 'deluxe' | 'suite', i % 8, Math.floor(i / 8))!;
+      state = addRoom(state, type as 'standard' | 'deluxe' | 'suite', i, 2)!;
     }
     // A maintenance worker keeps rooms from breaking down over 90 days, so
     // this isolates the story layer's feedback loops from plain neglect.

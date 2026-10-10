@@ -4,6 +4,7 @@ import { STAFF } from '../config/balance';
 import { getMaintenanceStatus, getStaffDailyCost } from '../simulation/MaintenanceManager';
 import { getUpkeepMultiplier } from '../simulation/StarRatingManager';
 import { getHousekeepingStatus } from '../simulation/HousekeepingManager';
+import { getAccessibleDesks, getMannedDeskStaff, getCheckInCapacity } from '../simulation/Layout';
 
 const PANEL_W = 280;
 const PANEL_H = 400;
@@ -173,13 +174,14 @@ export class StaffPanel {
 
     // Front desk
     this.sections.frontDesk.countText.setText(`${state.staff.frontDesk}`);
-    const fdCapacity = state.staff.frontDesk > 0
-      ? state.staff.frontDesk * STAFF.frontDesk.checkInsPerHour
-      : STAFF.frontDesk.selfServiceCapacity;
+    // Staff only work at reachable desks, DESK.staffPerDesk per desk
+    const desks = getAccessibleDesks(state).length;
+    const seated = getMannedDeskStaff(state);
+    const warning = desks === 0 ? ' (no desk!)'
+      : seated < state.staff.frontDesk ? ` (${state.staff.frontDesk - seated} idle: need desks)`
+      : state.staff.frontDesk === 0 ? ' (unstaffed!)' : '';
     this.sections.frontDesk.statusText.setText(
-      `Check-in capacity: ${fdCapacity}/hr` +
-      (state.staff.frontDesk === 0 ? ' (kiosk only!)' : '') +
-      `  |  24/7 shift`
+      `Check-in: ${getCheckInCapacity(state)}/hr at ${desks} desk${desks === 1 ? '' : 's'}${warning}`
     );
 
     // Housekeepers

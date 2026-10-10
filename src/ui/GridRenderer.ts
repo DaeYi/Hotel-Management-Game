@@ -15,7 +15,7 @@ export function getGuestDotColor(trait: GuestTrait): number {
   }
 }
 
-export const TILE_SIZE = 64;
+export const TILE_SIZE = 52;
 export const GRID_OFFSET_X = 16;
 export const GRID_OFFSET_Y = 72;
 
@@ -26,6 +26,8 @@ const ROOM_COLORS: Record<RoomType, number> = {
 };
 
 const ELEVATOR_COLOR = 0x7f8c8d;
+const HALLWAY_COLOR = 0x4b4b63;
+const DESK_COLOR = 0xa0522d;
 
 const ROOM_OCCUPIED_COLORS: Record<RoomType, number> = {
   standard: 0x2e6da4,
@@ -111,7 +113,7 @@ export class GridRenderer {
     // Get color: room types use ROOM_COLORS, facilities use FACILITY_CONFIG
     const color = ROOM_COLORS[type as RoomType]
       ?? FACILITY_CONFIG[type]?.color
-      ?? ELEVATOR_COLOR;
+      ?? (type === 'hallway' ? HALLWAY_COLOR : type === 'desk' ? DESK_COLOR : type === 'bulldoze' ? 0xc0392b : ELEVATOR_COLOR);
 
     if (canPlace) {
       this.hoverGraphics.fillStyle(color, 0.4);
@@ -205,6 +207,30 @@ export class GridRenderer {
     }
   }
 
+  /** Draw one floor's hallways and check-in desks. Call before rooms, which share the graphics layer. */
+  renderFixtures(state: HotelState, floor: number) {
+    for (const fixture of state.fixtures) {
+      if (fixture.floor !== floor) continue;
+      const x = GRID_OFFSET_X + fixture.gridX * TILE_SIZE;
+      const y = GRID_OFFSET_Y + fixture.gridY * TILE_SIZE;
+      if (fixture.type === 'hallway') {
+        // Carpet runner: a flat strip with a faint centre line
+        this.roomGraphics.fillStyle(HALLWAY_COLOR, 1);
+        this.roomGraphics.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+        this.roomGraphics.fillStyle(0x6b6b85, 0.6);
+        this.roomGraphics.fillRect(x + TILE_SIZE / 2 - 1, y + TILE_SIZE / 2 - 1, 2, 2);
+      } else {
+        // Floor tile with a wooden counter across the top half
+        this.roomGraphics.fillStyle(HALLWAY_COLOR, 1);
+        this.roomGraphics.fillRect(x, y, TILE_SIZE, TILE_SIZE);
+        this.roomGraphics.fillStyle(DESK_COLOR, 1);
+        this.roomGraphics.fillRect(x + 4, y + TILE_SIZE * 0.45, TILE_SIZE - 8, TILE_SIZE * 0.25);
+        this.roomGraphics.fillStyle(0xd2a679, 1);
+        this.roomGraphics.fillRect(x + 4, y + TILE_SIZE * 0.45, TILE_SIZE - 8, 3);
+      }
+    }
+  }
+
   /** Draw one floor's facilities, plus every elevator shaft (they run through all floors). */
   renderFacilities(state: HotelState, floor: number) {
     for (const elevator of state.elevators) {
@@ -266,10 +292,12 @@ export class GridRenderer {
     }
   }
 
-  renderGuests(state: HotelState, floor: number) {
+  /** Guest dots in their rooms. `walking` guests are drawn by the ActorLayer instead until they arrive. */
+  renderGuests(state: HotelState, floor: number, walking: Set<string> = new Set()) {
     this.guestGraphics.clear();
 
     for (const guest of state.guests) {
+      if (walking.has(guest.id)) continue;
       const room = state.rooms.find(r => r.guestId === guest.id);
       if (!room || room.floor !== floor) continue;
 

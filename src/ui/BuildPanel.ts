@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { RoomType, FacilityType, TileType, HotelState } from '../simulation/types';
-import { ROOM_CONFIG, FACILITY_CONFIG, ELEVATOR } from '../config/balance';
+import { ROOM_CONFIG, FACILITY_CONFIG, ELEVATOR, HALLWAY, DESK } from '../config/balance';
 import { getRequiredStars, isUnlocked } from '../simulation/HotelState';
 import { getExpectedPrice } from '../simulation/StarRatingManager';
 
@@ -11,9 +11,14 @@ const ROOM_COLORS: Record<RoomType, number> = {
 };
 
 const PANEL_WIDTH = 160;
+const BTN_H = 32;
+const BTN_STEP = 36;
 
-/** Anything the build panel can place: a room or facility tile, or an elevator shaft. */
-export type BuildType = TileType | 'elevator';
+/** Anything the build panel can place (a room, facility, hallway, desk, or elevator shaft), or the bulldoze tool. */
+export type BuildType = TileType | 'elevator' | 'hallway' | 'desk' | 'bulldoze';
+
+/** Tools that place on (or clear) one tile per click and can be dragged across tiles. */
+export const PAINTABLE_TYPES = new Set<BuildType>(['hallway', 'bulldoze']);
 
 const CATEGORY_HEADERS: Record<string, string> = { facility: 'FACILITIES', service: 'SERVICE' };
 
@@ -24,6 +29,10 @@ interface BuildOption {
   subtitle: string;
   color: number;
   category: 'room' | 'facility' | 'service';
+}
+
+function formatCost(cost: number): string {
+  return cost > 0 ? `$${cost.toLocaleString()}` : 'Free';
 }
 
 export class BuildPanel {
@@ -61,7 +70,7 @@ export class BuildPanel {
         type,
         label: type.charAt(0).toUpperCase() + type.slice(1),
         cost: config.buildCost,
-        subtitle: `$${config.defaultPrice}/night`,
+        subtitle: `$${config.defaultPrice}/nt`,
         color: ROOM_COLORS[type],
         category: 'room',
       });
@@ -77,6 +86,23 @@ export class BuildPanel {
         category: 'facility',
       });
     }
+    // Building infrastructure
+    this.options.push({
+      type: 'hallway',
+      label: 'Hallway',
+      cost: HALLWAY.buildCost,
+      subtitle: 'drag to lay',
+      color: 0x8e8e9e,
+      category: 'service',
+    });
+    this.options.push({
+      type: 'desk',
+      label: 'Check-in Desk',
+      cost: DESK.buildCost,
+      subtitle: `ground fl, ${DESK.staffPerDesk} staff`,
+      color: 0xa0522d,
+      category: 'service',
+    });
     // Elevator shafts run through every floor
     this.options.push({
       type: 'elevator',
@@ -86,11 +112,19 @@ export class BuildPanel {
       color: 0x7f8c8d,
       category: 'service',
     });
+    this.options.push({
+      type: 'bulldoze',
+      label: 'Bulldoze',
+      cost: 0,
+      subtitle: 'hallway, desk, lift',
+      color: 0xc0392b,
+      category: 'service',
+    });
   }
 
   private create() {
     const headers = new Set(this.options.map(o => o.category)).size - 1;
-    const totalHeight = 40 + this.options.length * 56 + headers * 22 + 4; // header + buttons + category labels
+    const totalHeight = 30 + this.options.length * BTN_STEP + headers * 22 + 4; // header + buttons + category labels
 
     // Panel background
     const bg = this.scene.add.graphics();
@@ -122,7 +156,7 @@ export class BuildPanel {
       lastCategory = option.category;
 
       this.createButton(option, btnY);
-      btnY += 56;
+      btnY += BTN_STEP;
     }
   }
 
@@ -138,32 +172,32 @@ export class BuildPanel {
     // Color swatch
     const swatch = this.scene.add.graphics();
     swatch.fillStyle(option.color, 1);
-    swatch.fillRect(6, 6, 10, 10);
+    swatch.fillRect(6, 6, 8, 8);
     container.add(swatch);
 
     // Name
-    container.add(this.scene.add.text(22, 4, option.label, {
-      fontSize: '12px', fontFamily: 'monospace', color: '#ffffff',
+    container.add(this.scene.add.text(18, 3, option.label, {
+      fontSize: '11px', fontFamily: 'monospace', color: '#ffffff',
     }));
 
-    // Cost
-    const costText = this.scene.add.text(6, 22, `$${option.cost.toLocaleString()}`, {
-      fontSize: '11px', fontFamily: 'monospace', color: '#aaaacc',
+    // Cost (or lock notice) on the second line, subtitle beside it
+    const costText = this.scene.add.text(6, 18, formatCost(option.cost), {
+      fontSize: '10px', fontFamily: 'monospace', color: '#aaaacc',
     });
     container.add(costText);
     this.costTexts.set(option.type, costText);
 
     // Subtitle
-    const subtitle = this.scene.add.text(6, 36, option.subtitle, {
-      fontSize: '10px', fontFamily: 'monospace', color: '#888899',
-    });
+    const subtitle = this.scene.add.text(PANEL_WIDTH - 22, 18, option.subtitle, {
+      fontSize: '9px', fontFamily: 'monospace', color: '#888899',
+    }).setOrigin(1, 0);
     container.add(subtitle);
     this.subtitleTexts.set(option.type, subtitle);
     this.containers.set(option.type, container);
 
     // Hit area
     const hitArea = this.scene.add.rectangle(
-      (PANEL_WIDTH - 16) / 2, 26, PANEL_WIDTH - 16, 52
+      (PANEL_WIDTH - 16) / 2, BTN_H / 2, PANEL_WIDTH - 16, BTN_H
     );
     hitArea.setInteractive({ useHandCursor: true });
     hitArea.setAlpha(0.01);
@@ -192,9 +226,9 @@ export class BuildPanel {
     const fillAlpha = selected ? 0.5 : hover ? 0.4 : 0.3;
     const strokeAlpha = selected ? 1 : hover ? 0.8 : 0.6;
     g.fillStyle(color, fillAlpha);
-    g.fillRoundedRect(0, 0, PANEL_WIDTH - 16, 52, 6);
+    g.fillRoundedRect(0, 0, PANEL_WIDTH - 16, BTN_H, 6);
     g.lineStyle(2, color, strokeAlpha);
-    g.strokeRoundedRect(0, 0, PANEL_WIDTH - 16, 52, 6);
+    g.strokeRoundedRect(0, 0, PANEL_WIDTH - 16, BTN_H, 6);
   }
 
   private refreshAllButtons() {
@@ -212,11 +246,11 @@ export class BuildPanel {
       const container = this.containers.get(option.type);
       if (!costText || !subtitle || !container) continue;
 
-      const unlocked = option.type === 'elevator' || isUnlocked(state, option.type);
+      const unlocked = !(option.type in ROOM_CONFIG || option.type in FACILITY_CONFIG) || isUnlocked(state, option.type as TileType);
       if (unlocked) {
         this.locked.delete(option.type);
         container.setAlpha(1);
-        costText.setText(`$${option.cost.toLocaleString()}`);
+        costText.setText(formatCost(option.cost));
         costText.setColor(state.cash >= option.cost ? '#aaaacc' : '#e74c3c');
       } else {
         this.locked.add(option.type);
@@ -227,7 +261,7 @@ export class BuildPanel {
       }
 
       if (option.category === 'room') {
-        subtitle.setText(`$${getExpectedPrice(option.type as RoomType, state.starRating)}/night`);
+        subtitle.setText(`$${getExpectedPrice(option.type as RoomType, state.starRating)}/nt`);
       }
     }
   }

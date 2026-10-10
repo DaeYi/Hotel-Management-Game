@@ -1,18 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import { PRNG } from '../src/simulation/prng.js';
 import {
-  createHotelState, addRoom, addFacility, buildFloor, getNextFloorCost, getFloorsBuildCost, addElevator, demolishElevator,
-  isTileOccupied, getAvailableRooms, getElevatorLoad, getElevatorWaitPenalty, formatRoomLabel, getAdjacentFacilities,
+  createHotelState, createStarterHotel, starterHallways, addRoom, addFacility, buildFloor, getNextFloorCost, getFloorsBuildCost, addElevator, demolishElevator,
+  isTileOccupied, getAvailableRooms, getElevatorLoad, isRoomReachable, getElevatorWaitPenalty, formatRoomLabel, getAdjacentFacilities,
 } from '../src/simulation/HotelState.js';
 import { calculateRoomNoise } from '../src/simulation/NoiseManager.js';
 import { calculateGuestReviewBreakdown } from '../src/simulation/GuestManager.js';
 import { processDailyCosts } from '../src/simulation/EconomyManager.js';
 import { getExpectedPrice } from '../src/simulation/StarRatingManager.js';
 import { calculateValuation } from '../src/simulation/ObjectivesManager.js';
-import { migrateToFloors } from '../src/simulation/SaveManager.js';
+import { packIntoLayout } from '../src/simulation/SaveManager.js';
 import { simulate } from '../src/simulation/simulate.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
-import { FLOORS, ELEVATOR, GRID, NOISE, ROOM_CONFIG } from '../src/config/balance.js';
+import { FLOORS, ELEVATOR, GRID, NOISE, ROOM_CONFIG, STARTER_LAYOUT } from '../src/config/balance.js';
 import type { Guest, HotelState } from '../src/simulation/types.js';
 
 function richState(): HotelState {
@@ -113,11 +113,13 @@ describe('Elevators', () => {
   });
 
   it('upper-floor rooms cannot be booked without an elevator', () => {
-    let state = withFloors(richState(), 2);
-    state = addRoom(state, 'standard', 1, 1, 0)!;
-    state = addRoom(state, 'standard', 1, 1, 1)!;
+    // Starter lobby on the ground floor, hallways on floor 2 too
+    let state = withFloors({ ...createStarterHotel(), cash: 1_000_000 }, 2);
+    state = { ...state, fixtures: [...state.fixtures, ...starterHallways(1)] };
+    state = addRoom(state, 'standard', 5, 2, 0)!;
+    state = addRoom(state, 'standard', 5, 2, 1)!;
     expect(getAvailableRooms(state).map(r => r.floor)).toEqual([0]);
-    state = addElevator(state, 0, 0)!;
+    state = addElevator(state, 0, 0)!; // shaft opens onto the row-1 hallway on both floors
     expect(getAvailableRooms(state)).toHaveLength(2);
   });
 
@@ -185,37 +187,39 @@ describe('Noise across floors', () => {
   });
 });
 
-describe('Save migration to floors', () => {
-  it('re-packs an old 20x15 layout onto 8x5 floors with an elevator', () => {
+describe('Save migration into the hallway layout', () => {
+  it('re-packs an old layout into STARTER_LAYOUT room tiles across floors, with hallways, a desk, and an elevator', () => {
     const state: any = { ...createHotelState(), cash: 0 };
     state.rooms = Array.from({ length: 50 }, (_, i) => ({ id: `room-${i}`, type: 'standard', gridX: i % 20, gridY: Math.floor(i / 20) }));
     state.facilities = [{ id: 'facility-a', type: 'gym', gridX: 15, gridY: 10 }];
     delete state.floorCount;
     delete state.elevators;
+    delete state.fixtures;
 
-    migrateToFloors(state);
+    packIntoLayout(state);
 
-    expect(state.floorCount).toBe(2); // 51 items, 39 usable tiles per floor
+    expect(state.floorCount).toBe(2); // 51 items; 33 ground-floor slots + 35 upper
     expect(state.elevators).toEqual([{ id: 'elevator-0-0', gridX: 0, gridY: 0 }]);
+    expect(state.fixtures.filter((f: any) => f.type === 'desk')).toHaveLength(1);
+    expect(state.fixtures.filter((f: any) => f.type === 'hallway')).toHaveLength(2 * STARTER_LAYOUT.hallwayTiles.length);
+
     const items = [...state.rooms, ...state.facilities];
     expect(items.map((r: any) => r.id)).toContain('room-0'); // ids kept
-    const positions = new Set(items.map((r: any) => `${r.floor},${r.gridX},${r.gridY}`));
-    expect(positions.size).toBe(items.length); // no overlaps
-    for (const item of items) {
-      expect(item.gridX).toBeLessThan(GRID.width);
-      expect(item.gridY).toBeLessThan(GRID.height);
-      expect(item.gridX === 0 && item.gridY === 0).toBe(false); // shaft tile stays clear
-    }
+    const positions = new Set([...items, ...state.fixtures].map((r: any) => `${r.floor},${r.gridX},${r.gridY}`));
+    expect(positions.size).toBe(items.length + state.fixtures.length); // no overlaps
+    // Every room is bookable in the migrated layout
+    expect(state.rooms.every((r: any) => isRoomReachable(state, r))).toBe(true);
   });
 
   it('a small old hotel fits on the ground floor without an elevator', () => {
     const state: any = { ...createHotelState() };
     state.rooms = Array.from({ length: 6 }, (_, i) => ({ id: `room-${i}`, type: 'standard', gridX: i * 3, gridY: 7 }));
     state.facilities = [];
-    migrateToFloors(state);
+    packIntoLayout(state);
     expect(state.floorCount).toBe(1);
     expect(state.elevators).toEqual([]);
     expect(state.rooms.every((r: any) => r.floor === 0)).toBe(true);
+    expect(state.rooms.every((r: any) => isRoomReachable(state, r))).toBe(true);
   });
 });
 
@@ -223,6 +227,7 @@ describe('Balance: building upward', () => {
   it('a balanced hotel outgrows the ground floor, adds an elevator, and stays solvent', () => {
     const results = Array.from({ length: 4 }, (_, i) => simulate(200, i, undefined, STRATEGIES.balanced));
     expect(results.every(r => !r.wentBankrupt)).toBe(true);
-    expect(results.every(r => r.finalRoomCount > GRID.width * GRID.height - 8)).toBe(true);
+    // More rooms than fit on the ground floor's room rows
+    expect(results.every(r => r.finalRoomCount > 35)).toBe(true);
   }, 120000);
 });

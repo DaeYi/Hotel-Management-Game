@@ -1,10 +1,11 @@
 import type { HotelState } from './types.js';
 import type { PRNG } from './prng.js';
-import { GUEST_NAMES, LOAN, GRID } from '../config/balance.js';
+import { GUEST_NAMES, LOAN, GRID, STARTER_LAYOUT } from '../config/balance.js';
+import { starterHallways } from './HotelState.js';
 import { calculateStarRating } from './StarRatingManager.js';
 
 const SAVE_KEY = 'hotel-game-save';
-const SAVE_VERSION = 13; // v13: multiple floors, elevators, smaller floor plan
+const SAVE_VERSION = 14; // v14: hallways, check-in desks, 10x6 floor plan
 
 interface SaveData {
   version: number;
@@ -170,9 +171,15 @@ export function loadGame(): SaveData | null {
     }
 
     if (data.version === 12) {
-      migrateToFloors(data.state);
+      // Floors arrived in v13; the v14 step below re-packs every layout anyway
       data.version = 13;
       console.log('Migrated save from v12 to v13');
+    }
+
+    if (data.version === 13) {
+      packIntoLayout(data.state);
+      data.version = 14;
+      console.log('Migrated save from v13 to v14');
     }
 
     if (data.version !== SAVE_VERSION) {
@@ -187,33 +194,51 @@ export function loadGame(): SaveData | null {
 }
 
 /**
- * v12 -> v13: the old single 20x15 grid doesn't fit the new 8x5 floor plan, so
- * re-pack everything (rooms first, then facilities, in old row-major order) onto
- * as many floors as it takes. When that's more than one floor, tile (0, 0) is
- * kept free on every floor for an elevator, which the hotel gets for free so
- * upper-floor rooms stay bookable. Ids are kept, so guests stay in their rooms.
+ * v13 -> v14: hallways and check-in desks are new, and the floor plan grew to
+ * fit them, so no older layout would have any bookable rooms. Re-pack every
+ * room and facility (rooms first, in old floor/row/column order) into the
+ * STARTER_LAYOUT room tiles across as many floors as it takes, with hallway
+ * rows on every floor, the free desk on the ground floor, and elevator shafts
+ * on the reserved tiles (at least one if there are upper floors). Ids are
+ * kept, so checked-in guests stay in their rooms.
  */
-export function migrateToFloors(state: any): void {
-  const byPosition = (a: any, b: any) => a.gridY - b.gridY || a.gridX - b.gridX;
-  const rooms = [...state.rooms].sort(byPosition);
-  const facilities = [...state.facilities].sort(byPosition);
-  const total = rooms.length + facilities.length;
-  const perFloor = GRID.width * GRID.height;
-  const needsElevator = total > perFloor;
-  const usablePerFloor = needsElevator ? perFloor - 1 : perFloor;
+export function packIntoLayout(state: any): void {
+  const byPosition = (a: any, b: any) => (a.floor ?? 0) - (b.floor ?? 0) || a.gridY - b.gridY || a.gridX - b.gridX;
+  const items = [...[...state.rooms].sort(byPosition), ...[...state.facilities].sort(byPosition)];
 
-  let slot = 0;
-  const place = (item: any) => {
-    const floor = Math.floor(slot / usablePerFloor);
-    const index = (slot % usablePerFloor) + (needsElevator ? 1 : 0); // skip (0, 0) for the shaft
-    slot++;
-    return { ...item, floor, gridX: index % GRID.width, gridY: Math.floor(index / GRID.width) };
+  const isReserved = (x: number, y: number, floor: number) =>
+    STARTER_LAYOUT.hallwayTiles.some(([hx, hy]) => hx === x && hy === y)
+    || STARTER_LAYOUT.elevatorTiles.some(([ex, ey]) => ex === x && ey === y)
+    || (floor === 0 && STARTER_LAYOUT.deskTiles.some(([dx, dy]) => dx === x && dy === y));
+  const slotsOn = (floor: number) => {
+    const slots: Array<[number, number]> = [];
+    for (let y = 0; y < GRID.height; y++) {
+      for (let x = 0; x < GRID.width; x++) if (!isReserved(x, y, floor)) slots.push([x, y]);
+    }
+    return slots;
   };
 
-  state.rooms = rooms.map(place);
-  state.facilities = facilities.map(place);
-  state.floorCount = Math.max(1, Math.ceil(total / usablePerFloor));
-  state.elevators = needsElevator ? [{ id: 'elevator-0-0', gridX: 0, gridY: 0 }] : [];
+  let floor = 0;
+  let slots = slotsOn(0);
+  const placed = items.map(item => {
+    if (slots.length === 0) slots = slotsOn(++floor);
+    const [gridX, gridY] = slots.shift()!;
+    return { ...item, floor, gridX, gridY };
+  });
+  const placedIds = new Set(state.rooms.map((r: any) => r.id));
+  state.rooms = placed.filter(p => placedIds.has(p.id));
+  state.facilities = placed.filter(p => !placedIds.has(p.id)).map(f => ({ ...f, level: f.level ?? 1, decor: f.decor ?? 100 }));
+  state.floorCount = floor + 1;
+
+  const shafts = Math.min(STARTER_LAYOUT.elevatorTiles.length,
+    Math.max(state.floorCount > 1 ? 1 : 0, (state.elevators ?? []).length));
+  state.elevators = STARTER_LAYOUT.elevatorTiles.slice(0, shafts).map(([x, y]) => ({ id: `elevator-${x}-${y}`, gridX: x, gridY: y }));
+
+  const [deskX, deskY] = STARTER_LAYOUT.deskTiles[0];
+  state.fixtures = [
+    ...Array.from({ length: state.floorCount }, (_, f) => starterHallways(f)).flat(),
+    { id: `desk-0-${deskX}-${deskY}`, type: 'desk', gridX: deskX, gridY: deskY, floor: 0 },
+  ];
   state.noiseSources = []; // positions no longer line up; construction noise is short-lived anyway
 }
 

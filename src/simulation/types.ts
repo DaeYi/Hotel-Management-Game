@@ -32,7 +32,7 @@ export interface HousekeepingConfig {
 export interface StaffConfig {
   maintenanceWorkers: number; // 0 = manual repair only
   housekeepers: number; // 0 = no cleaning happens
-  frontDesk: number; // 0 = self-service kiosk (very slow check-in)
+  frontDesk: number; // staff at check-in desks (each desk seats DESK.staffPerDesk)
 }
 
 export interface Guest {
@@ -99,6 +99,17 @@ export interface Facility {
   level: number; // 1-3, raised by upgradeFacility
 }
 
+export type FixtureType = 'hallway' | 'desk';
+
+/** Single-tile building infrastructure: walkable hallways and check-in desks (ground floor only). */
+export interface Fixture {
+  id: string;
+  type: FixtureType;
+  gridX: number;
+  gridY: number;
+  floor: number;
+}
+
 /** An elevator shaft: occupies (gridX, gridY) on every floor. */
 export interface Elevator {
   id: string;
@@ -142,6 +153,7 @@ export interface HotelState {
   activeCampaign: ActiveCampaign | null; // at most one marketing campaign runs at a time
   floorCount: number; // built floors, including the ground floor (>= 1)
   elevators: Elevator[];
+  fixtures: Fixture[]; // hallways and check-in desks
   daysAtFiveStars: number; // consecutive end-of-day snapshots at 5 stars (legacy goals)
 }
 

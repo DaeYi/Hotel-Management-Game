@@ -1,7 +1,7 @@
 import type { HotelState, GameEvent, DailyStat } from './types.js';
 import { OBJECTIVES, DAILY_STATS_MAX_DAYS, LEGACY, ROOM_CONFIG, FACILITY_CONFIG, FACILITY_LEVELS, VALUATION, ELEVATOR } from '../config/balance.js';
 import type { ObjectiveConfig } from '../config/balance.js';
-import { getOccupancyRate, getFloorsBuildCost } from './HotelState.js';
+import { getOccupancyRate, getFloorsBuildCost, FIXTURE_COST } from './HotelState.js';
 
 export interface ObjectiveStatus {
   current: number; // the measured value, in the objective's own units
@@ -71,7 +71,8 @@ export function calculateValuation(state: HotelState): number {
   }
 
   // The structure itself: floors above ground and elevator shafts, at build cost
-  property += getFloorsBuildCost(state.floorCount) + state.elevators.length * ELEVATOR.buildCost;
+  property += getFloorsBuildCost(state.floorCount) + state.elevators.length * ELEVATOR.buildCost
+    + state.fixtures.reduce((sum, f) => sum + FIXTURE_COST[f.type], 0);
 
   const business = getRecentRevenue(state, 30) * VALUATION.revenueMultiple;
   return property + business + state.cash - state.loan.balance;

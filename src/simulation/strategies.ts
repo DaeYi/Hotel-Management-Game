@@ -1,8 +1,8 @@
 import type { HotelState, RoomType, FacilityType, AmenityTier } from './types.js';
-import { ROOM_CONFIG, FACILITY_CONFIG, GRID, LOAN, ELEVATOR } from '../config/balance.js';
+import { ROOM_CONFIG, FACILITY_CONFIG, GRID, LOAN, ELEVATOR, STARTER_LAYOUT, DESK, HALLWAY } from '../config/balance.js';
 import {
   addRoom, addFacility, demolishRoom, isTileOccupied, isUnlocked, setRoomPrice, renovateRoom, renovateFacility,
-  upgradeFacility, getFacilityUpgradeCost, addElevator, buildFloor, getNextFloorCost, getElevatorLoad,
+  upgradeFacility, getFacilityUpgradeCost, addElevator, buildFloor, getNextFloorCost, getElevatorLoad, addFixture,
 } from './HotelState.js';
 import { startCampaign, getCampaignCost } from './MarketingManager.js';
 import { FACILITY_LEVELS } from '../config/balance.js';
@@ -32,20 +32,42 @@ interface ManagedOptions {
 const STALE_DECOR = 60; // reinvesting strategies renovate below this
 const MAX_RENOVATIONS_PER_DAY = 3; // don't take half the hotel offline at once
 
-// Tiles the managed bots keep clear on every floor for elevator shafts
-const ELEVATOR_TILES: Array<[number, number]> = [[0, 0], [1, 0], [2, 0]];
-const isElevatorTile = (x: number, y: number) => ELEVATOR_TILES.some(([ex, ey]) => ex === x && ey === y);
+// The managed bots follow STARTER_LAYOUT: hallway rows on every floor, with
+// elevator shafts and extra desks on reserved tiles.
+const ELEVATOR_TILES = STARTER_LAYOUT.elevatorTiles;
+const isReservedTile = (x: number, y: number, floor: number) =>
+  STARTER_LAYOUT.hallwayTiles.some(([hx, hy]) => hx === x && hy === y)
+  || ELEVATOR_TILES.some(([ex, ey]) => ex === x && ey === y)
+  || (floor === 0 && STARTER_LAYOUT.deskTiles.some(([dx, dy]) => dx === x && dy === y));
 
-/** First free tile, lowest floor first, row-major -- keeps the hotel compact, so facilities end up next to rooms. */
+/** First free room tile, lowest floor first, row-major -- keeps the hotel compact, so facilities end up next to rooms. */
 function findFreeTile(state: HotelState): { x: number; y: number; floor: number } | null {
   for (let floor = 0; floor < state.floorCount; floor++) {
     for (let y = 0; y < GRID.height; y++) {
       for (let x = 0; x < GRID.width; x++) {
-        if (!isElevatorTile(x, y) && !isTileOccupied(state, x, y, floor)) return { x, y, floor };
+        if (!isReservedTile(x, y, floor) && !isTileOccupied(state, x, y, floor)) return { x, y, floor };
       }
     }
   }
   return null;
+}
+
+/** Lay the template hallways across a floor (each tile is bought separately). */
+function layHallways(state: HotelState, floor: number): HotelState {
+  let s = state;
+  for (const [x, y] of STARTER_LAYOUT.hallwayTiles) s = addFixture(s, 'hallway', x, y, floor) ?? s;
+  return s;
+}
+
+/** Add a check-in desk on the next reserved desk tile when front desk staff outnumber the seats. */
+function addDeskIfNeeded(state: HotelState, afford: Afford): HotelState {
+  const desks = state.fixtures.filter(f => f.type === 'desk').length;
+  if (state.staff.frontDesk <= desks * DESK.staffPerDesk || !afford(state, DESK.buildCost)) return state;
+  for (const [x, y] of STARTER_LAYOUT.deskTiles) {
+    const next = addFixture(state, 'desk', x, y, 0);
+    if (next) return next;
+  }
+  return state;
 }
 
 /** Whether the bot can spend `cost` and keep its reserve (times `mult` for bigger purchases). */
@@ -140,10 +162,14 @@ function managedStrategy(opts: ManagedOptions): Strategy {
       // Out of room and still busy: build upward (shaft first, so the new floor is reachable)
       if (s.elevators.length === 0) s = addReservedElevator(s, afford);
       const floorCost = getNextFloorCost(s);
-      if (s.elevators.length > 0 && floorCost !== null && afford(s, floorCost, 2)) {
-        s = buildFloor(s)?.state ?? s;
+      const hallwayCost = STARTER_LAYOUT.hallwayTiles.length * HALLWAY.buildCost;
+      if (s.elevators.length > 0 && floorCost !== null && afford(s, floorCost + hallwayCost, 2)) {
+        const built = buildFloor(s);
+        if (built) s = layHallways(built.state, built.state.floorCount - 1);
       }
     }
+
+    s = addDeskIfNeeded(s, afford);
 
     // Keep elevator waits comfortable as the upper floors fill
     if (s.elevators.length > 0 && getElevatorLoad(s) > 0.9) {

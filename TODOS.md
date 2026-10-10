@@ -62,14 +62,14 @@
 
 ## Floors
 
-### Elevator inspector
+### Staff travel time
 
-**What:** Clicking an elevator should open an inspector showing load (upper rooms served / capacity) with a demolish button.
+**What:** Make the distance staff walk matter in the simulation, e.g. housekeeping and repair capacity reduced by the average path length from the staff area to the rooms they serve.
 
-**Why:** `demolishElevator` exists in the simulation but there's no way to reach it from the UI; clicking a shaft does nothing.
+**Why:** Hallways and walking are visual only right now (docs/designs/hallways-and-people.md), so a sprawling layout costs nothing beyond the hallway tiles. Travel time would give layout real consequences and make the walking people mean something.
 
-**Effort:** S
-**Priority:** P3
+**Effort:** M
+**Priority:** P2
 **Depends on:** None
 
 ### Floor-placement bonuses
@@ -122,6 +122,7 @@
 
 ## Completed
 
+- **Hallways, check-in desks, and people** (2026-10-10): hallway-connected rooms, desks staffed by front desk, walking guests and staff, bulldoze tool. See docs/designs/hallways-and-people.md
 - **Multiple floors** (2026-10-10): stacked 8x5 floor plans, floors bought upward, elevator shafts, vertical noise, view premium, floor switcher. See docs/designs/floors.md
 - **Late-game money sinks** (2026-10-10): prestige upkeep, decor + renovation, facility upgrades, marketing campaigns, valuation and endless legacy goals. See docs/designs/late-game-economy.md
 - **Deploy pipeline** (2026-10-10): GitHub Actions runs tests + build on every push/PR and deploys `dist` to GitHub Pages from `main` -- https://daeyi.github.io/Hotel-Management-Game/

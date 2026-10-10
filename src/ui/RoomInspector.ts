@@ -235,7 +235,7 @@ export class RoomInspector {
     } else if (room.condition <= ECONOMY.roomBreakdownThreshold) {
       statusLine = 'Status:     OUT OF ORDER';
     } else {
-      statusLine = isRoomReachable(state, room) ? 'Status:     Vacant' : 'Status:     No elevator!';
+      statusLine = isRoomReachable(state, room) ? 'Status:     Vacant' : 'Status:     No hallway access!';
     }
 
     const condBar = '\u2588'.repeat(Math.round(room.condition / 10))

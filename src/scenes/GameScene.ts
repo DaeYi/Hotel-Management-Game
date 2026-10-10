@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { createHotelState, addRoom, setRoomPrice, repairRoom, demolishRoom, addFacility, demolishFacility, renovateRoom, renovateFacility, upgradeFacility, addElevator, buildFloor } from '../simulation/HotelState';
+import { createStarterHotel, addFixture, demolishFixture, demolishElevator, addRoom, setRoomPrice, repairRoom, demolishRoom, addFacility, demolishFacility, renovateRoom, renovateFacility, upgradeFacility, addElevator, buildFloor } from '../simulation/HotelState';
 import { startCampaign } from '../simulation/MarketingManager';
 import { tickSimulation } from '../simulation/tick';
 import { checkBankruptcy, repayLoan } from '../simulation/EconomyManager';
@@ -8,7 +8,9 @@ import { ROOM_CONFIG } from '../config/balance';
 import type { HotelState, RoomType, FacilityType, StaffConfig, AmenityTier, CleaningQuality, DailyCleaningCadence } from '../simulation/types';
 import { FACILITY_CONFIG } from '../config/balance';
 import { BuildPanel } from '../ui/BuildPanel';
+import { PAINTABLE_TYPES } from '../ui/BuildPanel';
 import type { BuildType } from '../ui/BuildPanel';
+import { ActorLayer, ACTOR_COLORS } from '../ui/ActorLayer';
 import { FloorSelector } from '../ui/FloorSelector';
 import { InfoBar } from '../ui/InfoBar';
 import { GridRenderer, GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE } from '../ui/GridRenderer';
@@ -55,6 +57,8 @@ export class GameScene extends Phaser.Scene {
   private amenitiesPanel!: AmenitiesPanel;
   private toolbar!: Toolbar;
   private floorSelector!: FloorSelector;
+  private actors!: ActorLayer;
+  private lastPaintedTile: { gridX: number; gridY: number } | null = null; // drag-painting hallways / bulldozing
   private currentFloor = 0; // the floor plan being viewed and built on
   private tutorialActive = true;
   private gameOver = false;
@@ -81,7 +85,7 @@ export class GameScene extends Phaser.Scene {
       this.lastRecordedDay = this.state.day;
     } else {
       this.prng = new PRNG(Date.now());
-      this.state = createHotelState();
+      this.state = createStarterHotel(); // free lobby: hallways and a check-in desk
     }
 
     // Info bar (top two lines)
@@ -104,6 +108,10 @@ export class GameScene extends Phaser.Scene {
         this.facilityInspector.hide();
       }
     });
+
+    // People walking the halls, drawn over the grid
+    this.actors = new ActorLayer(this);
+    this.drawLegend(GRID_OFFSET_X, bottomY + 44);
 
     // Floor stack (right of the build panel): view floors, build upward
     this.floorSelector = new FloorSelector(
@@ -195,6 +203,7 @@ export class GameScene extends Phaser.Scene {
     });
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       this.handleGridHover(pointer);
+      this.handlePaintDrag(pointer);
     });
 
     // Draw unlock state and the current goal once up front: update() skips
@@ -229,8 +238,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.grid.renderRooms(this.state, this.currentFloor);
+    this.grid.renderFixtures(this.state, this.currentFloor);
     this.grid.renderFacilities(this.state, this.currentFloor);
-    this.grid.renderGuests(this.state, this.currentFloor);
+    this.actors.update(this.state, this.currentFloor, delta, this.paused ? 0 : this.speedMultiplier);
+    this.grid.renderGuests(this.state, this.currentFloor, this.actors.walkingGuestIds());
     this.grid.renderNoise(this.state, this.currentFloor);
     this.grid.renderConstruction(this.state, this.currentFloor);
     this.floorSelector.update(this.state, this.currentFloor);
@@ -271,6 +282,7 @@ export class GameScene extends Phaser.Scene {
       ? events.filter(e => !INCIDENT_EVENT_TYPES.has(e.type))
       : events;
     this.toasts.addEvents(toastEvents);
+    this.actors.handleEvents(events, this.state);
 
     if (this.state.day !== prevDay && this.state.day > this.lastRecordedDay) {
       this.chart.recordDay(this.dailyRevenue, this.state.reviewScore);
@@ -390,6 +402,7 @@ export class GameScene extends Phaser.Scene {
     const cell = this.grid.pointerToGrid(pointer);
 
     if (selectedType && cell) {
+      this.lastPaintedTile = cell;
       const result = this.tryBuild(selectedType, cell.gridX, cell.gridY);
       if (result) {
         this.state = result;
@@ -439,12 +452,66 @@ export class GameScene extends Phaser.Scene {
     this.grid.showHoverPreview(cell.gridX, cell.gridY, selectedType, canPlace);
   }
 
+  /** Hallways and the bulldozer keep working while the pointer is dragged across tiles. */
+  private handlePaintDrag(pointer: Phaser.Input.Pointer) {
+    const selectedType = this.buildPanel.getSelectedType();
+    if (!pointer.isDown || !selectedType || !PAINTABLE_TYPES.has(selectedType)) return;
+    const cell = this.grid.pointerToGrid(pointer);
+    if (!cell) return;
+    const last = this.lastPaintedTile;
+    if (last && last.gridX === cell.gridX && last.gridY === cell.gridY) return;
+
+    // Fill every tile between the last painted tile and this one, so a fast
+    // drag (pointer events skip tiles) still lays a continuous hallway.
+    const from = last ?? cell;
+    const steps = Math.max(Math.abs(cell.gridX - from.gridX), Math.abs(cell.gridY - from.gridY));
+    for (let i = 1; i <= steps || (i === 1 && steps === 0); i++) {
+      const t = steps === 0 ? 1 : i / steps;
+      const gridX = Math.round(from.gridX + (cell.gridX - from.gridX) * t);
+      const gridY = Math.round(from.gridY + (cell.gridY - from.gridY) * t);
+      const result = this.tryBuild(selectedType, gridX, gridY);
+      if (result) this.state = result;
+    }
+    this.lastPaintedTile = cell;
+  }
+
   /** The state after building `type` at a tile on the current floor, or null if not allowed (also used as the hover check). */
   private tryBuild(type: BuildType, gridX: number, gridY: number): HotelState | null {
+    if (type === 'bulldoze') return this.bulldoze(gridX, gridY);
+    if (type === 'hallway' || type === 'desk') return addFixture(this.state, type, gridX, gridY, this.currentFloor);
     if (type === 'elevator') return addElevator(this.state, gridX, gridY);
     if (type in ROOM_CONFIG) return addRoom(this.state, type as RoomType, gridX, gridY, this.currentFloor);
     if (type in FACILITY_CONFIG) return addFacility(this.state, type as FacilityType, gridX, gridY, this.currentFloor);
     return null;
+  }
+
+  /** Remove a hallway, desk, or elevator shaft. Rooms and facilities are demolished from their inspectors. */
+  private bulldoze(gridX: number, gridY: number): HotelState | null {
+    const fixture = this.state.fixtures.find(f => f.floor === this.currentFloor && f.gridX === gridX && f.gridY === gridY);
+    if (fixture) return demolishFixture(this.state, fixture.id);
+    const elevator = this.state.elevators.find(e => e.gridX === gridX && e.gridY === gridY);
+    if (elevator) return demolishElevator(this.state, elevator.id);
+    return null;
+  }
+
+  /** A one-line key under the grid for the people walking around. */
+  private drawLegend(x: number, y: number) {
+    const g = this.add.graphics();
+    const style = { fontSize: '11px', fontFamily: 'monospace', color: '#888899' };
+    const entries: Array<{ label: string; color: number; guest?: boolean }> = [
+      { label: 'Guest', color: 0xecf0f1, guest: true },
+      { label: 'Front desk', color: ACTOR_COLORS.frontDesk },
+      { label: 'Housekeeping', color: ACTOR_COLORS.housekeeper },
+      { label: 'Maintenance', color: ACTOR_COLORS.maintenance },
+    ];
+    let cx = x;
+    for (const entry of entries) {
+      g.fillStyle(entry.color, 1);
+      if (entry.guest) g.fillCircle(cx + 5, y + 7, 5);
+      else g.fillRect(cx, y + 2, 10, 10);
+      const label = this.add.text(cx + 14, y, entry.label, style);
+      cx += 14 + label.width + 16;
+    }
   }
 
   private setFloor(floor: number) {

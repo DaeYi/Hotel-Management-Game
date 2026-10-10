@@ -1,6 +1,6 @@
 import type { SimulationSummary } from './types.js';
 import { PRNG } from './prng.js';
-import { createHotelState, addRoom } from './HotelState.js';
+import { createStarterHotel, addRoom } from './HotelState.js';
 import { tickSimulation } from './tick.js';
 import { calculateValuation } from './ObjectivesManager.js';
 import { ECONOMY } from '../config/balance.js';
@@ -14,11 +14,11 @@ import type { Strategy } from './strategies.js';
 export function simulate(
   days: number,
   seed: number = 42,
-  setupFn?: (state: ReturnType<typeof createHotelState>, prng: PRNG) => ReturnType<typeof createHotelState>,
+  setupFn?: (state: ReturnType<typeof createStarterHotel>, prng: PRNG) => ReturnType<typeof createStarterHotel>,
   strategy: Strategy = idleStrategy
 ): SimulationSummary {
   const prng = new PRNG(seed);
-  let state = createHotelState();
+  let state = createStarterHotel();
 
   // Default setup: build a small starter hotel
   if (setupFn) {
@@ -27,7 +27,7 @@ export function simulate(
     // 8 standard rooms in a row -- the "Open for Business" objective, and
     // the only room type unlocked at 1 star
     for (let x = 0; x < 8; x++) {
-      const result = addRoom(state, 'standard', x, 1); // row 0 stays clear for elevator shafts
+      const result = addRoom(state, 'standard', x, 2); // first room row below the lobby hallway
       if (result) state = result;
     }
   }

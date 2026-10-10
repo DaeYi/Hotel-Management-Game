@@ -1,5 +1,6 @@
-import type { HotelState, Room, RoomType, Facility, FacilityType, TileType, Elevator, GameEvent } from './types.js';
-import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS, FLOORS, ELEVATOR } from '../config/balance.js';
+import type { HotelState, Room, RoomType, Facility, FacilityType, TileType, Elevator, GameEvent, Fixture, FixtureType } from './types.js';
+import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS, FLOORS, ELEVATOR, HALLWAY, DESK, STARTER_LAYOUT } from '../config/balance.js';
+import { isTileAccessible } from './Layout.js';
 import { createConstructionNoise } from './NoiseManager.js';
 import { getExpectedPrice, getPriceMultiplier } from './StarRatingManager.js';
 
@@ -47,7 +48,20 @@ export function createHotelState(): HotelState {
     daysAtFiveStars: 0,
     floorCount: 1,
     elevators: [],
+    fixtures: [],
   };
+}
+
+/** The STARTER_LAYOUT hallways on one floor (positions only, no cost). */
+export function starterHallways(floor: number): Fixture[] {
+  return STARTER_LAYOUT.hallwayTiles.map(([x, y]): Fixture => ({ id: `hallway-${floor}-${x}-${y}`, type: 'hallway', gridX: x, gridY: y, floor }));
+}
+
+/** A new game: the empty hotel plus a free lobby -- ground-floor hallways and one check-in desk. */
+export function createStarterHotel(): HotelState {
+  const [deskX, deskY] = STARTER_LAYOUT.deskTiles[0];
+  const desk: Fixture = { id: `desk-0-${deskX}-${deskY}`, type: 'desk', gridX: deskX, gridY: deskY, floor: 0 };
+  return { ...createHotelState(), fixtures: [...starterHallways(0), desk] };
 }
 
 /** Star rating a room or facility type unlocks at. */
@@ -244,9 +258,12 @@ export function getOccupancyRate(state: HotelState): number {
   return occupied / state.rooms.length;
 }
 
-/** Upper-floor rooms need at least one elevator before guests can reach them. */
+/**
+ * Guests can only book a room whose door opens onto a hallway connected to the
+ * street -- for upper floors, through an elevator (see Layout.ts).
+ */
 export function isRoomReachable(state: HotelState, room: Room): boolean {
-  return room.floor === 0 || state.elevators.length > 0;
+  return isTileAccessible(state, room.gridX, room.gridY, room.floor);
 }
 
 export function getAvailableRooms(state: HotelState): Room[] {
@@ -255,11 +272,39 @@ export function getAvailableRooms(state: HotelState): Room[] {
     .sort((a, b) => a.pricePerNight - b.pricePerNight); // ascending price
 }
 
-/** Check if a tile on a floor is taken by a room, a facility, or an elevator shaft (which spans every floor). */
+/** Check if a tile on a floor is taken by a room, facility, hallway, desk, or an elevator shaft (which spans every floor). */
 export function isTileOccupied(state: HotelState, gridX: number, gridY: number, floor: number): boolean {
   return state.rooms.some(r => r.floor === floor && r.gridX === gridX && r.gridY === gridY)
     || state.facilities.some(f => f.floor === floor && f.gridX === gridX && f.gridY === gridY)
+    || state.fixtures.some(f => f.floor === floor && f.gridX === gridX && f.gridY === gridY)
     || state.elevators.some(e => e.gridX === gridX && e.gridY === gridY);
+}
+
+export const FIXTURE_COST: Record<FixtureType, number> = {
+  hallway: HALLWAY.buildCost,
+  desk: DESK.buildCost,
+};
+
+/** Build a hallway tile or a check-in desk (desks go on the ground floor only). */
+export function addFixture(state: HotelState, type: FixtureType, gridX: number, gridY: number, floor: number): HotelState | null {
+  if (!isValidTile(state, gridX, gridY, floor)) return null;
+  if (isTileOccupied(state, gridX, gridY, floor)) return null;
+  if (type === 'desk' && floor !== 0) return null;
+  const cost = FIXTURE_COST[type];
+  if (state.cash < cost) return null;
+
+  const fixture: Fixture = { id: `${type}-${floor}-${gridX}-${gridY}`, type, gridX, gridY, floor };
+  return { ...state, cash: state.cash - cost, fixtures: [...state.fixtures, fixture] };
+}
+
+export function demolishFixture(state: HotelState, fixtureId: string): HotelState | null {
+  const fixture = state.fixtures.find(f => f.id === fixtureId);
+  if (!fixture) return null;
+  return {
+    ...state,
+    cash: state.cash + getDemolishRefund(FIXTURE_COST[fixture.type]),
+    fixtures: state.fixtures.filter(f => f.id !== fixtureId),
+  };
 }
 
 /** Cost to build the next floor up, or null at the height limit. */
