@@ -1,3 +1,5 @@
 node_modules/
 dist/
 .DS_Store
+desktop.ini
+.claude/settings.local.json

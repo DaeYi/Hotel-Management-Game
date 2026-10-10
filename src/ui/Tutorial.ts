@@ -19,13 +19,13 @@ const STORAGE_KEY = 'hotel-game-tutorial-seen';
 
 export class Tutorial {
   private scene: Phaser.Scene;
-  private overlay: Phaser.GameObjects.Rectangle;
-  private container: Phaser.GameObjects.Container;
+  private overlay!: Phaser.GameObjects.Rectangle;
+  private container!: Phaser.GameObjects.Container;
   private stepIndex = 0;
-  private titleText: Phaser.GameObjects.Text;
-  private bodyText: Phaser.GameObjects.Text;
-  private stepIndicator: Phaser.GameObjects.Text;
-  private nextBtn: Phaser.GameObjects.Text;
+  private titleText!: Phaser.GameObjects.Text;
+  private bodyText!: Phaser.GameObjects.Text;
+  private stepIndicator!: Phaser.GameObjects.Text;
+  private nextBtn!: Phaser.GameObjects.Text;
   private onComplete: () => void;
 
   constructor(scene: Phaser.Scene, onComplete: () => void) {
