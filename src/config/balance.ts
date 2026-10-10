@@ -37,11 +37,12 @@ export const ROOM_CONFIG: Record<RoomType, {
 export const ECONOMY = {
   startingCash: 50000,
   // Arrivals per day at a 5/10 review score, before season/weekday multipliers:
-  // (baseArrivalsPerDay + arrivalsPerRoom * rooms) * STAR_RATING.demandMultiplier[stars].
-  // The per-room term is the hotel's visibility -- bigger hotels draw more walk-ins,
-  // but sub-linearly enough that overbuilding leaves rooms empty.
-  baseArrivalsPerDay: 2,
-  arrivalsPerRoom: 0.3,
+  // (baseArrivalsPerDay + arrivalsPerSqrtRoom * sqrt(rooms)) * STAR_RATING.demandMultiplier[stars].
+  // A bigger hotel is more visible, but the city only has so many travellers:
+  // the square root means each extra room adds less demand than the last, so
+  // a well-run hotel tops out where new rooms stop filling.
+  baseArrivalsPerDay: 0.5,
+  arrivalsPerSqrtRoom: 1.65,
   checkInStartHour: 14,
   checkInEndHour: 22,
   guestMinBudget: 60,
@@ -246,7 +247,6 @@ export const STAFF = {
   },
   housekeeping: {
     dailyWage: 60, // per housekeeper per day
-    turnoverRoomsPerHour: 1, // rooms a housekeeper can turn over per hour
     dailyCleanRoomsPerHour: 2, // rooms a housekeeper can daily-clean per hour
     workStartHour: 6,
     workEndHour: 22,

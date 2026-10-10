@@ -22,6 +22,7 @@ export interface Room {
   lastDailyCleanDay: number; // last day daily housekeeping ran
   decor: number; // 0-100, how fresh the furnishings are; fades daily, restored by renovation
   renovationHoursRemaining: number; // hours left while status is 'renovating'
+  dailyCleanHoursRemaining: number; // a queued daily clean (housekeeper-hours incl. walk), 0 = none
 }
 
 export interface HousekeepingConfig {

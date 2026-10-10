@@ -94,7 +94,7 @@ export class AmenitiesPanel {
 
       btn.on('pointerdown', () => this.selectTier(type, tier));
       btn.on('pointerover', () => {
-        this.descText.setText(`${tierConfig.label}: ${tierConfig.description}\n$${tierConfig.dailyCostPerRoom}/room/day | Review: +${tierConfig.reviewBonus.toFixed(1)}`);
+        this.descText.setText(`${tierConfig.label}: ${tierConfig.description}\n$${tierConfig.dailyCostPerRoom}/occupied room/night | Review: +${tierConfig.reviewBonus.toFixed(1)}`);
       });
       btn.on('pointerout', () => {
         this.descText.setText('Hover a tier for details');
@@ -138,25 +138,26 @@ export class AmenitiesPanel {
       });
     }
 
-    // Update per-type costs
+    // Update per-type costs: amenities are charged per occupied room
     const roomCounts: Record<string, number> = { standard: 0, deluxe: 0, suite: 0 };
-    for (const room of state.rooms) roomCounts[room.type]++;
+    for (const room of state.rooms) if (room.status === 'occupied') roomCounts[room.type]++;
 
     for (const [type, costText] of this.costTexts) {
       const tier = state.amenities[type as RoomType];
       const config = AMENITIES.tiers[tier];
       const count = roomCounts[type] ?? 0;
       const dailyCost = count * (config?.dailyCostPerRoom ?? 0);
-      costText.setText(`${count} rooms x $${config?.dailyCostPerRoom ?? 0} = $${dailyCost}/day`);
+      costText.setText(`${count} occupied x $${config?.dailyCostPerRoom ?? 0} = $${dailyCost}/day`);
     }
 
     // Total amenity cost
     let totalDaily = 0;
     for (const room of state.rooms) {
+      if (room.status !== 'occupied') continue;
       const tier = state.amenities[room.type];
       const config = AMENITIES.tiers[tier];
       if (config) totalDaily += config.dailyCostPerRoom;
     }
-    this.totalCostText.setText(`Total amenity cost: $${totalDaily}/day`);
+    this.totalCostText.setText(`Amenity cost tonight: $${totalDaily}`);
   }
 }

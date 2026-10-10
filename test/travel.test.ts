@@ -97,12 +97,12 @@ describe('Travel in housekeeping', () => {
     expect(processCleaningTick(s).state.rooms[0].cleaningHoursRemaining).toBe(2);
   });
 
-  it('the morning round covers fewer rooms when they are far from the base', () => {
+  it('daily cleans for distant rooms take longer, so one housekeeper gets through fewer in an hour', () => {
     const occupy = (s: HotelState): HotelState => ({
       ...s, hour: HOUSEKEEPING.dailyCleaningHour, day: 4, staff: { ...s.staff, housekeepers: 1 },
       rooms: s.rooms.map(r => ({ ...r, status: 'occupied' as const, guestId: `g-${r.id}`, cleanliness: 50 })),
     });
-    // Same two-room job, near the lobby vs at the far end of the hall
+    // The same two-room job, near the lobby vs at the far end of the hall
     let near = rich(createStarterHotel());
     near = addRoom(near, 'standard', 2, 0)!;
     near = addRoom(near, 'standard', 4, 0)!;
@@ -110,11 +110,14 @@ describe('Travel in housekeeping', () => {
     far = addRoom(far, 'standard', 7, 0)!;
     far = addRoom(far, 'standard', 8, 0)!;
 
-    const cleaned = (s: HotelState) => processDailyHousekeeping(occupy(s)).state.rooms.filter(r => r.lastDailyCleanDay === 4).length;
-    const hours = (s: HotelState) => s.rooms.reduce((sum, r) => sum + 1 / STAFF.housekeeping.dailyCleanRoomsPerHour + getStaffTravelHours(s, r), 0);
-    expect(hours(far)).toBeGreaterThan(hours(near));
-    expect(cleaned(far)).toBeLessThanOrEqual(cleaned(near));
-    expect(cleaned(far)).toBe(hours(far) <= 1 ? 2 : 1);
+    const queued = (s: HotelState) => processDailyHousekeeping(occupy(s)).state;
+    const queuedHours = (s: HotelState) => queued(s).rooms.reduce((sum, r) => sum + r.dailyCleanHoursRemaining, 0);
+    expect(queuedHours(far)).toBeGreaterThan(queuedHours(near));
+    expect(queuedHours(near)).toBeCloseTo(2 / STAFF.housekeeping.dailyCleanRoomsPerHour + near.rooms.reduce((sum, r) => sum + getStaffTravelHours(near, r), 0), 6);
+
+    // One housekeeper-hour: finishes both near rooms only if the walks fit
+    const cleanedAfterAnHour = (s: HotelState) => processCleaningTick(queued(s)).state.rooms.filter(r => r.lastDailyCleanDay === 4).length;
+    expect(cleanedAfterAnHour(far)).toBeLessThanOrEqual(cleanedAfterAnHour(near));
   });
 });
 

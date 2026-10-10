@@ -62,16 +62,6 @@
 
 ## Floors
 
-### Housekeeping is the hidden occupancy cap
-
-**What:** Rebalance turnover cleaning so hiring housekeepers has diminishing returns. Options include shorter turnovers, a rising wage per extra hire, or the noise/review cost of a full hotel biting harder.
-
-**Why:** Found while measuring staff travel time. The balance bots hire one housekeeper per 10 rooms and constantly have 15-20 rooms stuck waiting for cleaning. Hiring one per 7 rooms instead more than doubles a balanced hotel's day-400 valuation ($2.5M to $5.8M; reviews drop 7.5 to 6.4 as it fills up). Each housekeeper (~$60-130/day) unlocks hundreds of dollars a day in bookings, so "hire lots of housekeepers" is a dominant strategy, and every earlier balance pass was tuned against the understaffed bot.
-
-**Effort:** M
-**Priority:** P1
-**Depends on:** None
-
 ### Floor-placement bonuses
 
 **What:** Make where a facility sits matter: a rooftop pool, a ground-floor restaurant or shop that draws walk-ins, a lobby.
@@ -122,6 +112,7 @@
 
 ## Completed
 
+- **Housekeeping balance** (2026-10-10): one housekeeping pool for turnovers and daily cleans, demand with diminishing returns on size, amenities per occupied room, demand-based bot staffing. Right-sized staffing now beats under- and over-staffing. See docs/designs/housekeeping-balance.md
 - **Staff travel time** (2026-10-10): staff walk from the lobby or a staff closet; the walk costs cleaning and repair time. See docs/designs/hallways-and-people.md
 - **Hallways, check-in desks, and people** (2026-10-10): hallway-connected rooms, desks staffed by front desk, walking guests and staff, bulldoze tool. See docs/designs/hallways-and-people.md
 - **Multiple floors** (2026-10-10): stacked 8x5 floor plans, floors bought upward, elevator shafts, vertical noise, view premium, floor switcher. See docs/designs/floors.md

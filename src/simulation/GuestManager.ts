@@ -90,7 +90,7 @@ export function getWordOfMouthMultiplier(state: HotelState): number {
  * demand, word-of-mouth, and any active reputation penalty.
  */
 export function getExpectedArrivalsPerDay(state: HotelState): number {
-  const market = ECONOMY.baseArrivalsPerDay + ECONOMY.arrivalsPerRoom * state.rooms.length;
+  const market = ECONOMY.baseArrivalsPerDay + ECONOMY.arrivalsPerSqrtRoom * Math.sqrt(state.rooms.length);
   return market
     * getStarDemandMultiplier(state.starRating)
     * (state.reviewScore / REVIEW.arrivalScoreDivisor)

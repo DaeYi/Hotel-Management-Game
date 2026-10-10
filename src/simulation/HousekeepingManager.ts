@@ -1,5 +1,5 @@
 import type { HotelState, Room, GameEvent } from './types.js';
-import { HOUSEKEEPING, STAFF } from '../config/balance.js';
+import { HOUSEKEEPING, STAFF, ECONOMY } from '../config/balance.js';
 import { formatRoomLabel } from './HotelState.js';
 import { getStaffTravelHours } from './Layout.js';
 
@@ -15,12 +15,17 @@ export function startTurnoverCleaning(room: Room, quality: string, travelHours =
     status: 'cleaning',
     guestId: undefined,
     cleaningHoursRemaining: duration + (Number.isFinite(travelHours) ? travelHours : 0),
+    dailyCleanHoursRemaining: 0, // a pending daily clean is moot once the guest leaves
   };
 }
 
 /**
- * Process cleaning ticks. Rooms in 'cleaning' status count down,
- * but ONLY if housekeepers are available to work on them.
+ * One hour of housekeeping. All housekeeper-hours form one pool, spent first
+ * on turnovers (they block bookings), finish-soonest first, then on the
+ * daily cleans queued at HOUSEKEEPING.dailyCleaningHour. A housekeeper who
+ * finishes partway through the hour moves on to the next job, so walking time
+ * (folded into each job) costs fractions of an hour. Rooms staff can't reach
+ * make no progress. Daily cleans still pending when the shift ends are skipped.
  * No housekeepers = rooms stay in 'cleaning' state indefinitely.
  */
 export function processCleaningTick(state: HotelState): { state: HotelState; events: GameEvent[] } {
@@ -37,54 +42,72 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
     return { state, events };
   }
 
-  // Housekeeper-hours available this hour. Work is pooled: a housekeeper who
-  // finishes a room partway through the hour moves on to the next, so walking
-  // time (folded into cleaningHoursRemaining) costs fractions of an hour.
-  let budget = housekeepers * STAFF.housekeeping.turnoverRoomsPerHour;
+  let budget = housekeepers;
+  const reachable = (r: Room) => Number.isFinite(getStaffTravelHours(state, r));
 
-  // Rooms being cleaned that staff can reach, finish-soonest first
+  // Turnovers first, finish-soonest first; one housekeeper-hour per room per hour at most
   const cleaningRooms = state.rooms.filter(r => r.status === 'cleaning');
-  const workable = cleaningRooms
-    .filter(r => Number.isFinite(getStaffTravelHours(state, r)))
-    .sort((a, b) => a.cleaningHoursRemaining - b.cleaningHoursRemaining);
-
-  // One housekeeper-hour per room per hour at most
-  const work = new Map<string, number>();
-  for (const room of workable) {
+  const turnoverWork = new Map<string, number>();
+  for (const room of cleaningRooms.filter(reachable).sort((a, b) => a.cleaningHoursRemaining - b.cleaningHoursRemaining)) {
     if (budget <= 0) break;
     const hours = Math.min(1, room.cleaningHoursRemaining, budget);
-    work.set(room.id, hours);
+    turnoverWork.set(room.id, hours);
     budget -= hours;
   }
-  const activeRoomIds = new Set(work.keys());
+
+  // Then the morning's daily cleans, dirtiest first
+  const dailyWork = new Map<string, number>();
+  const dailyJobs = state.rooms.filter(r => r.status === 'occupied' && r.dailyCleanHoursRemaining > 0);
+  for (const room of dailyJobs.filter(reachable).sort((a, b) => a.cleanliness - b.cleanliness)) {
+    if (budget <= 0) break;
+    const hours = Math.min(1, room.dailyCleanHoursRemaining, budget);
+    dailyWork.set(room.id, hours);
+    budget -= hours;
+  }
+
+  const lastShiftHour = state.hour === STAFF.housekeeping.workEndHour - 1;
+  let dailyDone = 0;
+  let dailySkipped = 0;
+  let dailyCost = 0;
 
   const updatedRooms = state.rooms.map(room => {
-    if (room.status !== 'cleaning') return room;
-
-    // Room is cleaning but no housekeeper available (or able to get there)
-    const hours = work.get(room.id);
-    if (hours === undefined) return room;
-
-    const remaining = room.cleaningHoursRemaining - hours;
-    if (remaining <= 1e-9) {
-      events.push({
-        type: 'room_cleaned',
-        message: `Room ${formatRoomLabel(room.gridX, room.gridY, room.floor)} cleaned (${quality})`,
-        data: { roomId: room.id, quality },
-      });
-      return {
-        ...room,
-        status: 'vacant' as const,
-        cleanliness: Math.max(room.cleanliness, targetCleanliness),
-        cleaningHoursRemaining: 0,
-      };
+    const turnover = turnoverWork.get(room.id);
+    if (turnover !== undefined) {
+      const remaining = room.cleaningHoursRemaining - turnover;
+      if (remaining <= 1e-9) {
+        events.push({
+          type: 'room_cleaned',
+          message: `Room ${formatRoomLabel(room.gridX, room.gridY, room.floor)} cleaned (${quality})`,
+          data: { roomId: room.id, quality },
+        });
+        return { ...room, status: 'vacant' as const, cleanliness: Math.max(room.cleanliness, targetCleanliness), cleaningHoursRemaining: 0 };
+      }
+      return { ...room, cleaningHoursRemaining: remaining };
     }
 
-    return { ...room, cleaningHoursRemaining: remaining };
+    if (room.dailyCleanHoursRemaining > 0 && room.status === 'occupied') {
+      const remaining = room.dailyCleanHoursRemaining - (dailyWork.get(room.id) ?? 0);
+      if (remaining <= 1e-9) {
+        dailyDone++;
+        dailyCost += HOUSEKEEPING.dailyCleaningCost;
+        return {
+          ...room,
+          cleanliness: Math.min(100, room.cleanliness + HOUSEKEEPING.dailyCleaningBoost),
+          lastDailyCleanDay: state.day,
+          dailyCleanHoursRemaining: 0,
+        };
+      }
+      if (lastShiftHour) {
+        dailySkipped++;
+        return { ...room, dailyCleanHoursRemaining: 0 };
+      }
+      return { ...room, dailyCleanHoursRemaining: remaining };
+    }
+    return room;
   });
 
   // Warn if rooms are stuck waiting for housekeepers
-  const waitingRooms = cleaningRooms.length - activeRoomIds.size;
+  const waitingRooms = cleaningRooms.length - turnoverWork.size;
   if (waitingRooms > 0) {
     events.push({
       type: 'daily_cleaning',
@@ -92,81 +115,73 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
       data: { waitingRooms },
     });
   }
-
-  return { state: { ...state, rooms: updatedRooms }, events };
-}
-
-/**
- * Process daily housekeeping for occupied rooms.
- * Requires housekeepers to be available. Capacity limits how many rooms
- * can be cleaned per hour.
- */
-export function processDailyHousekeeping(state: HotelState): { state: HotelState; events: GameEvent[] } {
-  const events: GameEvent[] = [];
-  const cadence = state.housekeeping.dailyCadence;
-  const housekeepers = state.staff.housekeepers;
-
-  if (cadence === 'none' || housekeepers <= 0) return { state, events };
-  if (state.hour !== HOUSEKEEPING.dailyCleaningHour) return { state, events };
-
-  // The daily round gets one hour per housekeeper. Each clean takes
-  // 1/dailyCleanRoomsPerHour (a lighter clean than turnover) plus the walk
-  // there, so far-flung rooms eat into how many get done.
-  let budget = housekeepers;
-  const cleanHours = 1 / STAFF.housekeeping.dailyCleanRoomsPerHour;
-
-  // Find rooms eligible for daily cleaning
-  const eligibleRooms = state.rooms.filter(room => {
-    if (room.status !== 'occupied') return false;
-    if (cadence === 'every_other_day' && state.day % 2 !== 0) return false;
-    if (room.lastDailyCleanDay >= state.day) return false;
-    return true;
-  });
-
-  // Clean while the budget lasts, dirtiest rooms first
-  const roomsToClean: Room[] = [];
-  for (const room of [...eligibleRooms].sort((a, b) => a.cleanliness - b.cleanliness)) {
-    const cost = cleanHours + getStaffTravelHours(state, room);
-    if (cost <= budget + 1e-9) {
-      roomsToClean.push(room);
-      budget -= cost;
-    }
-  }
-
-  const cleanedIds = new Set(roomsToClean.map(r => r.id));
-  let totalCost = 0;
-
-  const updatedRooms = state.rooms.map(room => {
-    if (!cleanedIds.has(room.id)) return room;
-    totalCost += HOUSEKEEPING.dailyCleaningCost;
-    return {
-      ...room,
-      cleanliness: Math.min(100, room.cleanliness + HOUSEKEEPING.dailyCleaningBoost),
-      lastDailyCleanDay: state.day,
-    };
-  });
-
-  const roomsCleaned = roomsToClean.length;
-  const roomsSkipped = eligibleRooms.length - roomsCleaned;
-
-  if (roomsCleaned > 0) {
+  if (dailySkipped > 0) {
     events.push({
       type: 'daily_cleaning',
-      message: `Daily housekeeping: ${roomsCleaned} rooms ($${totalCost})${roomsSkipped > 0 ? ` (${roomsSkipped} skipped, need more housekeepers)` : ''}`,
-      data: { roomsCleaned, roomsSkipped, cost: totalCost },
-    });
-  } else if (eligibleRooms.length > 0) {
-    events.push({
-      type: 'daily_cleaning',
-      message: `No housekeepers available! ${eligibleRooms.length} rooms not cleaned`,
-      data: { roomsSkipped: eligibleRooms.length },
+      message: `${dailySkipped} daily clean${dailySkipped > 1 ? 's' : ''} skipped -- need more housekeepers`,
+      data: { roomsSkipped: dailySkipped },
     });
   }
 
   return {
-    state: { ...state, rooms: updatedRooms, cash: state.cash - totalCost },
-    events,
+    state: { ...state, rooms: updatedRooms, cash: state.cash - dailyCost },
+    events: dailyDone > 0
+      ? [...events, { type: 'daily_cleaning', message: `Daily housekeeping: ${dailyDone} room${dailyDone > 1 ? 's' : ''} cleaned ($${dailyCost})`, data: { roomsCleaned: dailyDone, cost: dailyCost } }]
+      : events,
   };
+}
+
+/**
+ * At HOUSEKEEPING.dailyCleaningHour, queue a daily clean for every occupied
+ * room due one (per the cadence). Each job is a light clean plus the walk
+ * there; processCleaningTick works through them alongside turnovers.
+ */
+export function processDailyHousekeeping(state: HotelState): { state: HotelState; events: GameEvent[] } {
+  const cadence = state.housekeeping.dailyCadence;
+  if (cadence === 'none') return { state, events: [] };
+  if (state.hour !== HOUSEKEEPING.dailyCleaningHour) return { state, events: [] };
+  if (cadence === 'every_other_day' && state.day % 2 !== 0) return { state, events: [] };
+
+  const cleanHours = 1 / STAFF.housekeeping.dailyCleanRoomsPerHour;
+  let queued = 0;
+  const rooms = state.rooms.map(room => {
+    if (room.status !== 'occupied' || room.lastDailyCleanDay >= state.day) return room;
+    const travel = getStaffTravelHours(state, room);
+    if (!Number.isFinite(travel)) return room;
+    queued++;
+    return { ...room, dailyCleanHoursRemaining: cleanHours + travel };
+  });
+
+  if (queued === 0) return { state, events: [] };
+  return { state: { ...state, rooms }, events: [] };
+}
+
+/** Average stay in nights, for workload planning. */
+const AVERAGE_STAY_NIGHTS = (ECONOMY.guestMinStay + ECONOMY.guestMaxStay) / 2;
+
+/**
+ * Housekeeper-hours a day of work needs at a given occupancy (0-1): turnovers
+ * for the day's checkouts plus the daily-clean round, each with its walk.
+ */
+export function estimateHousekeepingHours(state: HotelState, occupancy: number): number {
+  const walks = state.rooms.map(r => getStaffTravelHours(state, r)).filter(Number.isFinite);
+  const avgWalk = walks.length > 0 ? walks.reduce((a, b) => a + b, 0) / walks.length : 0;
+  const occupied = state.rooms.length * occupancy;
+  const checkouts = occupied / AVERAGE_STAY_NIGHTS;
+  const turnover = HOUSEKEEPING.turnoverDuration[state.housekeeping.turnoverQuality] ?? HOUSEKEEPING.turnoverDuration.standard;
+  const cadence = state.housekeeping.dailyCadence === 'daily' ? 1 : state.housekeeping.dailyCadence === 'every_other_day' ? 0.5 : 0;
+  const dailyRound = occupied * cadence * (1 / STAFF.housekeeping.dailyCleanRoomsPerHour + avgWalk);
+  return checkouts * (turnover + avgWalk) + dailyRound;
+}
+
+/** Housekeeper-hours available in a day: one per housekeeper per shift hour. */
+export function housekeepingHoursAvailable(housekeepers: number): number {
+  return housekeepers * (STAFF.housekeeping.workEndHour - STAFF.housekeeping.workStartHour);
+}
+
+/** Housekeepers needed to keep up at a given occupancy. */
+export function housekeepersNeeded(state: HotelState, occupancy: number): number {
+  return Math.ceil(estimateHousekeepingHours(state, occupancy) / housekeepingHoursAvailable(1));
 }
 
 /**
@@ -211,37 +226,34 @@ export function checkHousekeepingCompliance(state: HotelState): string | null {
 }
 
 /**
- * Get housekeeping staffing info for the UI.
+ * Get housekeeping staffing info for the UI: what's waiting now, and whether
+ * the team can keep up with a full hotel's workload.
  */
 export function getHousekeepingStatus(state: HotelState): {
   housekeepers: number;
   roomsBeingCleaned: number;
   roomsWaiting: number;
-  dailyCapacity: number;
-  turnoverCapacity: number;
+  hoursNeeded: number;
+  hoursAvailable: number;
   recommendation: string | null;
 } {
   const housekeepers = state.staff.housekeepers;
   const roomsBeingCleaned = state.rooms.filter(r => r.status === 'cleaning').length;
-  const turnoverCapacity = housekeepers * STAFF.housekeeping.turnoverRoomsPerHour;
-  const dailyCapacity = housekeepers * STAFF.housekeeping.dailyCleanRoomsPerHour;
-  const roomsWaiting = Math.max(0, roomsBeingCleaned - turnoverCapacity);
+  const roomsWaiting = Math.max(0, roomsBeingCleaned - housekeepers);
+  const hoursNeeded = estimateHousekeepingHours(state, PLANNING_OCCUPANCY);
+  const hoursAvailable = housekeepingHoursAvailable(housekeepers);
 
   let recommendation: string | null = null;
   if (housekeepers === 0 && state.rooms.length > 0) {
     recommendation = 'Hire housekeepers or rooms will never be cleaned!';
+  } else if (hoursNeeded > hoursAvailable * 1.05) {
+    recommendation = `A busy day needs ${housekeepersNeeded(state, PLANNING_OCCUPANCY)} housekeepers.`;
   } else if (roomsWaiting > 0) {
-    recommendation = `${roomsWaiting} rooms waiting. Hire more housekeepers.`;
-  } else if (housekeepers > 0 && state.rooms.length > dailyCapacity && state.housekeeping.dailyCadence !== 'none') {
-    recommendation = `Need ${Math.ceil(state.rooms.length / STAFF.housekeeping.dailyCleanRoomsPerHour)} housekeepers for daily cleaning of ${state.rooms.length} rooms`;
+    recommendation = `${roomsWaiting} rooms waiting to be cleaned.`;
   }
 
-  return {
-    housekeepers,
-    roomsBeingCleaned,
-    roomsWaiting,
-    dailyCapacity,
-    turnoverCapacity,
-    recommendation,
-  };
+  return { housekeepers, roomsBeingCleaned, roomsWaiting, hoursNeeded, hoursAvailable, recommendation };
 }
+
+/** Occupancy the staffing advice plans for: a busy but not sold-out day. */
+export const PLANNING_OCCUPANCY = 0.85;

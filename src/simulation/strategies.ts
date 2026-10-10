@@ -9,7 +9,10 @@ import { FACILITY_LEVELS } from '../config/balance.js';
 import { getExpectedPrice } from './StarRatingManager.js';
 import { repayLoan, processDailyCosts } from './EconomyManager.js';
 import { getStaffDailyCost } from './MaintenanceManager.js';
+import { housekeepersNeeded, PLANNING_OCCUPANCY } from './HousekeepingManager.js';
 import { getAverageOccupancy } from './ObjectivesManager.js';
+import { getExpectedArrivalsPerDay } from './GuestManager.js';
+import { getTotalDemandMultiplier } from './SeasonManager.js';
 
 /**
  * A scripted player for headless balance runs. Called once per game hour;
@@ -23,13 +26,36 @@ export const idleStrategy: Strategy = state => state;
 interface ManagedOptions {
   priceMultiplier: number; // relative to the fair price for the current star level
   cashReserve: number; // never spend below this on construction
-  expandAtOccupancy: number; // build another room once 7-day occupancy reaches this
+  expandAtOccupancy: number; // build another room while normal-season demand would fill at least this much
   renovate: boolean; // renovate stale rooms and facilities
   upgrade: boolean; // upgrade facilities when unlocked
   market: boolean; // run marketing campaigns when rooms sit empty
+  staffing?: number; // housekeepers hired relative to the estimated need (default 1)
 }
 
 const STALE_DECOR = 60; // reinvesting strategies renovate below this
+// Share of arriving guests who end up booking (the rest find no room in
+// budget or at a price they'll pay) -- measured from balance runs.
+const BOOKING_CONVERSION = 0.7;
+const AVERAGE_STAY_NIGHTS = 2;
+
+/**
+ * The occupancy current demand would fill, with or without the seasonal swing.
+ * Planning on demand rather than recent occupancy avoids two traps: building
+ * for a summer rush that's gone by winter (demand swings 1.5x to 0.6x), and
+ * cutting housekeepers when a cleaning backlog -- not demand -- is what's
+ * keeping rooms empty.
+ */
+function demandOccupancy(state: HotelState, deseasonalize: boolean): number {
+  if (state.rooms.length === 0) return 1;
+  const arrivals = getExpectedArrivalsPerDay(state) / (deseasonalize ? getTotalDemandMultiplier(state.day) : 1);
+  return Math.min(1, arrivals * AVERAGE_STAY_NIGHTS * BOOKING_CONVERSION / state.rooms.length);
+}
+
+/** Staff for today's demand with headroom, within half-full and a busy day. */
+function staffingOccupancy(state: HotelState): number {
+  return Math.min(PLANNING_OCCUPANCY, Math.max(0.5, demandOccupancy(state, false) + 0.1));
+}
 const MAX_RENOVATIONS_PER_DAY = 3; // don't take half the hotel offline at once
 
 // The managed bots follow STARTER_LAYOUT: hallway rows on every floor, with
@@ -141,13 +167,13 @@ function managedStrategy(opts: ManagedOptions): Strategy {
     s = {
       ...s,
       staff: {
-        // Roughly what each role can cover: a housekeeper turns over/cleans ~10
-        // rooms in a shift, a maintenance worker keeps up with ~40, front desk ~20.
-        housekeepers: Math.max(1, Math.ceil(rooms / 10)),
+        // Housekeepers sized to a busy day's workload (turnovers + daily round,
+        // walks included); a maintenance worker keeps up with ~40 rooms, front desk ~20.
+        housekeepers: Math.max(1, Math.round(housekeepersNeeded(s, staffingOccupancy(s)) * (opts.staffing ?? 1))),
         maintenanceWorkers: Math.max(1, Math.ceil(rooms / 40)),
         frontDesk: Math.max(1, Math.ceil(rooms / 20)),
       },
-      housekeeping: { turnoverQuality: s.starRating >= 3 ? 'thorough' : 'standard', dailyCadence: 'daily' },
+      housekeeping: { turnoverQuality: s.peakStarRating >= 2 ? 'thorough' : 'standard', dailyCadence: 'daily' },
     };
 
     const tier = amenityTierFor(s.starRating);
@@ -170,12 +196,12 @@ function managedStrategy(opts: ManagedOptions): Strategy {
         s = addFacility(s, facility, tile.x, tile.y, tile.floor) ?? s;
       } else {
         const type = nextRoomType(s);
-        const busy = rooms < 10 || getAverageOccupancy(s, 7) >= opts.expandAtOccupancy;
+        const busy = rooms < 10 || demandOccupancy(s, true) >= opts.expandAtOccupancy;
         if (busy && afford(s, ROOM_CONFIG[type].buildCost)) {
           s = addRoom(s, type, tile.x, tile.y, tile.floor) ?? s;
         }
       }
-    } else if (getAverageOccupancy(s, 7) >= opts.expandAtOccupancy) {
+    } else if (demandOccupancy(s, true) >= opts.expandAtOccupancy) {
       // Out of room and still busy: build upward (shaft first, so the new floor is reachable)
       if (s.elevators.length === 0) s = addReservedElevator(s, afford);
       const floorCost = getNextFloorCost(s);
@@ -263,18 +289,21 @@ function renovateStale(state: HotelState, canSpend: (cost: number) => boolean): 
 const ALL_SINKS = { renovate: true, upgrade: true, market: true };
 const NO_SINKS = { renovate: false, upgrade: false, market: false };
 
-export const balancedStrategy = managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.75, ...ALL_SINKS });
-export const greedyStrategy = managedStrategy({ priceMultiplier: 1.6, cashReserve: 8000, expandAtOccupancy: 0.75, ...ALL_SINKS });
+export const balancedStrategy = managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...ALL_SINKS });
+export const greedyStrategy = managedStrategy({ priceMultiplier: 1.6, cashReserve: 8000, expandAtOccupancy: 0.9, ...ALL_SINKS });
 /** Balanced play that never renovates, upgrades, or markets -- just banks the cash. */
-export const hoarderStrategy = managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.75, ...NO_SINKS });
+export const hoarderStrategy = managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...NO_SINKS });
 
 export const STRATEGIES: Record<string, Strategy> = {
   idle: idleStrategy,
   balanced: balancedStrategy,
   greedy: greedyStrategy,
   hoarder: hoarderStrategy,
+  // Housekeeping staffed below / above the estimated need, for checking there's a right amount
+  understaffed: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...ALL_SINKS, staffing: 0.6 }),
+  overstaffed: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...ALL_SINKS, staffing: 1.6 }),
   // One sink at a time, for measuring what each is worth
-  renovateOnly: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.75, ...NO_SINKS, renovate: true }),
-  upgradeOnly: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.75, ...NO_SINKS, upgrade: true }),
-  marketOnly: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.75, ...NO_SINKS, market: true }),
+  renovateOnly: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...NO_SINKS, renovate: true }),
+  upgradeOnly: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...NO_SINKS, upgrade: true }),
+  marketOnly: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...NO_SINKS, market: true }),
 };

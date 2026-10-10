@@ -5,7 +5,7 @@ import { starterHallways } from './HotelState.js';
 import { calculateStarRating } from './StarRatingManager.js';
 
 const SAVE_KEY = 'hotel-game-save';
-const SAVE_VERSION = 14; // v14: hallways, check-in desks, 10x6 floor plan
+const SAVE_VERSION = 15; // v15: daily cleans are queued housekeeping jobs
 
 interface SaveData {
   version: number;
@@ -180,6 +180,12 @@ export function loadGame(): SaveData | null {
       packIntoLayout(data.state);
       data.version = 14;
       console.log('Migrated save from v13 to v14');
+    }
+
+    if (data.version === 14) {
+      data.state.rooms = data.state.rooms.map((r: any) => ({ ...r, dailyCleanHoursRemaining: r.dailyCleanHoursRemaining ?? 0 }));
+      data.version = 15;
+      console.log('Migrated save from v14 to v15');
     }
 
     if (data.version !== SAVE_VERSION) {

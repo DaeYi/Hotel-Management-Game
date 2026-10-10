@@ -31,8 +31,9 @@ export function processDailyCosts(state: HotelState): EconomyResult {
   const operatingCosts = state.rooms.length * ECONOMY.dailyOperatingCostPerRoom * upkeep;
   result.cashDelta -= operatingCosts;
 
-  // In-room amenity costs per room (based on tier per room type)
+  // In-room amenities are used up by guests: charged per occupied room (tier per room type)
   for (const room of state.rooms) {
+    if (room.status !== 'occupied') continue;
     const tier = state.amenities[room.type];
     const tierConfig = AMENITIES.tiers[tier];
     if (tierConfig) {

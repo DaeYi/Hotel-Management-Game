@@ -192,7 +192,7 @@ export class StaffPanel {
     const hkStatus = getHousekeepingStatus(state);
     const waitStr = hkStatus.roomsWaiting > 0 ? ` (${hkStatus.roomsWaiting} waiting!)` : '';
     this.sections.housekeepers.statusText.setText(
-      `Cleaning: ${hkStatus.roomsBeingCleaned}${waitStr}  |  Cap: ${hkStatus.turnoverCapacity}/hr`
+      `Cleaning: ${hkStatus.roomsBeingCleaned}${waitStr}  |  Busy day: ${Math.round(hkStatus.hoursNeeded)}h of ${hkStatus.hoursAvailable}h`
     );
 
     // Maintenance

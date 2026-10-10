@@ -123,6 +123,7 @@ export function addRoom(
     lastDailyCleanDay: 0,
     decor: 100,
     renovationHoursRemaining: 0,
+    dailyCleanHoursRemaining: 0,
   };
 
   return {

@@ -33,7 +33,7 @@ describe('Prestige upkeep', () => {
     const fiveStar = { ...oneStar, starRating: 5 };
 
     const roomCost = (s: typeof state) => -processDailyCosts(s).cashDelta;
-    const amenities = 4 * 5; // basic tier, unscaled
+    const amenities = 0; // amenities are charged per occupied room, and these are empty
     expect(roomCost(oneStar) - amenities).toBeCloseTo(4 * ECONOMY.dailyOperatingCostPerRoom, 5);
     expect(roomCost(fiveStar) - amenities).toBeCloseTo(4 * ECONOMY.dailyOperatingCostPerRoom * STAR_RATING.upkeepMultiplier[5], 5);
     expect(getStaffDailyCost(fiveStar)).toBeCloseTo(getStaffDailyCost(oneStar) * STAR_RATING.upkeepMultiplier[5], 5);
@@ -276,7 +276,7 @@ describe('SaveManager v11 -> current', () => {
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 11, prngState: 1, state: legacy, timestamp: 0 }));
 
     const loaded = loadGame()!;
-    expect(loaded.version).toBe(14);
+    expect(loaded.version).toBe(15);
     expect(loaded.state.rooms[0]).toMatchObject({ decor: 100, renovationHoursRemaining: 0 });
     expect(loaded.state.facilities[0]).toMatchObject({ decor: 100, level: 1 });
     expect(loaded.state.activeCampaign).toBeNull();

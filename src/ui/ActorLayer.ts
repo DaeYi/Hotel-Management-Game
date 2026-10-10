@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { HotelState, GameEvent, Room, GuestTrait } from '../simulation/types';
-import { STAFF, HOUSEKEEPING } from '../config/balance';
+import { STAFF } from '../config/balance';
 import { findPath, getEntranceTiles, getAccessibleDesks, getMannedDeskStaff, getStaffBases } from '../simulation/Layout';
 import type { Pos } from '../simulation/Layout';
 import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE, getGuestDotColor } from './GridRenderer';
@@ -219,9 +219,7 @@ export class ActorLayer {
   /** Rooms being turned over, plus occupied rooms getting their daily clean this morning. */
   private housekeepingTargets(state: HotelState): Room[] {
     const turnover = state.rooms.filter(r => r.status === 'cleaning');
-    const daily = state.hour >= HOUSEKEEPING.dailyCleaningHour && state.hour < HOUSEKEEPING.dailyCleaningHour + 3
-      ? state.rooms.filter(r => r.status === 'occupied' && r.lastDailyCleanDay === state.day)
-      : [];
+    const daily = state.rooms.filter(r => r.status === 'occupied' && r.dailyCleanHoursRemaining > 0);
     return [...turnover, ...daily];
   }
 
