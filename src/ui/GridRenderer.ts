@@ -28,6 +28,7 @@ const ROOM_COLORS: Record<RoomType, number> = {
 const ELEVATOR_COLOR = 0x7f8c8d;
 const HALLWAY_COLOR = 0x4b4b63;
 const DESK_COLOR = 0xa0522d;
+const CLOSET_COLOR = 0x16a085;
 
 const ROOM_OCCUPIED_COLORS: Record<RoomType, number> = {
   standard: 0x2e6da4,
@@ -113,7 +114,7 @@ export class GridRenderer {
     // Get color: room types use ROOM_COLORS, facilities use FACILITY_CONFIG
     const color = ROOM_COLORS[type as RoomType]
       ?? FACILITY_CONFIG[type]?.color
-      ?? (type === 'hallway' ? HALLWAY_COLOR : type === 'desk' ? DESK_COLOR : type === 'bulldoze' ? 0xc0392b : ELEVATOR_COLOR);
+      ?? (type === 'hallway' ? HALLWAY_COLOR : type === 'desk' ? DESK_COLOR : type === 'closet' ? CLOSET_COLOR : type === 'bulldoze' ? 0xc0392b : ELEVATOR_COLOR);
 
     if (canPlace) {
       this.hoverGraphics.fillStyle(color, 0.4);
@@ -219,6 +220,14 @@ export class GridRenderer {
         this.roomGraphics.fillRect(x, y, TILE_SIZE, TILE_SIZE);
         this.roomGraphics.fillStyle(0x6b6b85, 0.6);
         this.roomGraphics.fillRect(x + TILE_SIZE / 2 - 1, y + TILE_SIZE / 2 - 1, 2, 2);
+      } else if (fixture.type === 'closet') {
+        // Staff closet: a door with shelves behind it
+        this.roomGraphics.fillStyle(CLOSET_COLOR, 0.85);
+        this.roomGraphics.fillRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+        this.roomGraphics.fillStyle(0xffffff, 0.6);
+        for (let shelf = 0; shelf < 3; shelf++) {
+          this.roomGraphics.fillRect(x + 10, y + 12 + shelf * 10, TILE_SIZE - 20, 3);
+        }
       } else {
         // Floor tile with a wooden counter across the top half
         this.roomGraphics.fillStyle(HALLWAY_COLOR, 1);

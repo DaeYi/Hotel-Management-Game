@@ -431,7 +431,7 @@ describe('HousekeepingManager', () => {
   });
 
   it('processCleaningTick restores cleanliness to the quality-tier target when a room finishes', () => {
-    let state = createHotelState(); // default turnoverQuality: 'standard'
+    let state = createStarterHotel(); // staff need hallways to reach rooms // default turnoverQuality: 'standard'
     state = addRoom(state, 'standard', 0, 0)!;
     state = {
       ...state,
@@ -446,7 +446,7 @@ describe('HousekeepingManager', () => {
   });
 
   it('0 housekeepers: cleaning rooms make no progress (stuck indefinitely)', () => {
-    let state = createHotelState();
+    let state = createStarterHotel(); // staff need hallways to reach rooms
     state = addRoom(state, 'standard', 0, 0)!;
     state = {
       ...state,
@@ -461,7 +461,7 @@ describe('HousekeepingManager', () => {
   });
 
   it('outside the 6am-10pm work shift: cleaning rooms make no progress', () => {
-    let state = createHotelState();
+    let state = createStarterHotel(); // staff need hallways to reach rooms
     state = addRoom(state, 'standard', 0, 0)!;
     state = {
       ...state,
@@ -475,7 +475,7 @@ describe('HousekeepingManager', () => {
   });
 
   it('daily housekeeping: cadence "none" never cleans occupied rooms', () => {
-    let state = createHotelState();
+    let state = createStarterHotel(); // staff need hallways to reach rooms
     state = addRoom(state, 'standard', 0, 0)!;
     state = {
       ...state,
@@ -491,7 +491,7 @@ describe('HousekeepingManager', () => {
   });
 
   it('daily housekeeping: cadence "every_other_day" only cleans on even days', () => {
-    let state = createHotelState();
+    let state = createStarterHotel(); // staff need hallways to reach rooms
     state = addRoom(state, 'standard', 0, 0)!;
     const base = {
       ...state,
@@ -509,26 +509,26 @@ describe('HousekeepingManager', () => {
   });
 
   it('checkHousekeepingCompliance: warns with 0 housekeepers and rooms built', () => {
-    let state = createHotelState();
+    let state = createStarterHotel(); // staff need hallways to reach rooms
     state = addRoom(state, 'standard', 0, 0)!;
     state = { ...state, staff: { ...state.staff, housekeepers: 0 } };
     expect(checkHousekeepingCompliance(state)).toMatch(/No housekeepers/);
   });
 
   it('checkHousekeepingCompliance: 3-star with cadence "none" is non-compliant', () => {
-    let state = createHotelState();
+    let state = createStarterHotel(); // staff need hallways to reach rooms
     state = { ...state, starRating: 3, housekeeping: { turnoverQuality: 'standard', dailyCadence: 'none' } };
     expect(checkHousekeepingCompliance(state)).toMatch(/every-other-day/);
   });
 
   it('checkHousekeepingCompliance: 4-star requires daily cadence', () => {
-    let state = createHotelState();
+    let state = createStarterHotel(); // staff need hallways to reach rooms
     state = { ...state, starRating: 4, housekeeping: { turnoverQuality: 'standard', dailyCadence: 'every_other_day' } };
     expect(checkHousekeepingCompliance(state)).toMatch(/daily housekeeping/);
   });
 
   it('checkHousekeepingCompliance: compliant hotel returns null', () => {
-    let state = createHotelState();
+    let state = createStarterHotel(); // staff need hallways to reach rooms
     state = {
       ...state,
       starRating: 4,
@@ -541,7 +541,7 @@ describe('HousekeepingManager', () => {
 
 describe('MaintenanceManager', () => {
   it('only repairs vacant rooms below the condition threshold, never occupied ones', () => {
-    let state = createHotelState();
+    let state = createStarterHotel(); // staff need hallways to reach rooms
     state = addRoom(state, 'standard', 0, 0)!;
     state = addRoom(state, 'standard', 1, 0)!;
     state = {
@@ -560,7 +560,7 @@ describe('MaintenanceManager', () => {
   });
 
   it('repairs the worst-condition room first when workers are outnumbered', () => {
-    let state = createHotelState();
+    let state = createStarterHotel(); // staff need hallways to reach rooms
     state = addRoom(state, 'standard', 0, 0)!;
     state = addRoom(state, 'standard', 1, 0)!;
     state = addRoom(state, 'standard', 2, 0)!;
@@ -582,7 +582,7 @@ describe('MaintenanceManager', () => {
   });
 
   it('does nothing outside the 6am-10pm shift', () => {
-    let state = createHotelState();
+    let state = createStarterHotel(); // staff need hallways to reach rooms
     state = addRoom(state, 'standard', 0, 0)!;
     state = {
       ...state,
@@ -596,8 +596,8 @@ describe('MaintenanceManager', () => {
   });
 
   it('caps repairs at one room per worker per hour', () => {
-    let state = createHotelState();
-    for (let i = 0; i < 5; i++) state = addRoom(state, 'standard', i, 0)!;
+    let state = createStarterHotel(); // staff need hallways to reach rooms
+    for (let i = 0; i < 5; i++) state = addRoom(state, 'standard', i, 2)!;
     state = {
       ...state,
       hour: 10,

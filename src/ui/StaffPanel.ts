@@ -4,7 +4,10 @@ import { STAFF } from '../config/balance';
 import { getMaintenanceStatus, getStaffDailyCost } from '../simulation/MaintenanceManager';
 import { getUpkeepMultiplier } from '../simulation/StarRatingManager';
 import { getHousekeepingStatus } from '../simulation/HousekeepingManager';
-import { getAccessibleDesks, getMannedDeskStaff, getCheckInCapacity } from '../simulation/Layout';
+import { getAccessibleDesks, getMannedDeskStaff, getCheckInCapacity, getStaffTravelHours } from '../simulation/Layout';
+import { formatWalk } from './RoomInspector';
+
+const LONG_WALK_HOURS = 0.33; // 20 minutes: worth a closet
 
 const PANEL_W = 280;
 const PANEL_H = 400;
@@ -98,7 +101,7 @@ export class StaffPanel {
     this.container.add(this.totalCostText);
 
     // Recommendation
-    this.recommendText = scene.add.text(12, y + 24, '', {
+    this.recommendText = scene.add.text(12, y + 40, '', {
       fontSize: '10px', fontFamily: 'monospace', color: '#f1c40f',
       wordWrap: { width: PANEL_W - 24 }, lineSpacing: 2,
     });
@@ -203,7 +206,12 @@ export class StaffPanel {
     // Wages scale with prestige upkeep; the per-role labels show base wages
     const upkeep = getUpkeepMultiplier(state.starRating);
     const upkeepNote = upkeep > 1 ? ` (${state.starRating}★ wages x${upkeep})` : '';
-    this.totalCostText.setText(`Total staff: $${Math.round(getStaffDailyCost(state))}/day${upkeepNote}`);
+    const walks = state.rooms.map(r => getStaffTravelHours(state, r)).filter(Number.isFinite);
+    const avgWalk = walks.length > 0 ? walks.reduce((a, b) => a + b, 0) / walks.length : 0;
+    this.totalCostText.setText(
+      `Total staff: $${Math.round(getStaffDailyCost(state))}/day${upkeepNote}\n` +
+      `Avg walk to rooms: ${formatWalk(avgWalk)}`
+    );
 
     // Most urgent recommendation
     const recommendations: string[] = [];
@@ -212,9 +220,24 @@ export class StaffPanel {
     }
     if (hkStatus.recommendation) recommendations.push(hkStatus.recommendation);
     if (maintStatus.recommendation) recommendations.push(maintStatus.recommendation);
+    const farFloor = this.farthestFloorWithoutCloset(state);
+    if (farFloor !== null) recommendations.push(`Long walks on floor ${farFloor + 1}: add a staff closet there.`);
     this.recommendText.setText(recommendations.length > 0
       ? '\u2139 ' + recommendations[0]
       : ''
     );
+  }
+
+  /** An upper floor whose rooms average a long walk and that has no closet yet, or null. */
+  private farthestFloorWithoutCloset(state: HotelState): number | null {
+    let worst: { floor: number; hours: number } | null = null;
+    for (let floor = 1; floor < state.floorCount; floor++) {
+      if (state.fixtures.some(f => f.type === 'closet' && f.floor === floor)) continue;
+      const walks = state.rooms.filter(r => r.floor === floor).map(r => getStaffTravelHours(state, r)).filter(Number.isFinite);
+      if (walks.length === 0) continue;
+      const hours = walks.reduce((a, b) => a + b, 0) / walks.length;
+      if (hours > LONG_WALK_HOURS && (!worst || hours > worst.hours)) worst = { floor, hours };
+    }
+    return worst?.floor ?? null;
   }
 }

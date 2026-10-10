@@ -478,14 +478,14 @@ export class GameScene extends Phaser.Scene {
   /** The state after building `type` at a tile on the current floor, or null if not allowed (also used as the hover check). */
   private tryBuild(type: BuildType, gridX: number, gridY: number): HotelState | null {
     if (type === 'bulldoze') return this.bulldoze(gridX, gridY);
-    if (type === 'hallway' || type === 'desk') return addFixture(this.state, type, gridX, gridY, this.currentFloor);
+    if (type === 'hallway' || type === 'desk' || type === 'closet') return addFixture(this.state, type, gridX, gridY, this.currentFloor);
     if (type === 'elevator') return addElevator(this.state, gridX, gridY);
     if (type in ROOM_CONFIG) return addRoom(this.state, type as RoomType, gridX, gridY, this.currentFloor);
     if (type in FACILITY_CONFIG) return addFacility(this.state, type as FacilityType, gridX, gridY, this.currentFloor);
     return null;
   }
 
-  /** Remove a hallway, desk, or elevator shaft. Rooms and facilities are demolished from their inspectors. */
+  /** Remove a hallway, desk, staff closet, or elevator shaft. Rooms and facilities are demolished from their inspectors. */
   private bulldoze(gridX: number, gridY: number): HotelState | null {
     const fixture = this.state.fixtures.find(f => f.floor === this.currentFloor && f.gridX === gridX && f.gridY === gridY);
     if (fixture) return demolishFixture(this.state, fixture.id);

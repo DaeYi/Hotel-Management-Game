@@ -6,6 +6,7 @@ import { processObjectives, recordDailyStat } from './ObjectivesManager.js';
 import { decayDecor, processRenovationTick } from './DecorManager.js';
 import { tickCampaign } from './MarketingManager.js';
 import { formatRoomLabel } from './HotelState.js';
+import { getStaffTravelHours } from './Layout.js';
 import { tickNoiseSources } from './NoiseManager.js';
 import { processCleaningTick, processDailyHousekeeping, degradeCleanliness, startTurnoverCleaning } from './HousekeepingManager.js';
 import { calculateStarRating } from './StarRatingManager.js';
@@ -134,7 +135,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
 
   const roomsAfterDeparture = current.rooms.map(room => {
     if (room.guestId && departedGuestIds.has(room.guestId)) {
-      const cleaned = startTurnoverCleaning(room, current.housekeeping.turnoverQuality);
+      const cleaned = startTurnoverCleaning(room, current.housekeeping.turnoverQuality, getStaffTravelHours(current, room));
       return { ...cleaned, cleaningHoursRemaining: cleaned.cleaningHoursRemaining + checkoutDelay };
     }
     return room;

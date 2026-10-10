@@ -577,6 +577,22 @@ export const HALLWAY = {
   buildCost: 300, // per tile
 };
 
+// Staff walk from their nearest base -- the lobby (in front of a check-in desk)
+// or a staff closet -- to every job, and that walk is part of the job's time.
+// Turnover cleans take longer, the morning daily-clean round covers fewer
+// rooms, and repairs get less done per hour the further away a room is.
+export const TRAVEL = {
+  hoursPerTile: 0.03, // ~2 minutes per hallway tile
+  hoursPerFloor: 0.15, // ~9 minutes per floor of elevator ride
+  minRepairEfficiency: 0.25, // a far-off repair still gets at least this share of the hour
+};
+
+// A staff closet is an extra staff base on its floor: housekeeping and
+// maintenance start (and wait) there, cutting walks to nearby rooms.
+export const CLOSET = {
+  buildCost: 2500,
+};
+
 // Guests check in at a desk on the ground floor; each desk seats a limited
 // number of front desk staff. No reachable desk, no check-ins.
 export const DESK = {
@@ -595,6 +611,7 @@ export const STARTER_LAYOUT = {
     [GRID.width - 1, 2], [GRID.width - 1, 3],
   ] as Array<[number, number]>,
   deskTiles: [[3, 0], [4, 0]] as Array<[number, number]>, // ground floor; the first comes free
+  closetTile: [3, 0] as [number, number], // upper floors (the desk spot downstairs)
   elevatorTiles: [[0, 0], [1, 0], [2, 0]] as Array<[number, number]>, // kept clear for shafts
 };
 

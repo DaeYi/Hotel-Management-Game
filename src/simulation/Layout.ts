@@ -1,5 +1,5 @@
 import type { HotelState, Fixture, Elevator } from './types.js';
-import { GRID, DESK, STAFF } from '../config/balance.js';
+import { GRID, DESK, STAFF, TRAVEL } from '../config/balance.js';
 
 /** A tile position anywhere in the building. */
 export interface Pos {
@@ -100,6 +100,74 @@ export function getMannedDeskStaff(state: HotelState): number {
 /** Guests that can be checked in per hour. Zero without a reachable, staffed desk. */
 export function getCheckInCapacity(state: HotelState): number {
   return getMannedDeskStaff(state) * STAFF.frontDesk.checkInsPerHour;
+}
+
+/**
+ * Where housekeeping and maintenance start from: the hallway tile in front of
+ * each reachable desk (the lobby) and each reachable staff closet. With
+ * neither, staff come in off the street.
+ */
+export function getStaffBases(state: HotelState): Pos[] {
+  const reachable = getReachableSet(state);
+  const bases: Pos[] = [];
+  for (const f of state.fixtures) {
+    if (f.type !== 'desk' && f.type !== 'closet') continue;
+    for (const [dx, dy] of NEIGHBORS) {
+      const x = f.gridX + dx;
+      const y = f.gridY + dy;
+      if (reachable.has(key(x, y, f.floor))) {
+        bases.push({ gridX: x, gridY: y, floor: f.floor });
+        break;
+      }
+    }
+  }
+  return bases.length > 0 ? bases : getEntranceTiles(state);
+}
+
+// Travel times depend only on the layout, like reachability -- cache them too.
+const travelCache = new WeakMap<Fixture[], { elevators: Elevator[]; floorCount: number; hours: Map<string, number> }>();
+
+/** Walking time (hours) from the nearest staff base to every reachable walkable tile. */
+function getTravelMap(state: HotelState): Map<string, number> {
+  const cached = travelCache.get(state.fixtures);
+  if (cached && cached.elevators === state.elevators && cached.floorCount === state.floorCount) return cached.hours;
+
+  const walkable = getWalkableSet(state);
+  const hours = new Map<string, number>();
+  const frontier: Array<{ pos: Pos; h: number }> = getStaffBases(state).map(pos => ({ pos, h: 0 }));
+
+  // Dijkstra over a tiny graph: steps cost hoursPerTile, elevator rides hoursPerFloor
+  while (frontier.length > 0) {
+    frontier.sort((a, b) => a.h - b.h);
+    const { pos, h } = frontier.shift()!;
+    const k = key(pos.gridX, pos.gridY, pos.floor);
+    if (hours.has(k)) continue;
+    hours.set(k, h);
+    for (const next of walkableNeighbors(state, walkable, pos)) {
+      const nk = key(next.gridX, next.gridY, next.floor);
+      if (hours.has(nk)) continue;
+      const cost = next.floor !== pos.floor ? TRAVEL.hoursPerFloor * Math.abs(next.floor - pos.floor) : TRAVEL.hoursPerTile;
+      frontier.push({ pos: next, h: h + cost });
+    }
+  }
+
+  travelCache.set(state.fixtures, { elevators: state.elevators, floorCount: state.floorCount, hours });
+  return hours;
+}
+
+/**
+ * How long staff take to walk from their nearest base to a room's door, in
+ * hours (one step further than the hallway tile outside). Infinity when no
+ * route exists -- staff can't service that room.
+ */
+export function getStaffTravelHours(state: HotelState, room: { gridX: number; gridY: number; floor: number }): number {
+  const hours = getTravelMap(state);
+  let best = Infinity;
+  for (const [dx, dy] of NEIGHBORS) {
+    const h = hours.get(key(room.gridX + dx, room.gridY + dy, room.floor));
+    if (h !== undefined) best = Math.min(best, h + TRAVEL.hoursPerTile);
+  }
+  return best;
 }
 
 /**

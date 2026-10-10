@@ -99,9 +99,9 @@ export interface Facility {
   level: number; // 1-3, raised by upgradeFacility
 }
 
-export type FixtureType = 'hallway' | 'desk';
+export type FixtureType = 'hallway' | 'desk' | 'closet';
 
-/** Single-tile building infrastructure: walkable hallways and check-in desks (ground floor only). */
+/** Single-tile building infrastructure: walkable hallways, check-in desks (ground floor only), and staff closets. */
 export interface Fixture {
   id: string;
   type: FixtureType;

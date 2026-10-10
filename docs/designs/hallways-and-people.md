@@ -54,8 +54,29 @@ The founder asked for:
 
 `npm run simulate -- 400 24`: balanced 0% bankrupt, 96% at 5★, $2.17M median valuation (floors-only was 58% / $1.66M). Hallways cost a little, but buffering noise lifts reviews. The never-renovate strategies still fail occasionally (upgradeOnly 8%) via the winter crunch noted in floors.md.
 
+## Follow-up: staff travel time (shipped)
+
+Walking now costs simulation time. `Layout.getStaffTravelHours` measures the walk from the nearest **staff base** to a room's door: about 2 minutes per hallway tile (`TRAVEL.hoursPerTile` 0.03) and 9 minutes per floor of elevator ride (`hoursPerFloor` 0.15). It's cached per layout like reachability.
+
+**Staff bases** are the hallway tile in front of each reachable desk (the lobby) and each reachable **Staff Closet**, a new $2,500 fixture placeable on any floor. With neither, staff come in from the street. Rooms with no route get no service.
+
+What the walk costs:
+- **Turnover cleans:** the walk is added to `cleaningHoursRemaining` when the job starts. Housekeeping hours are pooled, so a housekeeper who finishes partway through an hour moves on, and a 20-minute walk costs 20 minutes rather than a whole hourly tick.
+- **The morning daily-clean round:** one hour per housekeeper. Each room costs 0.5h plus its walk, dirtiest first, so distant rooms mean fewer get done.
+- **Repairs:** each hour's repair is scaled by `1 - walk`, never below `TRAVEL.minRepairEfficiency` (25%).
+
+**UI:**
+- **Room inspector:** shows "Staff walk: N min".
+- **Staff panel:** shows the average walk, and suggests a closet for any upper floor averaging over 20 minutes.
+- **Walkers:** idle staff wait at a base on their own floor.
+
+**Bots** build a closet on each upper floor once it has 6 rooms (reserved tile (3,0) upstairs). In a typical two-floor bot hotel, ground-floor rooms average a 17-minute walk; upstairs it's 28 minutes without a closet and 7 with one.
+
+**Measured effect** (balanced bot, 12 runs × 400 days): average review 7.21 → 7.08, with more daily cleans skipped. The effect is modest because turnovers take 4-6 hours, so a 20-minute walk adds only about 6%. The daily round and upper floors without closets feel it most.
+
+**Finding while measuring:** turnover cleaning, not demand, has been capping occupancy all along. See "Housekeeping is the hidden occupancy cap" in TODOS.md.
+
 ## Known gaps
 
-- **Walking takes no time:** a far-away room isn't slower to clean or reach. Making staff travel time real would give layout real consequences.
 - **No lobby or entrance tile:** the street entrance is implicit (any edge hallway).
 - **Crowd cap:** guests beyond 40 simultaneous walkers skip the walk animation.

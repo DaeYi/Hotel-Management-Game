@@ -1,18 +1,20 @@
 import type { HotelState, Room, GameEvent } from './types.js';
 import { HOUSEKEEPING, STAFF } from '../config/balance.js';
 import { formatRoomLabel } from './HotelState.js';
+import { getStaffTravelHours } from './Layout.js';
 
 /**
- * Start turnover cleaning on a room after guest checkout.
+ * Start turnover cleaning on a room after guest checkout. The housekeeper's
+ * walk there (see getStaffTravelHours) is part of the job's time.
  * Room transitions: occupied → cleaning
  */
-export function startTurnoverCleaning(room: Room, quality: string): Room {
+export function startTurnoverCleaning(room: Room, quality: string, travelHours = 0): Room {
   const duration = HOUSEKEEPING.turnoverDuration[quality] ?? HOUSEKEEPING.turnoverDuration.standard;
   return {
     ...room,
     status: 'cleaning',
     guestId: undefined,
-    cleaningHoursRemaining: duration,
+    cleaningHoursRemaining: duration + (Number.isFinite(travelHours) ? travelHours : 0),
   };
 }
 
@@ -35,27 +37,36 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
     return { state, events };
   }
 
-  // How many rooms can be actively cleaned this hour?
-  const turnoverCapacity = housekeepers * STAFF.housekeeping.turnoverRoomsPerHour;
+  // Housekeeper-hours available this hour. Work is pooled: a housekeeper who
+  // finishes a room partway through the hour moves on to the next, so walking
+  // time (folded into cleaningHoursRemaining) costs fractions of an hour.
+  let budget = housekeepers * STAFF.housekeeping.turnoverRoomsPerHour;
 
-  // Get rooms being cleaned, sorted by least remaining time (finish soonest first)
-  const cleaningRooms = state.rooms
-    .filter(r => r.status === 'cleaning')
+  // Rooms being cleaned that staff can reach, finish-soonest first
+  const cleaningRooms = state.rooms.filter(r => r.status === 'cleaning');
+  const workable = cleaningRooms
+    .filter(r => Number.isFinite(getStaffTravelHours(state, r)))
     .sort((a, b) => a.cleaningHoursRemaining - b.cleaningHoursRemaining);
 
-  // Only the first N rooms (by capacity) get progress this hour
-  const activeRoomIds = new Set(
-    cleaningRooms.slice(0, turnoverCapacity).map(r => r.id)
-  );
+  // One housekeeper-hour per room per hour at most
+  const work = new Map<string, number>();
+  for (const room of workable) {
+    if (budget <= 0) break;
+    const hours = Math.min(1, room.cleaningHoursRemaining, budget);
+    work.set(room.id, hours);
+    budget -= hours;
+  }
+  const activeRoomIds = new Set(work.keys());
 
   const updatedRooms = state.rooms.map(room => {
     if (room.status !== 'cleaning') return room;
 
-    // Room is cleaning but no housekeeper available for it
-    if (!activeRoomIds.has(room.id)) return room;
+    // Room is cleaning but no housekeeper available (or able to get there)
+    const hours = work.get(room.id);
+    if (hours === undefined) return room;
 
-    const remaining = room.cleaningHoursRemaining - 1;
-    if (remaining <= 0) {
+    const remaining = room.cleaningHoursRemaining - hours;
+    if (remaining <= 1e-9) {
       events.push({
         type: 'room_cleaned',
         message: `Room ${formatRoomLabel(room.gridX, room.gridY, room.floor)} cleaned (${quality})`,
@@ -98,9 +109,11 @@ export function processDailyHousekeeping(state: HotelState): { state: HotelState
   if (cadence === 'none' || housekeepers <= 0) return { state, events };
   if (state.hour !== HOUSEKEEPING.dailyCleaningHour) return { state, events };
 
-  // How many occupied rooms can be daily-cleaned this hour?
-  // (Daily cleaning is faster than turnover since it's a lighter clean)
-  const dailyCapacity = housekeepers * STAFF.housekeeping.dailyCleanRoomsPerHour;
+  // The daily round gets one hour per housekeeper. Each clean takes
+  // 1/dailyCleanRoomsPerHour (a lighter clean than turnover) plus the walk
+  // there, so far-flung rooms eat into how many get done.
+  let budget = housekeepers;
+  const cleanHours = 1 / STAFF.housekeeping.dailyCleanRoomsPerHour;
 
   // Find rooms eligible for daily cleaning
   const eligibleRooms = state.rooms.filter(room => {
@@ -110,10 +123,15 @@ export function processDailyHousekeeping(state: HotelState): { state: HotelState
     return true;
   });
 
-  // Clean up to capacity, prioritizing dirtiest rooms
-  const roomsToClean = [...eligibleRooms]
-    .sort((a, b) => a.cleanliness - b.cleanliness)
-    .slice(0, dailyCapacity);
+  // Clean while the budget lasts, dirtiest rooms first
+  const roomsToClean: Room[] = [];
+  for (const room of [...eligibleRooms].sort((a, b) => a.cleanliness - b.cleanliness)) {
+    const cost = cleanHours + getStaffTravelHours(state, room);
+    if (cost <= budget + 1e-9) {
+      roomsToClean.push(room);
+      budget -= cost;
+    }
+  }
 
   const cleanedIds = new Set(roomsToClean.map(r => r.id));
   let totalCost = 0;

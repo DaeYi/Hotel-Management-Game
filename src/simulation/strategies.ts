@@ -1,5 +1,5 @@
 import type { HotelState, RoomType, FacilityType, AmenityTier } from './types.js';
-import { ROOM_CONFIG, FACILITY_CONFIG, GRID, LOAN, ELEVATOR, STARTER_LAYOUT, DESK, HALLWAY } from '../config/balance.js';
+import { ROOM_CONFIG, FACILITY_CONFIG, GRID, LOAN, ELEVATOR, STARTER_LAYOUT, DESK, HALLWAY, CLOSET } from '../config/balance.js';
 import {
   addRoom, addFacility, demolishRoom, isTileOccupied, isUnlocked, setRoomPrice, renovateRoom, renovateFacility,
   upgradeFacility, getFacilityUpgradeCost, addElevator, buildFloor, getNextFloorCost, getElevatorLoad, addFixture,
@@ -38,7 +38,10 @@ const ELEVATOR_TILES = STARTER_LAYOUT.elevatorTiles;
 const isReservedTile = (x: number, y: number, floor: number) =>
   STARTER_LAYOUT.hallwayTiles.some(([hx, hy]) => hx === x && hy === y)
   || ELEVATOR_TILES.some(([ex, ey]) => ex === x && ey === y)
-  || (floor === 0 && STARTER_LAYOUT.deskTiles.some(([dx, dy]) => dx === x && dy === y));
+  || (floor === 0 && STARTER_LAYOUT.deskTiles.some(([dx, dy]) => dx === x && dy === y))
+  || (floor > 0 && STARTER_LAYOUT.closetTile[0] === x && STARTER_LAYOUT.closetTile[1] === y);
+
+const CLOSET_MIN_ROOMS = 6; // an upper floor gets its own staff closet once it has this many rooms
 
 /** First free room tile, lowest floor first, row-major -- keeps the hotel compact, so facilities end up next to rooms. */
 function findFreeTile(state: HotelState): { x: number; y: number; floor: number } | null {
@@ -56,6 +59,20 @@ function findFreeTile(state: HotelState): { x: number; y: number; floor: number 
 function layHallways(state: HotelState, floor: number): HotelState {
   let s = state;
   for (const [x, y] of STARTER_LAYOUT.hallwayTiles) s = addFixture(s, 'hallway', x, y, floor) ?? s;
+  return s;
+}
+
+/** Give each busy upper floor a staff closet, so housekeeping and maintenance don't walk up from the lobby. */
+function addClosetsIfNeeded(state: HotelState, afford: Afford): HotelState {
+  let s = state;
+  const [x, y] = STARTER_LAYOUT.closetTile;
+  for (let floor = 1; floor < s.floorCount; floor++) {
+    const rooms = s.rooms.filter(r => r.floor === floor).length;
+    const hasCloset = s.fixtures.some(f => f.type === 'closet' && f.floor === floor);
+    if (rooms >= CLOSET_MIN_ROOMS && !hasCloset && afford(s, CLOSET.buildCost)) {
+      s = addFixture(s, 'closet', x, y, floor) ?? s;
+    }
+  }
   return s;
 }
 
@@ -170,6 +187,7 @@ function managedStrategy(opts: ManagedOptions): Strategy {
     }
 
     s = addDeskIfNeeded(s, afford);
+    s = addClosetsIfNeeded(s, afford);
 
     // Keep elevator waits comfortable as the upper floors fill
     if (s.elevators.length > 0 && getElevatorLoad(s) > 0.9) {

@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import type { HotelState, GameEvent, Room, GuestTrait } from '../simulation/types';
 import { STAFF, HOUSEKEEPING } from '../config/balance';
-import { findPath, getEntranceTiles, getAccessibleDesks, getMannedDeskStaff } from '../simulation/Layout';
+import { findPath, getEntranceTiles, getAccessibleDesks, getMannedDeskStaff, getStaffBases } from '../simulation/Layout';
 import type { Pos } from '../simulation/Layout';
 import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE, getGuestDotColor } from './GridRenderer';
 
@@ -177,11 +177,12 @@ export class ActorLayer {
       housekeeper: state.staff.housekeepers,
       maintenance: state.staff.maintenanceWorkers,
     };
-    const home = this.homeTile(state);
+    const bases = getStaffBases(state);
 
     for (const role of ['housekeeper', 'maintenance'] as StaffRole[]) {
       const members = this.staff.filter(s => s.kind === role);
-      while (members.length < counts[role] && home) {
+      while (members.length < counts[role] && bases.length > 0) {
+        const home = bases[0];
         const actor: Actor = {
           id: `${role}-${members.length}`, kind: role,
           color: role === 'housekeeper' ? ACTOR_COLORS.housekeeper : ACTOR_COLORS.maintenance,
@@ -199,6 +200,8 @@ export class ActorLayer {
         if (stillValid) continue;
         const next = targets.find(t => !claimed.has(t.id));
         if (next) claimed.add(next.id);
+        // Idle staff head for a base on their own floor if there is one
+        const home = bases.find(b => b.floor === member.floor) ?? bases[0] ?? null;
         this.sendTo(member, state, next ?? null, home);
       }
     }
@@ -228,16 +231,6 @@ export class ActorLayer {
     return state.rooms
       .filter(r => r.status === 'vacant' && r.condition < STAFF.maintenance.conditionThreshold)
       .sort((a, b) => a.condition - b.condition);
-  }
-
-  /** Where idle staff wait: the hallway in front of the first desk, else an entrance. */
-  private homeTile(state: HotelState): Pos | null {
-    const desk = getAccessibleDesks(state)[0];
-    if (desk) {
-      const front = findPath(state, desk, getEntranceTiles(state)[0] ?? desk);
-      if (front && front.length > 1) return front[1];
-    }
-    return getEntranceTiles(state)[0] ?? null;
   }
 
   private draw(state: HotelState, currentFloor: number) {

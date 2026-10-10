@@ -62,14 +62,14 @@
 
 ## Floors
 
-### Staff travel time
+### Housekeeping is the hidden occupancy cap
 
-**What:** Make the distance staff walk matter in the simulation, e.g. housekeeping and repair capacity reduced by the average path length from the staff area to the rooms they serve.
+**What:** Rebalance turnover cleaning so hiring housekeepers has diminishing returns. Options include shorter turnovers, a rising wage per extra hire, or the noise/review cost of a full hotel biting harder.
 
-**Why:** Hallways and walking are visual only right now (docs/designs/hallways-and-people.md), so a sprawling layout costs nothing beyond the hallway tiles. Travel time would give layout real consequences and make the walking people mean something.
+**Why:** Found while measuring staff travel time. The balance bots hire one housekeeper per 10 rooms and constantly have 15-20 rooms stuck waiting for cleaning. Hiring one per 7 rooms instead more than doubles a balanced hotel's day-400 valuation ($2.5M to $5.8M; reviews drop 7.5 to 6.4 as it fills up). Each housekeeper (~$60-130/day) unlocks hundreds of dollars a day in bookings, so "hire lots of housekeepers" is a dominant strategy, and every earlier balance pass was tuned against the understaffed bot.
 
 **Effort:** M
-**Priority:** P2
+**Priority:** P1
 **Depends on:** None
 
 ### Floor-placement bonuses
@@ -122,6 +122,7 @@
 
 ## Completed
 
+- **Staff travel time** (2026-10-10): staff walk from the lobby or a staff closet; the walk costs cleaning and repair time. See docs/designs/hallways-and-people.md
 - **Hallways, check-in desks, and people** (2026-10-10): hallway-connected rooms, desks staffed by front desk, walking guests and staff, bulldoze tool. See docs/designs/hallways-and-people.md
 - **Multiple floors** (2026-10-10): stacked 8x5 floor plans, floors bought upward, elevator shafts, vertical noise, view premium, floor switcher. See docs/designs/floors.md
 - **Late-game money sinks** (2026-10-10): prestige upkeep, decor + renovation, facility upgrades, marketing campaigns, valuation and endless legacy goals. See docs/designs/late-game-economy.md

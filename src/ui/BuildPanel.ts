@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { RoomType, FacilityType, TileType, HotelState } from '../simulation/types';
-import { ROOM_CONFIG, FACILITY_CONFIG, ELEVATOR, HALLWAY, DESK } from '../config/balance';
+import { ROOM_CONFIG, FACILITY_CONFIG, ELEVATOR, HALLWAY, DESK, CLOSET } from '../config/balance';
 import { getRequiredStars, isUnlocked } from '../simulation/HotelState';
 import { getExpectedPrice } from '../simulation/StarRatingManager';
 
@@ -11,11 +11,11 @@ const ROOM_COLORS: Record<RoomType, number> = {
 };
 
 const PANEL_WIDTH = 160;
-const BTN_H = 32;
-const BTN_STEP = 36;
+const BTN_H = 30;
+const BTN_STEP = 34;
 
 /** Anything the build panel can place (a room, facility, hallway, desk, or elevator shaft), or the bulldoze tool. */
-export type BuildType = TileType | 'elevator' | 'hallway' | 'desk' | 'bulldoze';
+export type BuildType = TileType | 'elevator' | 'hallway' | 'desk' | 'closet' | 'bulldoze';
 
 /** Tools that place on (or clear) one tile per click and can be dragged across tiles. */
 export const PAINTABLE_TYPES = new Set<BuildType>(['hallway', 'bulldoze']);
@@ -103,6 +103,14 @@ export class BuildPanel {
       color: 0xa0522d,
       category: 'service',
     });
+    this.options.push({
+      type: 'closet',
+      label: 'Staff Closet',
+      cost: CLOSET.buildCost,
+      subtitle: 'shorter staff walks',
+      color: 0x16a085,
+      category: 'service',
+    });
     // Elevator shafts run through every floor
     this.options.push({
       type: 'elevator',
@@ -116,7 +124,7 @@ export class BuildPanel {
       type: 'bulldoze',
       label: 'Bulldoze',
       cost: 0,
-      subtitle: 'hallway, desk, lift',
+      subtitle: 'hall/desk/closet/lift',
       color: 0xc0392b,
       category: 'service',
     });
@@ -181,14 +189,14 @@ export class BuildPanel {
     }));
 
     // Cost (or lock notice) on the second line, subtitle beside it
-    const costText = this.scene.add.text(6, 18, formatCost(option.cost), {
+    const costText = this.scene.add.text(6, 16, formatCost(option.cost), {
       fontSize: '10px', fontFamily: 'monospace', color: '#aaaacc',
     });
     container.add(costText);
     this.costTexts.set(option.type, costText);
 
     // Subtitle
-    const subtitle = this.scene.add.text(PANEL_WIDTH - 22, 18, option.subtitle, {
+    const subtitle = this.scene.add.text(PANEL_WIDTH - 22, 16, option.subtitle, {
       fontSize: '9px', fontFamily: 'monospace', color: '#888899',
     }).setOrigin(1, 0);
     container.add(subtitle);

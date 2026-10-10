@@ -1,5 +1,6 @@
 import type { HotelState, Room, GameEvent } from './types.js';
-import { STAFF } from '../config/balance.js';
+import { STAFF, TRAVEL } from '../config/balance.js';
+import { getStaffTravelHours } from './Layout.js';
 import { getUpkeepMultiplier } from './StarRatingManager.js';
 
 /**
@@ -18,9 +19,10 @@ export function processMaintenanceTick(state: HotelState): { state: HotelState; 
     return { state, events };
   }
 
-  // Find rooms that need repair: vacant and below threshold
+  // Find rooms that need repair: vacant, below threshold, and somewhere staff can walk to
   const roomsNeedingRepair = state.rooms
     .filter(r => r.status === 'vacant' && r.condition < STAFF.maintenance.conditionThreshold)
+    .filter(r => Number.isFinite(getStaffTravelHours(state, r)))
     .sort((a, b) => a.condition - b.condition); // worst condition first
 
   if (roomsNeedingRepair.length === 0) return { state, events };
@@ -34,7 +36,9 @@ export function processMaintenanceTick(state: HotelState): { state: HotelState; 
   const updatedRooms = state.rooms.map(room => {
     if (!repairedIds.has(room.id)) return room;
 
-    const newCondition = Math.min(100, room.condition + repairAmount);
+    // The walk there comes out of the hour's work
+    const efficiency = Math.max(TRAVEL.minRepairEfficiency, 1 - getStaffTravelHours(state, room));
+    const newCondition = Math.min(100, room.condition + repairAmount * efficiency);
     return { ...room, condition: newCondition };
   });
 
