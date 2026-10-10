@@ -24,7 +24,7 @@ export function processRenovationTick(state: HotelState): { state: HotelState; e
 
     events.push({
       type: 'renovation_complete',
-      message: `Room ${formatRoomLabel(room.gridX, room.gridY)} renovated`,
+      message: `Room ${formatRoomLabel(room.gridX, room.gridY, room.floor)} renovated`,
       data: { roomId: room.id },
     });
     return { ...room, status: 'vacant' as const, renovationHoursRemaining: 0, decor: 100, condition: 100, cleanliness: 100 };

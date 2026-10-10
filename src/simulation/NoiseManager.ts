@@ -3,7 +3,8 @@ import { NOISE, FACILITY_CONFIG } from '../config/balance.js';
 
 /**
  * Calculate the noise level experienced by a specific room.
- * Checks all 8 adjacent cells for noise sources:
+ * Checks all 8 adjacent cells on the same floor, plus the cells directly above
+ * and below (at NOISE.verticalAttenuation strength), for noise sources:
  * - Occupied rooms generate base noise
  * - Guest traits modify noise output (party-prone guests are louder)
  * - Construction zones generate temporary noise
@@ -17,12 +18,9 @@ export function calculateRoomNoise(
 ): number {
   let totalNoise = 0;
 
-  // Check all 8 adjacent cells
-  const neighbors = getNeighborCoords(room.gridX, room.gridY);
-
-  for (const [nx, ny] of neighbors) {
+  for (const [nx, ny, nf, weight] of getNeighborCells(room)) {
     // Check for occupied room at this position
-    const neighborRoom = state.rooms.find(r => r.gridX === nx && r.gridY === ny);
+    const neighborRoom = state.rooms.find(r => r.floor === nf && r.gridX === nx && r.gridY === ny);
 
     if (neighborRoom && neighborRoom.status === 'occupied' && neighborRoom.guestId) {
       // Base noise from an occupied neighbor
@@ -35,30 +33,30 @@ export function calculateRoomNoise(
         neighborNoise *= outputMult;
       }
 
-      totalNoise += neighborNoise;
+      totalNoise += neighborNoise * weight;
     }
 
     // Check for facility noise at this position
-    const neighborFacility = state.facilities.find(f => f.gridX === nx && f.gridY === ny);
+    const neighborFacility = state.facilities.find(f => f.floor === nf && f.gridX === nx && f.gridY === ny);
     if (neighborFacility) {
       const fConfig = FACILITY_CONFIG[neighborFacility.type];
       if (fConfig) {
-        totalNoise += fConfig.noiseOutput;
+        totalNoise += fConfig.noiseOutput * weight;
       }
     }
 
     // Check for construction noise at this position
     const construction = state.noiseSources.find(
-      ns => ns.gridX === nx && ns.gridY === ny && ns.remainingHours > 0
+      ns => ns.floor === nf && ns.gridX === nx && ns.gridY === ny && ns.remainingHours > 0
     );
     if (construction) {
-      totalNoise += construction.intensity;
+      totalNoise += construction.intensity * weight;
     }
   }
 
   // Also check construction noise ON this room's own cell
   const selfConstruction = state.noiseSources.find(
-    ns => ns.gridX === room.gridX && ns.gridY === room.gridY && ns.remainingHours > 0
+    ns => ns.floor === room.floor && ns.gridX === room.gridX && ns.gridY === room.gridY && ns.remainingHours > 0
   );
   if (selfConstruction) {
     totalNoise += selfConstruction.intensity;
@@ -74,20 +72,19 @@ export function calculateRoomNoise(
  * ambiguous or arbitrary culprit is worse than no complaint firing that tick.
  */
 export function getLoudestNeighborGuestId(room: Room, state: HotelState): string | null {
-  const neighbors = getNeighborCoords(room.gridX, room.gridY);
   let topGuestId: string | null = null;
   let topNoise = 0;
   let tied = false;
 
-  for (const [nx, ny] of neighbors) {
-    const neighborRoom = state.rooms.find(r => r.gridX === nx && r.gridY === ny);
+  for (const [nx, ny, nf, weight] of getNeighborCells(room)) {
+    const neighborRoom = state.rooms.find(r => r.floor === nf && r.gridX === nx && r.gridY === ny);
     if (!neighborRoom || neighborRoom.status !== 'occupied' || !neighborRoom.guestId) continue;
 
     const guest = state.guests.find(g => g.id === neighborRoom.guestId);
     if (!guest) continue;
 
     const outputMult = NOISE.traitNoiseOutput[guest.trait] ?? 1;
-    const neighborNoise = NOISE.baseOccupiedNoise * outputMult;
+    const neighborNoise = NOISE.baseOccupiedNoise * outputMult * weight;
 
     if (neighborNoise <= 0) continue;
 
@@ -126,11 +123,13 @@ export function noiseToRatingPenalty(noise: number, guest: Guest): number {
 export function createConstructionNoise(
   gridX: number,
   gridY: number,
-  type: 'build' | 'demolish' | 'renovate'
+  type: 'build' | 'demolish' | 'renovate',
+  floor: number
 ): NoiseSource {
   return {
     gridX,
     gridY,
+    floor,
     intensity: NOISE.constructionIntensity[type],
     remainingHours: NOISE.constructionDuration[type],
     type,
@@ -147,22 +146,27 @@ export function tickNoiseSources(sources: NoiseSource[]): NoiseSource[] {
 }
 
 /**
- * Get all noise levels for the grid (for visualization).
- * Returns a Map of "x,y" -> noise level for every room.
+ * Get all noise levels on one floor (for visualization).
+ * Returns a Map of "x,y" -> noise level for every room on that floor.
  */
-export function getNoiseMap(state: HotelState): Map<string, number> {
+export function getNoiseMap(state: HotelState, floor: number): Map<string, number> {
   const map = new Map<string, number>();
   for (const room of state.rooms) {
+    if (room.floor !== floor) continue;
     const noise = calculateRoomNoise(room, state);
     map.set(`${room.gridX},${room.gridY}`, noise);
   }
   return map;
 }
 
-function getNeighborCoords(x: number, y: number): Array<[number, number]> {
+/** [x, y, floor, weight]: the 8 same-floor neighbors at full weight, plus directly above and below. */
+function getNeighborCells(room: Room): Array<[number, number, number, number]> {
+  const { gridX: x, gridY: y, floor: f } = room;
   return [
-    [x - 1, y - 1], [x, y - 1], [x + 1, y - 1],
-    [x - 1, y],                  [x + 1, y],
-    [x - 1, y + 1], [x, y + 1], [x + 1, y + 1],
+    [x - 1, y - 1, f, 1], [x, y - 1, f, 1], [x + 1, y - 1, f, 1],
+    [x - 1, y, f, 1],                        [x + 1, y, f, 1],
+    [x - 1, y + 1, f, 1], [x, y + 1, f, 1], [x + 1, y + 1, f, 1],
+    [x, y, f + 1, NOISE.verticalAttenuation],
+    [x, y, f - 1, NOISE.verticalAttenuation],
   ];
 }

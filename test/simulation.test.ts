@@ -146,7 +146,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(12);
+    expect(loaded!.version).toBe(13);
     expect(loaded!.state.noiseSources).toEqual([]);
     expect(loaded!.state.facilities).toEqual([]); // added by the v8->v9 step
     expect(loaded!.state.activeIncidents).toEqual([]);
@@ -179,7 +179,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(12);
+    expect(loaded!.version).toBe(13);
     expect(loaded!.state.reviewScore).toBeCloseTo(7.2, 5); // 72 / 10
     expect((loaded!.state as any).reputationScore).toBeUndefined();
     expect(loaded!.state.bookings[0].reviewScore).toBe(8); // rating 4 * 2
@@ -220,8 +220,9 @@ describe('HotelState', () => {
   it('rejects out-of-bounds placement', () => {
     const state = createHotelState();
     expect(addRoom(state, 'standard', -1, 0)).toBeNull();
-    expect(addRoom(state, 'standard', 20, 0)).toBeNull();
-    expect(addRoom(state, 'standard', 0, 15)).toBeNull();
+    expect(addRoom(state, 'standard', 8, 0)).toBeNull();
+    expect(addRoom(state, 'standard', 0, 5)).toBeNull();
+    expect(addRoom(state, 'standard', 0, 0, 1)).toBeNull(); // floor not built yet
   });
 
   it('rejects unaffordable room', () => {
@@ -282,7 +283,7 @@ describe('GuestManager', () => {
     const prng = new PRNG(42);
     let state = createHotelState();
     for (let i = 0; i < 10; i++) {
-      state = addRoom(state, 'standard', i, 0)!;
+      state = addRoom(state, 'standard', i % 8, Math.floor(i / 8))!;
     }
 
     const result = processArrivals(state, 16, prng);
@@ -309,7 +310,7 @@ describe('GuestManager', () => {
     const prng = new PRNG(42);
     const room: Room = {
       id: 'test', type: 'standard', gridX: 0, gridY: 0,
-      pricePerNight: 80, condition: 50, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0,
+      pricePerNight: 80, condition: 50, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0,
     };
     const guest: Guest = {
       id: 'g1', budget: 100, stayLength: 1, trait: 'normal',
@@ -330,7 +331,7 @@ describe('GuestManager', () => {
     const prng = new PRNG(42);
     const room: Room = {
       id: 'test', type: 'standard', gridX: 0, gridY: 0,
-      pricePerNight: 80, condition: 100, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0,
+      pricePerNight: 80, condition: 100, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0,
     };
     const guest: Guest = {
       id: 'g1', budget: 200, stayLength: 1, trait: 'normal',
@@ -356,7 +357,7 @@ describe('GuestManager', () => {
 
     const lowRoom: Room = {
       id: 'test', type: 'standard', gridX: 0, gridY: 0,
-      pricePerNight: 80, condition: 10, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0,
+      pricePerNight: 80, condition: 10, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0,
     };
     const highRoom: Room = { ...lowRoom, condition: 90 };
 
@@ -417,7 +418,7 @@ describe('HousekeepingManager', () => {
     const baseRoom: Room = {
       id: 'r', type: 'standard', gridX: 0, gridY: 0, pricePerNight: 80,
       condition: 100, cleanliness: 0, status: 'occupied', guestId: 'g1',
-      cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0,
+      cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0,
     };
 
     const quick = startTurnoverCleaning(baseRoom, 'quick');
@@ -613,7 +614,7 @@ describe('MaintenanceManager', () => {
 describe('NoiseManager', () => {
   it('isolated room has zero noise after construction finishes', () => {
     let state = createHotelState();
-    state = addRoom(state, 'standard', 5, 5)!;
+    state = addRoom(state, 'standard', 3, 2)!;
     // Clear construction noise (simulating time passing)
     state = { ...state, noiseSources: [] };
     const noise = calculateRoomNoise(state.rooms[0], state);
@@ -622,15 +623,15 @@ describe('NoiseManager', () => {
 
   it('newly built room has construction noise on itself', () => {
     let state = createHotelState();
-    state = addRoom(state, 'standard', 5, 5)!;
+    state = addRoom(state, 'standard', 3, 2)!;
     const noise = calculateRoomNoise(state.rooms[0], state);
     expect(noise).toBeGreaterThan(0); // construction noise
   });
 
   it('adjacent occupied room generates noise', () => {
     let state = createHotelState();
-    state = addRoom(state, 'standard', 5, 5)!;
-    state = addRoom(state, 'standard', 6, 5)!;
+    state = addRoom(state, 'standard', 3, 2)!;
+    state = addRoom(state, 'standard', 4, 2)!;
     // Occupy the neighbor
     const guest: Guest = {
       id: 'g1', budget: 100, stayLength: 1, trait: 'normal',
@@ -640,7 +641,7 @@ describe('NoiseManager', () => {
       ...state,
       guests: [guest],
       rooms: state.rooms.map(r =>
-        r.gridX === 6 ? { ...r, occupied: true, guestId: 'g1' } : r
+        r.gridX === 4 ? { ...r, occupied: true, guestId: 'g1' } : r
       ),
     };
     const noise = calculateRoomNoise(state.rooms[0], state);
@@ -650,7 +651,7 @@ describe('NoiseManager', () => {
   it('non-adjacent occupied room generates zero noise', () => {
     let state = createHotelState();
     state = addRoom(state, 'standard', 0, 0)!;
-    state = addRoom(state, 'standard', 5, 5)!; // far away
+    state = addRoom(state, 'standard', 3, 2)!; // far away
     // Clear construction noise
     state = { ...state, noiseSources: [] };
     const guest: Guest = {
@@ -661,7 +662,7 @@ describe('NoiseManager', () => {
       ...state,
       guests: [guest],
       rooms: state.rooms.map(r =>
-        r.gridX === 5 ? { ...r, occupied: true, guestId: 'g1' } : r
+        r.gridX === 3 ? { ...r, occupied: true, guestId: 'g1' } : r
       ),
     };
     const noise = calculateRoomNoise(state.rooms[0], state);
@@ -671,25 +672,25 @@ describe('NoiseManager', () => {
   it('more adjacent neighbors = more noise', () => {
     let state = createHotelState();
     // Center room at 5,5
-    state = addRoom(state, 'standard', 5, 5)!;
+    state = addRoom(state, 'standard', 3, 2)!;
     // One neighbor
-    state = addRoom(state, 'standard', 6, 5)!;
+    state = addRoom(state, 'standard', 4, 2)!;
     state = {
       ...state,
       guests: [{ id: 'g1', budget: 100, stayLength: 1, trait: 'normal', satisfaction: 50, checkInDay: 1, name: 'TestGuest', isReturning: false, hadNoiseComplaint: false }],
       rooms: state.rooms.map(r =>
-        r.gridX === 6 ? { ...r, occupied: true, guestId: 'g1' } : r
+        r.gridX === 4 ? { ...r, occupied: true, guestId: 'g1' } : r
       ),
     };
     const noise1 = calculateRoomNoise(state.rooms[0], state);
 
     // Add second neighbor
-    state = addRoom(state, 'standard', 4, 5)!;
+    state = addRoom(state, 'standard', 2, 2)!;
     state = {
       ...state,
       guests: [...state.guests, { id: 'g2', budget: 100, stayLength: 1, trait: 'normal', satisfaction: 50, checkInDay: 1, name: 'TestGuest2', isReturning: false, hadNoiseComplaint: false }],
       rooms: state.rooms.map(r =>
-        r.gridX === 4 && r.gridY === 5 ? { ...r, status: 'occupied' as const, guestId: 'g2', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0 } : r
+        r.gridX === 2 && r.gridY === 2 ? { ...r, status: 'occupied' as const, guestId: 'g2', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0 } : r
       ),
     };
     const noise2 = calculateRoomNoise(state.rooms[0], state);
@@ -698,17 +699,17 @@ describe('NoiseManager', () => {
 
   it('construction noise affects adjacent rooms', () => {
     let state = createHotelState();
-    state = addRoom(state, 'standard', 5, 5)!;
+    state = addRoom(state, 'standard', 3, 2)!;
     state = {
       ...state,
-      noiseSources: [createConstructionNoise(6, 5, 'build')],
+      noiseSources: [createConstructionNoise(4, 2, 'build', 0)],
     };
     const noise = calculateRoomNoise(state.rooms[0], state);
     expect(noise).toBeGreaterThan(0);
   });
 
   it('construction noise ticks down and expires', () => {
-    let sources = [createConstructionNoise(0, 0, 'build')];
+    let sources = [createConstructionNoise(0, 0, 'build', 0)];
     const initialHours = sources[0].remainingHours;
     sources = tickNoiseSources(sources);
     expect(sources[0].remainingHours).toBe(initialHours - 1);
@@ -840,7 +841,7 @@ describe('SeasonManager', () => {
 describe('EconomyManager', () => {
   it('applies debt interest when cash is negative', () => {
     const state = { ...createHotelState(), cash: -1000, rooms: [
-      { id: 'r1', type: 'standard' as const, gridX: 0, gridY: 0, pricePerNight: 80, condition: 100, cleanliness: 100, status: 'vacant' as const, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0 },
+      { id: 'r1', type: 'standard' as const, gridX: 0, gridY: 0, pricePerNight: 80, condition: 100, cleanliness: 100, status: 'vacant' as const, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0 },
     ] };
     const costs = processDailyCosts(state);
     // Interest on $1000 debt = $50, plus operating cost of 1 room = $10
@@ -973,15 +974,15 @@ describe('StoryGenerator', () => {
     return {
       id: 'r1', type: 'standard', gridX: 1, gridY: 1, pricePerNight: 80,
       condition: 100, cleanliness: 100, status: 'occupied', guestId: 'g1',
-      cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0,
+      cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0,
       ...overrides,
     };
   }
 
   it('formatRoomLabel derives a hotel-style number from grid position', () => {
-    expect(formatRoomLabel(3, 1)).toBe('204'); // floor 2 (row+1), unit 04 (col+1)
-    expect(formatRoomLabel(0, 0)).toBe('101');
-    expect(formatRoomLabel(19, 14)).toBe('1520');
+    expect(formatRoomLabel(3, 1, 1)).toBe('212'); // floor 2, unit 12 (row 1 x 8 wide + col 3 + 1)
+    expect(formatRoomLabel(0, 0, 0)).toBe('101');
+    expect(formatRoomLabel(7, 4, 7)).toBe('840'); // top floor, last tile
   });
 
   it('getLoudestNeighborGuestId fails closed (null) when there is no eligible neighbor', () => {
@@ -1067,7 +1068,7 @@ describe('StoryGenerator', () => {
 
   it('advanceIncidents resolves a Noise Complaint once room noise drops below threshold', () => {
     let state = createHotelState();
-    state = addRoom(state, 'standard', 5, 5)!; // isolated room, no occupied neighbors -> zero noise
+    state = addRoom(state, 'standard', 3, 2)!; // isolated room, no occupied neighbors -> zero noise
     const room = state.rooms[0];
     const incident: ActiveIncident = {
       id: 'inc-1', type: 'noise_complaint', guestId: 'g1', culpritGuestId: 'g2',
@@ -1092,8 +1093,8 @@ describe('StoryGenerator', () => {
 
   it('advanceIncidents escalates a Noise Complaint to early departure when the grace period runs out', () => {
     let state = createHotelState();
-    state = addRoom(state, 'standard', 5, 5)!;
-    state = addRoom(state, 'standard', 6, 5)!; // occupied neighbor keeps noise above threshold
+    state = addRoom(state, 'standard', 3, 2)!;
+    state = addRoom(state, 'standard', 4, 2)!; // occupied neighbor keeps noise above threshold
     const room = state.rooms[0];
     const incident: ActiveIncident = {
       id: 'inc-1', type: 'noise_complaint', guestId: 'g1', culpritGuestId: 'g2',
@@ -1103,7 +1104,7 @@ describe('StoryGenerator', () => {
       ...state,
       guests: [makeGuest({ id: 'g1', satisfaction: 20 }), makeGuest({ id: 'g2', trait: 'party_guest' })],
       rooms: state.rooms.map(r =>
-        r.gridX === 5 ? { ...r, status: 'occupied' as const, guestId: 'g1' }
+        r.gridX === 3 ? { ...r, status: 'occupied' as const, guestId: 'g1' }
         : { ...r, status: 'occupied' as const, guestId: 'g2' }
       ),
       activeIncidents: [incident],
@@ -1149,14 +1150,14 @@ describe('StoryGenerator', () => {
 
   it('selectNewIncident respects the daily incident budget', () => {
     let state = createHotelState();
-    state = addRoom(state, 'standard', 5, 5)!;
-    state = addRoom(state, 'standard', 6, 5)!;
+    state = addRoom(state, 'standard', 3, 2)!;
+    state = addRoom(state, 'standard', 4, 2)!;
     const complainer = state.rooms[0];
     state = {
       ...state,
       guests: [makeGuest({ id: 'g1', satisfaction: 10, trait: 'light_sleeper' }), makeGuest({ id: 'g2', trait: 'party_guest' })],
       rooms: state.rooms.map(r =>
-        r.gridX === 5 ? { ...r, status: 'occupied' as const, guestId: 'g1' }
+        r.gridX === 3 ? { ...r, status: 'occupied' as const, guestId: 'g1' }
         : { ...r, status: 'occupied' as const, guestId: 'g2' }
       ),
       // Already at budget for today -- a prior origin entry exists for day 1.
@@ -1201,7 +1202,7 @@ describe('StoryGenerator', () => {
   });
 
   it('attributeReviewCause picks the largest negative contributor with a fixed tie-break order', () => {
-    const base = { noisePenalty: 0, decorPenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 5 };
+    const base = { noisePenalty: 0, decorPenalty: 0, elevatorPenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 5 };
     expect(attributeReviewCause({ ...base, noisePenalty: 2 })).toBe('noise');
     expect(attributeReviewCause({ ...base, conditionBonus: -2 })).toBe('room condition');
     expect(attributeReviewCause({ ...base, cleanlinessBonus: -2 })).toBe('cleanliness');
@@ -1213,7 +1214,7 @@ describe('StoryGenerator', () => {
 
   it('checkReviewSemiViral fires a temporary reputation penalty on an unusually bad checkout', () => {
     let state = createHotelState();
-    const breakdown = { noisePenalty: 3, decorPenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 1 };
+    const breakdown = { noisePenalty: 3, decorPenalty: 0, elevatorPenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 1 };
     const booking: Booking = { id: 'b1', roomId: 'r1', guestId: 'g1', nightRate: 80, reviewScore: 1, satisfactionAtCheckout: 10 };
 
     const result = checkReviewSemiViral(state, [{ guestName: 'Sam', roomId: 'r1', booking, breakdown }], new PRNG(1));
@@ -1224,7 +1225,7 @@ describe('StoryGenerator', () => {
 
   it('checkReviewSemiViral does nothing when no checkout was unusually bad', () => {
     const state = createHotelState();
-    const breakdown = { noisePenalty: 0, decorPenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 8 };
+    const breakdown = { noisePenalty: 0, decorPenalty: 0, elevatorPenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 8 };
     const booking: Booking = { id: 'b1', roomId: 'r1', guestId: 'g1', nightRate: 80, reviewScore: 8, satisfactionAtCheckout: 80 };
 
     const result = checkReviewSemiViral(state, [{ guestName: 'Sam', roomId: 'r1', booking, breakdown }], new PRNG(1));
@@ -1331,10 +1332,10 @@ describe('simulate (headless)', () => {
     expect(result.finalCash).not.toBeNaN();
   });
 
-  it('50 rooms: handles large hotel', () => {
+  it('40 rooms: handles a full floor', () => {
     const result = simulate(30, 42, (state, prng) => {
       let s = state;
-      for (let x = 0; x < 10; x++) {
+      for (let x = 0; x < 8; x++) {
         for (let y = 0; y < 5; y++) {
           const r = addRoom(s, 'standard', x, y);
           if (r) s = r;
@@ -1351,7 +1352,7 @@ describe('simulate (headless)', () => {
     let state = unlockedState();
     for (let i = 0; i < 9; i++) {
       const type = i < 5 ? 'standard' : i < 8 ? 'deluxe' : 'suite';
-      state = addRoom(state, type as 'standard' | 'deluxe' | 'suite', i, 0)!;
+      state = addRoom(state, type as 'standard' | 'deluxe' | 'suite', i % 8, Math.floor(i / 8))!;
     }
     // A maintenance worker keeps rooms from breaking down over 90 days, so
     // this isolates the story layer's feedback loops from plain neglect.

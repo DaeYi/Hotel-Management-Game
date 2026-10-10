@@ -140,7 +140,7 @@ export function advanceIncidents(state: HotelState, prng: PRNG): AdvanceResult {
         guests = guests.map(g => g.id === guest.id
           ? { ...g, satisfaction: Math.min(100, g.satisfaction + SATISFACTION.noiseComplaintResolvedBonus) }
           : g);
-        const roomLabel = formatRoomLabel(room.gridX, room.gridY);
+        const roomLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
         const appended = appendStoryLogEntry(current, {
           type: 'noise_complaint_resolved',
           guestName: guest.name,
@@ -155,7 +155,7 @@ export function advanceIncidents(state: HotelState, prng: PRNG): AdvanceResult {
       const hoursRemaining = incident.hoursRemaining - 1;
       if (hoursRemaining <= 0) {
         earlyDepartureGuestIds.add(guest.id);
-        const roomLabel = formatRoomLabel(room.gridX, room.gridY);
+        const roomLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
         const appended = appendStoryLogEntry(current, {
           type: 'noise_complaint_escalated',
           guestName: guest.name,
@@ -187,8 +187,8 @@ export function advanceIncidents(state: HotelState, prng: PRNG): AdvanceResult {
     const target = findHealthySameTypeRoom(current, room);
     if (target) {
       const oldRoomId = room.id;
-      const oldLabel = formatRoomLabel(room.gridX, room.gridY);
-      const newLabel = formatRoomLabel(target.gridX, target.gridY);
+      const oldLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
+      const newLabel = formatRoomLabel(target.gridX, target.gridY, target.floor);
       rooms = rooms.map(r => {
         if (r.id === oldRoomId) return { ...r, status: 'vacant' as const, guestId: undefined };
         if (r.id === target.id) return { ...r, status: 'occupied' as const, guestId: guest.id };
@@ -216,7 +216,7 @@ export function advanceIncidents(state: HotelState, prng: PRNG): AdvanceResult {
     const hoursRemaining = incident.hoursRemaining - 1;
     if (hoursRemaining <= 0) {
       earlyDepartureGuestIds.add(guest.id);
-      const roomLabel = formatRoomLabel(room.gridX, room.gridY);
+      const roomLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
       const appended = appendStoryLogEntry(current, {
         type: 'mid_stay_breakdown_escalated',
         guestName: guest.name,
@@ -325,7 +325,7 @@ export function selectNewIncident(state: HotelState, prng: PRNG): { state: Hotel
 
   if (picked.kind === 'noise_complaint') {
     const { guest, room, culpritGuestId } = picked;
-    const roomLabel = formatRoomLabel(room.gridX, room.gridY);
+    const roomLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
     const appended = appendStoryLogEntry(current, {
       type: 'noise_complaint',
       guestName: guest.name,
@@ -358,7 +358,7 @@ export function selectNewIncident(state: HotelState, prng: PRNG): { state: Hotel
     });
   } else {
     const { guest, room } = picked;
-    const roomLabel = formatRoomLabel(room.gridX, room.gridY);
+    const roomLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
     const appended = appendStoryLogEntry(current, {
       type: 'mid_stay_breakdown',
       guestName: guest.name,
@@ -420,6 +420,7 @@ export function attributeReviewCause(b: GuestReviewBreakdown): string {
   const candidates = [
     { label: 'noise', magnitude: b.noisePenalty },
     { label: 'tired decor', magnitude: b.decorPenalty },
+    { label: 'elevator waits', magnitude: b.elevatorPenalty },
     { label: 'room condition', magnitude: Math.max(0, -b.conditionBonus) },
     { label: 'cleanliness', magnitude: Math.max(0, -b.cleanlinessBonus) },
     { label: 'amenities', magnitude: b.amenityPenalty },

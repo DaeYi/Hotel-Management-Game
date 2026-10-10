@@ -1,5 +1,6 @@
 import type { HotelState, Room, GameEvent } from './types.js';
 import { HOUSEKEEPING, STAFF } from '../config/balance.js';
+import { formatRoomLabel } from './HotelState.js';
 
 /**
  * Start turnover cleaning on a room after guest checkout.
@@ -57,7 +58,7 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
     if (remaining <= 0) {
       events.push({
         type: 'room_cleaned',
-        message: `Room at (${room.gridX}, ${room.gridY}) cleaned (${quality})`,
+        message: `Room ${formatRoomLabel(room.gridX, room.gridY, room.floor)} cleaned (${quality})`,
         data: { roomId: room.id, quality },
       });
       return {

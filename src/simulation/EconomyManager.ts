@@ -1,5 +1,5 @@
 import type { HotelState, GameEvent, RoomType } from './types.js';
-import { ECONOMY, REVIEW, AMENITIES, FACILITY_CONFIG, FACILITY_LEVELS, LOAN } from '../config/balance.js';
+import { ECONOMY, REVIEW, AMENITIES, FACILITY_CONFIG, FACILITY_LEVELS, LOAN, ELEVATOR } from '../config/balance.js';
 import { getUpkeepMultiplier } from './StarRatingManager.js';
 import type { DepartureResult } from './GuestManager.js';
 
@@ -53,6 +53,9 @@ export function processDailyCosts(state: HotelState): EconomyResult {
       }
     }
   }
+
+  // Elevators
+  result.cashDelta -= state.elevators.length * ELEVATOR.dailyOperatingCost * upkeep;
 
   // Debt interest
   if (state.cash < 0) {

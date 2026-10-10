@@ -5,6 +5,7 @@ import { processRevenue, processDailyCosts, updateReviewScore, checkBankruptcy, 
 import { processObjectives, recordDailyStat } from './ObjectivesManager.js';
 import { decayDecor, processRenovationTick } from './DecorManager.js';
 import { tickCampaign } from './MarketingManager.js';
+import { formatRoomLabel } from './HotelState.js';
 import { tickNoiseSources } from './NoiseManager.js';
 import { processCleaningTick, processDailyHousekeeping, degradeCleanliness, startTurnoverCleaning } from './HousekeepingManager.js';
 import { calculateStarRating } from './StarRatingManager.js';
@@ -204,7 +205,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
     if (room.condition <= ECONOMY.roomBreakdownThreshold && room.status === 'occupied') {
       events.push({
         type: 'room_broken',
-        message: `Room at (${room.gridX}, ${room.gridY}) is out of order!`,
+        message: `Room ${formatRoomLabel(room.gridX, room.gridY, room.floor)} is out of order!`,
         data: { roomId: room.id },
       });
     }

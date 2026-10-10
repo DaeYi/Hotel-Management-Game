@@ -109,8 +109,8 @@ describe('Star-gated unlocks', () => {
   it('reaching a new star rating raises the peak and announces what unlocked', () => {
     const prng = new PRNG(1);
     let state = createHotelState();
-    for (let i = 0; i < 10; i++) state = addRoom(state, 'standard', i, 0)!;
-    state = addFacility(state, 'shop', 0, 1)!;
+    for (let i = 0; i < 10; i++) state = addRoom(state, 'standard', i % 8, Math.floor(i / 8))!;
+    state = addFacility(state, 'shop', 0, 3)!;
     // 10 rooms (0.5) + standard/daily housekeeping (1.2) + shop (0.3) = 2.0 points = 2 stars
     const result = tickSimulation(state, prng);
     expect(result.state.starRating).toBe(2);
@@ -149,7 +149,7 @@ describe('Star-scaled pricing and demand', () => {
 
   function checkInsOverDays(price: number, days: number): number {
     let state = { ...createHotelState(), cash: 200000 };
-    for (let i = 0; i < 40; i++) state = addRoom(state, 'standard', i % 20, Math.floor(i / 20))!;
+    for (let i = 0; i < 40; i++) state = addRoom(state, 'standard', i % 8, Math.floor(i / 8))!;
     state = { ...state, staff: { ...state.staff, frontDesk: 10 }, rooms: state.rooms.map(r => ({ ...r, pricePerNight: price })) };
     const prng = new PRNG(7);
     let checkedIn = 0;
@@ -254,7 +254,7 @@ describe('SaveManager v10 -> current', () => {
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 10, prngState: 1, state: legacy, timestamp: 0 }));
 
     const loaded = loadGame()!;
-    expect(loaded.version).toBe(12);
+    expect(loaded.version).toBe(13);
     expect(loaded.state.loan.balance).toBe(0);
     expect(loaded.state.objectives).toEqual({ currentIndex: 0, outcomes: [] });
     expect(loaded.state.dailyStats).toEqual([]);

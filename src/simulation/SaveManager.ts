@@ -1,10 +1,10 @@
 import type { HotelState } from './types.js';
 import type { PRNG } from './prng.js';
-import { GUEST_NAMES, LOAN } from '../config/balance.js';
+import { GUEST_NAMES, LOAN, GRID } from '../config/balance.js';
 import { calculateStarRating } from './StarRatingManager.js';
 
 const SAVE_KEY = 'hotel-game-save';
-const SAVE_VERSION = 12; // v12: decor/renovation, facility levels, marketing, valuation
+const SAVE_VERSION = 13; // v13: multiple floors, elevators, smaller floor plan
 
 interface SaveData {
   version: number;
@@ -169,6 +169,12 @@ export function loadGame(): SaveData | null {
       console.log('Migrated save from v11 to v12');
     }
 
+    if (data.version === 12) {
+      migrateToFloors(data.state);
+      data.version = 13;
+      console.log('Migrated save from v12 to v13');
+    }
+
     if (data.version !== SAVE_VERSION) {
       console.warn(`Save version mismatch: expected ${SAVE_VERSION}, got ${data.version}`);
       return null;
@@ -178,6 +184,37 @@ export function loadGame(): SaveData | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * v12 -> v13: the old single 20x15 grid doesn't fit the new 8x5 floor plan, so
+ * re-pack everything (rooms first, then facilities, in old row-major order) onto
+ * as many floors as it takes. When that's more than one floor, tile (0, 0) is
+ * kept free on every floor for an elevator, which the hotel gets for free so
+ * upper-floor rooms stay bookable. Ids are kept, so guests stay in their rooms.
+ */
+export function migrateToFloors(state: any): void {
+  const byPosition = (a: any, b: any) => a.gridY - b.gridY || a.gridX - b.gridX;
+  const rooms = [...state.rooms].sort(byPosition);
+  const facilities = [...state.facilities].sort(byPosition);
+  const total = rooms.length + facilities.length;
+  const perFloor = GRID.width * GRID.height;
+  const needsElevator = total > perFloor;
+  const usablePerFloor = needsElevator ? perFloor - 1 : perFloor;
+
+  let slot = 0;
+  const place = (item: any) => {
+    const floor = Math.floor(slot / usablePerFloor);
+    const index = (slot % usablePerFloor) + (needsElevator ? 1 : 0); // skip (0, 0) for the shaft
+    slot++;
+    return { ...item, floor, gridX: index % GRID.width, gridY: Math.floor(index / GRID.width) };
+  };
+
+  state.rooms = rooms.map(place);
+  state.facilities = facilities.map(place);
+  state.floorCount = Math.max(1, Math.ceil(total / usablePerFloor));
+  state.elevators = needsElevator ? [{ id: 'elevator-0-0', gridX: 0, gridY: 0 }] : [];
+  state.noiseSources = []; // positions no longer line up; construction noise is short-lived anyway
 }
 
 export function hasSavedGame(): boolean {

@@ -259,7 +259,7 @@ describe('Legacy goals', () => {
   });
 });
 
-describe('SaveManager v11 -> v12', () => {
+describe('SaveManager v11 -> current', () => {
   beforeEach(() => localStorage.clear());
 
   it('backfills fresh decor, level 1 facilities, and no campaign', () => {
@@ -276,7 +276,7 @@ describe('SaveManager v11 -> v12', () => {
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 11, prngState: 1, state: legacy, timestamp: 0 }));
 
     const loaded = loadGame()!;
-    expect(loaded.version).toBe(12);
+    expect(loaded.version).toBe(13);
     expect(loaded.state.rooms[0]).toMatchObject({ decor: 100, renovationHoursRemaining: 0 });
     expect(loaded.state.facilities[0]).toMatchObject({ decor: 100, level: 1 });
     expect(loaded.state.activeCampaign).toBeNull();

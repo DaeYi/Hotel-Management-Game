@@ -195,6 +195,9 @@ export const NOISE = {
   // Base noise emitted by an occupied neighboring room
   baseOccupiedNoise: 0.3,
 
+  // Noise from the room directly above or below, as a fraction of a same-floor neighbor
+  verticalAttenuation: 0.25,
+
   // Guest trait modifiers for noise OUTPUT (how loud they are)
   traitNoiseOutput: {
     normal: 1.0,
@@ -212,7 +215,7 @@ export const NOISE = {
   } as Record<string, number>,
 
   // Noise below this threshold causes no rating penalty
-  penaltyThreshold: 0.5,
+  penaltyThreshold: 0.8,
 
   // Rating penalty per unit of noise above the threshold
   penaltyPerUnit: 1.2,
@@ -501,7 +504,7 @@ export const OBJECTIVES: ObjectiveConfig[] = [
   { id: 'three_stars', title: 'Three-Star Hotel', description: 'Reach 3 stars', kind: 'star_rating', target: 3, deadlineDay: 160, reward: 10000 },
   { id: 'debt_free', title: 'Debt Free', description: 'Pay off the bank loan', kind: 'loan_paid_off', target: 0, deadlineDay: 240, reward: 10000 },
   { id: 'four_stars', title: 'Four-Star Hotel', description: 'Reach 4 stars', kind: 'star_rating', target: 4, deadlineDay: 260, reward: 15000 },
-  { id: 'five_stars', title: 'Five-Star Legend', description: 'Reach 5 stars', kind: 'star_rating', target: 5, deadlineDay: 420, reward: 25000 },
+  { id: 'five_stars', title: 'Five-Star Legend', description: 'Reach 5 stars', kind: 'star_rating', target: 5, deadlineDay: 480, reward: 25000 },
 ];
 
 // Legacy goals: generated endlessly once OBJECTIVES are all resolved, cycling
@@ -561,7 +564,27 @@ export const VALUATION = {
 
 export const DAILY_STATS_MAX_DAYS = 60; // covers the longest objective window (30 days) with room to spare
 
+// One floor plan. Small enough that a growing hotel has to build upward.
 export const GRID = {
-  width: 20,
-  height: 15,
+  width: 8,
+  height: 5,
+};
+
+// Floors stack on the ground floor (floor 0). Each new floor costs more than the
+// last; rooms on higher floors command a view premium on their fair price.
+export const FLOORS = {
+  max: 8,
+  baseCost: 15000, // cost of the first floor above ground
+  costGrowth: 1.35, // each further floor costs this much more than the previous one
+  viewPremiumPerFloor: 0.04, // +4% fair price per floor above ground
+};
+
+// Elevators are shafts: one tile, the same tile on every floor. Upper-floor rooms
+// can't be booked without one; too few for the upper-floor rooms they serve and
+// guests up there start complaining about the wait.
+export const ELEVATOR = {
+  buildCost: 10000,
+  dailyOperatingCost: 25, // scaled by prestige upkeep like other facilities
+  roomsServed: 16, // upper-floor rooms one elevator handles comfortably
+  maxWaitPenalty: 2.0, // review penalty (0-10 scale) at double the comfortable load or worse
 };

@@ -1,10 +1,14 @@
 import type { HotelState, RoomType, FacilityType, AmenityTier } from './types.js';
-import { ROOM_CONFIG, FACILITY_CONFIG, GRID, LOAN } from '../config/balance.js';
-import { addRoom, addFacility, demolishRoom, isTileOccupied, isUnlocked, setRoomPrice, renovateRoom, renovateFacility, upgradeFacility, getFacilityUpgradeCost } from './HotelState.js';
+import { ROOM_CONFIG, FACILITY_CONFIG, GRID, LOAN, ELEVATOR } from '../config/balance.js';
+import {
+  addRoom, addFacility, demolishRoom, isTileOccupied, isUnlocked, setRoomPrice, renovateRoom, renovateFacility,
+  upgradeFacility, getFacilityUpgradeCost, addElevator, buildFloor, getNextFloorCost, getElevatorLoad,
+} from './HotelState.js';
 import { startCampaign, getCampaignCost } from './MarketingManager.js';
 import { FACILITY_LEVELS } from '../config/balance.js';
 import { getExpectedPrice } from './StarRatingManager.js';
-import { repayLoan } from './EconomyManager.js';
+import { repayLoan, processDailyCosts } from './EconomyManager.js';
+import { getStaffDailyCost } from './MaintenanceManager.js';
 import { getAverageOccupancy } from './ObjectivesManager.js';
 
 /**
@@ -28,14 +32,40 @@ interface ManagedOptions {
 const STALE_DECOR = 60; // reinvesting strategies renovate below this
 const MAX_RENOVATIONS_PER_DAY = 3; // don't take half the hotel offline at once
 
-/** First free tile in row-major order -- keeps the hotel compact, so facilities end up next to rooms. */
-function findFreeTile(state: HotelState): { x: number; y: number } | null {
-  for (let y = 0; y < GRID.height; y++) {
-    for (let x = 0; x < GRID.width; x++) {
-      if (!isTileOccupied(state, x, y)) return { x, y };
+// Tiles the managed bots keep clear on every floor for elevator shafts
+const ELEVATOR_TILES: Array<[number, number]> = [[0, 0], [1, 0], [2, 0]];
+const isElevatorTile = (x: number, y: number) => ELEVATOR_TILES.some(([ex, ey]) => ex === x && ey === y);
+
+/** First free tile, lowest floor first, row-major -- keeps the hotel compact, so facilities end up next to rooms. */
+function findFreeTile(state: HotelState): { x: number; y: number; floor: number } | null {
+  for (let floor = 0; floor < state.floorCount; floor++) {
+    for (let y = 0; y < GRID.height; y++) {
+      for (let x = 0; x < GRID.width; x++) {
+        if (!isElevatorTile(x, y) && !isTileOccupied(state, x, y, floor)) return { x, y, floor };
+      }
     }
   }
   return null;
+}
+
+/** Whether the bot can spend `cost` and keep its reserve (times `mult` for bigger purchases). */
+type Afford = (state: HotelState, cost: number, mult?: number) => boolean;
+
+const SAFETY_DAYS = 10;
+
+/** What the hotel spends per day before revenue: operating costs, amenities, facilities, staff. */
+function getDailyRunningCost(state: HotelState): number {
+  return -processDailyCosts(state).cashDelta + getStaffDailyCost(state);
+}
+
+/** Add an elevator on the next reserved shaft tile, if one is free and affordable. */
+function addReservedElevator(state: HotelState, afford: Afford): HotelState {
+  if (!afford(state, ELEVATOR.buildCost)) return state;
+  for (const [x, y] of ELEVATOR_TILES) {
+    const next = addElevator(state, x, y);
+    if (next) return next;
+  }
+  return state;
 }
 
 /** Room mix that pushes star points: deluxe once unlocked, every third room a suite once those unlock. */
@@ -63,6 +93,12 @@ function managedStrategy(opts: ManagedOptions): Strategy {
     let s = state;
     const rooms = s.rooms.length;
 
+    // Never spend below ~10 days of running costs: a slow season (winter demand
+    // is 0.6x) shouldn't tip an expensive hotel into debt. Bigger purchases also
+    // want a multiple of the base reserve banked first.
+    const safety = SAFETY_DAYS * getDailyRunningCost(s);
+    const afford: Afford = (st, cost, mult = 1) => st.cash - cost >= Math.max(opts.cashReserve * mult, safety);
+
     s = {
       ...s,
       staff: {
@@ -79,7 +115,7 @@ function managedStrategy(opts: ManagedOptions): Strategy {
     s = { ...s, amenities: { standard: tier, deluxe: tier, suite: tier } };
 
     for (const room of s.rooms) {
-      const price = Math.round(getExpectedPrice(room.type, s.starRating) * opts.priceMultiplier);
+      const price = Math.round(getExpectedPrice(room.type, s.starRating, room.floor) * opts.priceMultiplier);
       if (room.pricePerNight !== price) s = setRoomPrice(s, room.id, price);
     }
 
@@ -89,32 +125,44 @@ function managedStrategy(opts: ManagedOptions): Strategy {
       const facility = (Object.keys(FACILITY_CONFIG) as FacilityType[]).find(type =>
         isUnlocked(s, type)
         && !s.facilities.some(f => f.type === type)
-        && s.cash - FACILITY_CONFIG[type].buildCost >= opts.cashReserve
+        && afford(s, FACILITY_CONFIG[type].buildCost)
       );
       if (facility) {
-        s = addFacility(s, facility, tile.x, tile.y) ?? s;
+        s = addFacility(s, facility, tile.x, tile.y, tile.floor) ?? s;
       } else {
         const type = nextRoomType(s);
         const busy = rooms < 10 || getAverageOccupancy(s, 7) >= opts.expandAtOccupancy;
-        if (busy && s.cash - ROOM_CONFIG[type].buildCost >= opts.cashReserve) {
-          s = addRoom(s, type, tile.x, tile.y) ?? s;
+        if (busy && afford(s, ROOM_CONFIG[type].buildCost)) {
+          s = addRoom(s, type, tile.x, tile.y, tile.floor) ?? s;
         }
       }
+    } else if (getAverageOccupancy(s, 7) >= opts.expandAtOccupancy) {
+      // Out of room and still busy: build upward (shaft first, so the new floor is reachable)
+      if (s.elevators.length === 0) s = addReservedElevator(s, afford);
+      const floorCost = getNextFloorCost(s);
+      if (s.elevators.length > 0 && floorCost !== null && afford(s, floorCost, 2)) {
+        s = buildFloor(s)?.state ?? s;
+      }
+    }
+
+    // Keep elevator waits comfortable as the upper floors fill
+    if (s.elevators.length > 0 && getElevatorLoad(s) > 0.9) {
+      s = addReservedElevator(s, afford);
     }
 
     // Climbing stars: with cash to spare, swap a vacant lower-tier room for the
     // best unlocked type (a suite, eventually) -- room mix is the biggest star lever.
     const best: RoomType = isUnlocked(s, 'suite') ? 'suite' : isUnlocked(s, 'deluxe') ? 'deluxe' : 'standard';
     const replaceable = s.rooms.find(r => r.status === 'vacant' && r.type !== best && (r.type === 'standard' || best === 'suite'));
-    if (replaceable && s.starRating < 5 && s.cash - ROOM_CONFIG[best].buildCost >= opts.cashReserve * 4) {
+    if (replaceable && s.starRating < 5 && afford(s, ROOM_CONFIG[best].buildCost, 4)) {
       const cleared = demolishRoom(s, replaceable.id);
-      if (cleared) s = addRoom(cleared, best, replaceable.gridX, replaceable.gridY) ?? s;
+      if (cleared) s = addRoom(cleared, best, replaceable.gridX, replaceable.gridY, replaceable.floor) ?? s;
     }
 
-    s = reinvest(s, opts);
+    s = reinvest(s, opts, afford);
 
     // Surplus cash pays the loan down early
-    while (s.loan.balance > 0 && s.cash - LOAN.earlyRepaymentStep >= opts.cashReserve * 3) {
+    while (s.loan.balance > 0 && afford(s, LOAN.earlyRepaymentStep, 3)) {
       s = repayLoan(s, LOAN.earlyRepaymentStep) ?? s;
     }
 
@@ -123,9 +171,9 @@ function managedStrategy(opts: ManagedOptions): Strategy {
 }
 
 /** Late-game spending: renovations, facility upgrades, and marketing when rooms sit empty. */
-function reinvest(state: HotelState, opts: ManagedOptions): HotelState {
+function reinvest(state: HotelState, opts: ManagedOptions, afford: Afford): HotelState {
   let s = state;
-  const canSpend = (cost: number, reserveMult = 1) => s.cash - cost >= opts.cashReserve * reserveMult;
+  const canSpend = (cost: number, reserveMult = 1) => afford(s, cost, reserveMult);
   // Discretionary spending waits until there's enough banked to keep climbing
   // (a suite swap needs cashReserve x 4 on top of the suite itself).
   const surplusMult = 6;

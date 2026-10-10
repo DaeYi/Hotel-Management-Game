@@ -1,5 +1,5 @@
 import type { HotelState, RoomType } from './types.js';
-import { STAR_RATING, AMENITIES, FACILITY_CONFIG, ROOM_CONFIG, FACILITY_LEVELS } from '../config/balance.js';
+import { STAR_RATING, AMENITIES, FACILITY_CONFIG, ROOM_CONFIG, FACILITY_LEVELS, FLOORS } from '../config/balance.js';
 import { getDecorStarPenalty } from './DecorManager.js';
 
 /**
@@ -91,9 +91,10 @@ export function pointsForStars(stars: number): number {
   return STAR_RATING.pointThresholds[Math.max(1, Math.min(5, stars)) - 1];
 }
 
-/** What guests consider a fair nightly price for a room type at a given star level. */
-export function getExpectedPrice(type: RoomType, starRating: number): number {
-  return Math.round(ROOM_CONFIG[type].expectedPrice * getPriceMultiplier(starRating));
+/** What guests consider a fair nightly price for a room type at a given star level, with a view premium for higher floors. */
+export function getExpectedPrice(type: RoomType, starRating: number, floor = 0): number {
+  const viewPremium = 1 + FLOORS.viewPremiumPerFloor * floor;
+  return Math.round(ROOM_CONFIG[type].expectedPrice * getPriceMultiplier(starRating) * viewPremium);
 }
 
 export function getPriceMultiplier(starRating: number): number {

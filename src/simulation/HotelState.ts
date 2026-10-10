@@ -1,5 +1,5 @@
-import type { HotelState, Room, RoomType, Facility, FacilityType, TileType } from './types.js';
-import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS } from '../config/balance.js';
+import type { HotelState, Room, RoomType, Facility, FacilityType, TileType, Elevator, GameEvent } from './types.js';
+import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS, FLOORS, ELEVATOR } from '../config/balance.js';
 import { createConstructionNoise } from './NoiseManager.js';
 import { getExpectedPrice, getPriceMultiplier } from './StarRatingManager.js';
 
@@ -45,6 +45,8 @@ export function createHotelState(): HotelState {
     dailyStats: [],
     activeCampaign: null,
     daysAtFiveStars: 0,
+    floorCount: 1,
+    elevators: [],
   };
 }
 
@@ -60,21 +62,25 @@ export function isUnlocked(state: HotelState, type: TileType): boolean {
   return state.peakStarRating >= getRequiredStars(type);
 }
 
+/** Whether (gridX, gridY) is inside the floor plan on a floor that has been built. */
+export function isValidTile(state: HotelState, gridX: number, gridY: number, floor: number): boolean {
+  return gridX >= 0 && gridX < GRID.width && gridY >= 0 && gridY < GRID.height
+    && floor >= 0 && floor < state.floorCount;
+}
+
 export function addRoom(
   state: HotelState,
   type: RoomType,
   gridX: number,
-  gridY: number
+  gridY: number,
+  floor = 0
 ): HotelState | null {
   const config = ROOM_CONFIG[type];
 
-  // Validate position
-  if (gridX < 0 || gridX >= GRID.width || gridY < 0 || gridY >= GRID.height) {
-    return null;
-  }
+  if (!isValidTile(state, gridX, gridY, floor)) return null;
 
-  // Check for duplicate position (rooms or facilities)
-  if (isTileOccupied(state, gridX, gridY)) {
+  // Check for duplicate position (rooms, facilities, elevator shafts)
+  if (isTileOccupied(state, gridX, gridY, floor)) {
     return null;
   }
 
@@ -86,14 +92,15 @@ export function addRoom(
     return null;
   }
 
-  // New rooms start at the fair price for the hotel's current star level
-  const startingPrice = Math.max(config.minPrice, Math.min(config.maxPrice, getExpectedPrice(type, state.starRating)));
+  // New rooms start at the fair price for the hotel's star level and their floor
+  const startingPrice = Math.max(config.minPrice, Math.min(config.maxPrice, getExpectedPrice(type, state.starRating, floor)));
 
   const room: Room = {
-    id: `room-${gridX}-${gridY}`,
+    id: `room-${floor}-${gridX}-${gridY}`,
     type,
     gridX,
     gridY,
+    floor,
     pricePerNight: startingPrice,
     condition: 100,
     cleanliness: HOUSEKEEPING.initialCleanliness,
@@ -108,7 +115,7 @@ export function addRoom(
     ...state,
     cash: state.cash - config.buildCost,
     rooms: [...state.rooms, room],
-    noiseSources: [...state.noiseSources, createConstructionNoise(gridX, gridY, 'build')],
+    noiseSources: [...state.noiseSources, createConstructionNoise(gridX, gridY, 'build', floor)],
   };
 }
 
@@ -147,7 +154,7 @@ export function demolishRoom(state: HotelState, roomId: string): HotelState | nu
     ...state,
     cash: state.cash + refund,
     rooms: state.rooms.filter(r => r.id !== roomId),
-    noiseSources: [...state.noiseSources, createConstructionNoise(room.gridX, room.gridY, 'demolish')],
+    noiseSources: [...state.noiseSources, createConstructionNoise(room.gridX, room.gridY, 'demolish', room.floor)],
   };
 }
 
@@ -189,7 +196,7 @@ export function renovateRoom(state: HotelState, roomId: string): HotelState | nu
     rooms: state.rooms.map(r =>
       r.id === roomId ? { ...r, status: 'renovating' as const, renovationHoursRemaining: RENOVATION.durationHours } : r
     ),
-    noiseSources: [...state.noiseSources, createConstructionNoise(room.gridX, room.gridY, 'renovate')],
+    noiseSources: [...state.noiseSources, createConstructionNoise(room.gridX, room.gridY, 'renovate', room.floor)],
   };
 }
 
@@ -204,7 +211,7 @@ export function renovateFacility(state: HotelState, facilityId: string): HotelSt
     ...state,
     cash: state.cash - cost,
     facilities: state.facilities.map(f => f.id === facilityId ? { ...f, decor: 100 } : f),
-    noiseSources: [...state.noiseSources, createConstructionNoise(facility.gridX, facility.gridY, 'renovate')],
+    noiseSources: [...state.noiseSources, createConstructionNoise(facility.gridX, facility.gridY, 'renovate', facility.floor)],
   };
 }
 
@@ -227,7 +234,7 @@ export function upgradeFacility(state: HotelState, facilityId: string): HotelSta
     ...state,
     cash: state.cash - cost,
     facilities: state.facilities.map(f => f.id === facilityId ? { ...f, level: f.level + 1, decor: 100 } : f),
-    noiseSources: [...state.noiseSources, createConstructionNoise(facility.gridX, facility.gridY, 'renovate')],
+    noiseSources: [...state.noiseSources, createConstructionNoise(facility.gridX, facility.gridY, 'renovate', facility.floor)],
   };
 }
 
@@ -237,37 +244,105 @@ export function getOccupancyRate(state: HotelState): number {
   return occupied / state.rooms.length;
 }
 
+/** Upper-floor rooms need at least one elevator before guests can reach them. */
+export function isRoomReachable(state: HotelState, room: Room): boolean {
+  return room.floor === 0 || state.elevators.length > 0;
+}
+
 export function getAvailableRooms(state: HotelState): Room[] {
   return state.rooms
-    .filter(r => r.status === 'vacant' && r.condition > ECONOMY.roomBreakdownThreshold)
+    .filter(r => r.status === 'vacant' && r.condition > ECONOMY.roomBreakdownThreshold && isRoomReachable(state, r))
     .sort((a, b) => a.pricePerNight - b.pricePerNight); // ascending price
 }
 
-/** Check if a grid position is occupied by a room or facility */
-export function isTileOccupied(state: HotelState, gridX: number, gridY: number): boolean {
-  return state.rooms.some(r => r.gridX === gridX && r.gridY === gridY)
-    || state.facilities.some(f => f.gridX === gridX && f.gridY === gridY);
+/** Check if a tile on a floor is taken by a room, a facility, or an elevator shaft (which spans every floor). */
+export function isTileOccupied(state: HotelState, gridX: number, gridY: number, floor: number): boolean {
+  return state.rooms.some(r => r.floor === floor && r.gridX === gridX && r.gridY === gridY)
+    || state.facilities.some(f => f.floor === floor && f.gridX === gridX && f.gridY === gridY)
+    || state.elevators.some(e => e.gridX === gridX && e.gridY === gridY);
+}
+
+/** Cost to build the next floor up, or null at the height limit. */
+export function getNextFloorCost(state: HotelState): number | null {
+  if (state.floorCount >= FLOORS.max) return null;
+  return Math.round(FLOORS.baseCost * FLOORS.costGrowth ** (state.floorCount - 1));
+}
+
+/** Total spent on floors above ground so far (for valuation). */
+export function getFloorsBuildCost(floorCount: number): number {
+  let total = 0;
+  for (let n = 1; n < floorCount; n++) total += Math.round(FLOORS.baseCost * FLOORS.costGrowth ** (n - 1));
+  return total;
+}
+
+/** Add a floor on top of the building. */
+export function buildFloor(state: HotelState): { state: HotelState; events: GameEvent[] } | null {
+  const cost = getNextFloorCost(state);
+  if (cost === null || state.cash < cost) return null;
+  const floorCount = state.floorCount + 1;
+  return {
+    state: { ...state, cash: state.cash - cost, floorCount },
+    events: [{ type: 'floor_built', message: `Floor ${floorCount} built` }],
+  };
+}
+
+/** Place an elevator shaft. The tile must be free on every built floor. */
+export function addElevator(state: HotelState, gridX: number, gridY: number): HotelState | null {
+  if (!isValidTile(state, gridX, gridY, 0)) return null;
+  for (let floor = 0; floor < state.floorCount; floor++) {
+    if (isTileOccupied(state, gridX, gridY, floor)) return null;
+  }
+  if (state.cash < ELEVATOR.buildCost) return null;
+
+  const elevator: Elevator = { id: `elevator-${gridX}-${gridY}`, gridX, gridY };
+  return { ...state, cash: state.cash - ELEVATOR.buildCost, elevators: [...state.elevators, elevator] };
+}
+
+export function demolishElevator(state: HotelState, elevatorId: string): HotelState | null {
+  if (!state.elevators.some(e => e.id === elevatorId)) return null;
+  return {
+    ...state,
+    cash: state.cash + getDemolishRefund(ELEVATOR.buildCost),
+    elevators: state.elevators.filter(e => e.id !== elevatorId),
+  };
+}
+
+/** Upper-floor rooms per comfortable elevator capacity: 1 is full, 2+ is the worst wait. */
+export function getElevatorLoad(state: HotelState): number {
+  const upperRooms = state.rooms.filter(r => r.floor > 0).length;
+  if (upperRooms === 0) return 0;
+  if (state.elevators.length === 0) return Infinity;
+  return upperRooms / (state.elevators.length * ELEVATOR.roomsServed);
+}
+
+/** Review penalty (0-10 scale) for a guest staying on an upper floor of an overloaded hotel. */
+export function getElevatorWaitPenalty(state: HotelState, room: Room): number {
+  if (room.floor === 0) return 0;
+  const overload = Math.max(0, Math.min(1, getElevatorLoad(state) - 1));
+  return overload * ELEVATOR.maxWaitPenalty;
 }
 
 export function addFacility(
   state: HotelState,
   type: FacilityType,
   gridX: number,
-  gridY: number
+  gridY: number,
+  floor = 0
 ): HotelState | null {
   const config = FACILITY_CONFIG[type];
   if (!config) return null;
 
-  if (gridX < 0 || gridX >= GRID.width || gridY < 0 || gridY >= GRID.height) return null;
-  if (isTileOccupied(state, gridX, gridY)) return null;
+  if (!isValidTile(state, gridX, gridY, floor)) return null;
+  if (isTileOccupied(state, gridX, gridY, floor)) return null;
   if (state.cash < config.buildCost) return null;
   if (!isUnlocked(state, type)) return null;
 
   const facility: Facility = {
-    id: `facility-${gridX}-${gridY}`,
+    id: `facility-${floor}-${gridX}-${gridY}`,
     type,
     gridX,
     gridY,
+    floor,
     condition: 100,
     decor: 100,
     level: 1,
@@ -277,7 +352,7 @@ export function addFacility(
     ...state,
     cash: state.cash - config.buildCost,
     facilities: [...state.facilities, facility],
-    noiseSources: [...state.noiseSources, createConstructionNoise(gridX, gridY, 'build')],
+    noiseSources: [...state.noiseSources, createConstructionNoise(gridX, gridY, 'build', floor)],
   };
 }
 
@@ -292,25 +367,25 @@ export function demolishFacility(state: HotelState, facilityId: string): HotelSt
     ...state,
     cash: state.cash + refund,
     facilities: state.facilities.filter(f => f.id !== facilityId),
-    noiseSources: [...state.noiseSources, createConstructionNoise(facility.gridX, facility.gridY, 'demolish')],
+    noiseSources: [...state.noiseSources, createConstructionNoise(facility.gridX, facility.gridY, 'demolish', facility.floor)],
   };
 }
 
 /**
- * Derive a hotel-style room number from grid position (floor = row, unit = column),
- * e.g. row 2, column 4 -> "204". Pure formatting, no stored data (design-review D9) --
- * used in RoomInspector's title, a grid tile label, and Story Log/toast message text.
+ * Derive a hotel-style room number: floor number (1 = ground) then a two-digit
+ * unit counted across the floor plan, e.g. ground floor, row 1, column 3 -> "112".
+ * Pure formatting, no stored data (design-review D9) -- used in RoomInspector's
+ * title, a grid tile label, and Story Log/toast message text.
  */
-export function formatRoomLabel(gridX: number, gridY: number): string {
-  const floor = gridY + 1;
-  const unit = String(gridX + 1).padStart(2, '0');
-  return `${floor}${unit}`;
+export function formatRoomLabel(gridX: number, gridY: number, floor: number): string {
+  const unit = String(gridY * GRID.width + gridX + 1).padStart(2, '0');
+  return `${floor + 1}${unit}`;
 }
 
-/** Get facilities adjacent to a room (within 1 tile, all 8 directions) */
-export function getAdjacentFacilities(state: HotelState, gridX: number, gridY: number): Facility[] {
+/** Get facilities adjacent to a room on the same floor (within 1 tile, all 8 directions) */
+export function getAdjacentFacilities(state: HotelState, gridX: number, gridY: number, floor: number): Facility[] {
   return state.facilities.filter(f =>
-    Math.abs(f.gridX - gridX) <= 1 && Math.abs(f.gridY - gridY) <= 1
+    f.floor === floor && Math.abs(f.gridX - gridX) <= 1 && Math.abs(f.gridY - gridY) <= 1
     && !(f.gridX === gridX && f.gridY === gridY)
   );
 }

@@ -12,6 +12,7 @@ export interface Room {
   type: RoomType;
   gridX: number;
   gridY: number;
+  floor: number; // 0 = ground floor
   pricePerNight: number;
   condition: number; // 0-100, physical wear
   cleanliness: number; // 0-100, how clean the room is
@@ -92,14 +93,23 @@ export interface Facility {
   type: FacilityType;
   gridX: number;
   gridY: number;
+  floor: number; // 0 = ground floor
   condition: number; // 0-100
   decor: number; // 0-100, same meaning as Room.decor
   level: number; // 1-3, raised by upgradeFacility
 }
 
+/** An elevator shaft: occupies (gridX, gridY) on every floor. */
+export interface Elevator {
+  id: string;
+  gridX: number;
+  gridY: number;
+}
+
 export interface NoiseSource {
   gridX: number;
   gridY: number;
+  floor: number;
   intensity: number;
   remainingHours: number;
   type: 'build' | 'demolish' | 'renovate';
@@ -130,6 +140,8 @@ export interface HotelState {
   objectives: ObjectiveProgress;
   dailyStats: DailyStat[]; // one entry per finished day, capped at DAILY_STATS_MAX_DAYS
   activeCampaign: ActiveCampaign | null; // at most one marketing campaign runs at a time
+  floorCount: number; // built floors, including the ground floor (>= 1)
+  elevators: Elevator[];
   daysAtFiveStars: number; // consecutive end-of-day snapshots at 5 stars (legacy goals)
 }
 
@@ -191,7 +203,7 @@ export interface TickResult {
 }
 
 export interface GameEvent {
-  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked' | 'renovation_complete' | 'campaign_ended';
+  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked' | 'renovation_complete' | 'campaign_ended' | 'floor_built';
   message: string;
   data?: Record<string, unknown>;
 }

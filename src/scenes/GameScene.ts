@@ -1,13 +1,15 @@
 import Phaser from 'phaser';
-import { createHotelState, addRoom, setRoomPrice, repairRoom, demolishRoom, addFacility, demolishFacility, isTileOccupied, isUnlocked, renovateRoom, renovateFacility, upgradeFacility } from '../simulation/HotelState';
+import { createHotelState, addRoom, setRoomPrice, repairRoom, demolishRoom, addFacility, demolishFacility, renovateRoom, renovateFacility, upgradeFacility, addElevator, buildFloor } from '../simulation/HotelState';
 import { startCampaign } from '../simulation/MarketingManager';
 import { tickSimulation } from '../simulation/tick';
 import { checkBankruptcy, repayLoan } from '../simulation/EconomyManager';
 import { PRNG } from '../simulation/prng';
 import { ROOM_CONFIG } from '../config/balance';
-import type { HotelState, RoomType, FacilityType, TileType, StaffConfig, AmenityTier, CleaningQuality, DailyCleaningCadence } from '../simulation/types';
+import type { HotelState, RoomType, FacilityType, StaffConfig, AmenityTier, CleaningQuality, DailyCleaningCadence } from '../simulation/types';
 import { FACILITY_CONFIG } from '../config/balance';
 import { BuildPanel } from '../ui/BuildPanel';
+import type { BuildType } from '../ui/BuildPanel';
+import { FloorSelector } from '../ui/FloorSelector';
 import { InfoBar } from '../ui/InfoBar';
 import { GridRenderer, GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE } from '../ui/GridRenderer';
 import { RoomInspector } from '../ui/RoomInspector';
@@ -52,6 +54,8 @@ export class GameScene extends Phaser.Scene {
   private staffPanel!: StaffPanel;
   private amenitiesPanel!: AmenitiesPanel;
   private toolbar!: Toolbar;
+  private floorSelector!: FloorSelector;
+  private currentFloor = 0; // the floor plan being viewed and built on
   private tutorialActive = true;
   private gameOver = false;
 
@@ -100,6 +104,15 @@ export class GameScene extends Phaser.Scene {
         this.facilityInspector.hide();
       }
     });
+
+    // Floor stack (right of the build panel): view floors, build upward
+    this.floorSelector = new FloorSelector(
+      this, buildPanelX + 176, GRID_OFFSET_Y,
+      (floor) => this.setFloor(floor),
+      () => this.handleBuildFloor()
+    );
+    this.input.keyboard?.on('keydown-PAGE_UP', () => this.setFloor(this.currentFloor + 1));
+    this.input.keyboard?.on('keydown-PAGE_DOWN', () => this.setFloor(this.currentFloor - 1));
 
     // Room inspector (popup on room click)
     this.roomInspector = new RoomInspector(
@@ -188,6 +201,7 @@ export class GameScene extends Phaser.Scene {
     // rendering while the tutorial is open, and step 4 points at both.
     this.buildPanel.update(this.state);
     this.objectiveTracker.update(this.state);
+    this.floorSelector.update(this.state, this.currentFloor);
 
     // Tutorial
     if (!save) {
@@ -214,11 +228,12 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
-    this.grid.renderRooms(this.state);
-    this.grid.renderFacilities(this.state);
-    this.grid.renderGuests(this.state);
-    this.grid.renderNoise(this.state);
-    this.grid.renderConstruction(this.state);
+    this.grid.renderRooms(this.state, this.currentFloor);
+    this.grid.renderFacilities(this.state, this.currentFloor);
+    this.grid.renderGuests(this.state, this.currentFloor);
+    this.grid.renderNoise(this.state, this.currentFloor);
+    this.grid.renderConstruction(this.state, this.currentFloor);
+    this.floorSelector.update(this.state, this.currentFloor);
     this.grid.updateDayNight(this.state.hour);
     this.grid.updateFeedback(delta);
     this.infoBar.update(this.state, this.paused, this.speedMultiplier);
@@ -375,12 +390,7 @@ export class GameScene extends Phaser.Scene {
     const cell = this.grid.pointerToGrid(pointer);
 
     if (selectedType && cell) {
-      let result: HotelState | null = null;
-      if (this.buildPanel.isRoomSelected()) {
-        result = addRoom(this.state, selectedType as RoomType, cell.gridX, cell.gridY);
-      } else if (this.buildPanel.isFacilitySelected()) {
-        result = addFacility(this.state, selectedType as FacilityType, cell.gridX, cell.gridY);
-      }
+      const result = this.tryBuild(selectedType, cell.gridX, cell.gridY);
       if (result) {
         this.state = result;
         this.grid.showPlacementSuccess(cell.gridX, cell.gridY);
@@ -392,7 +402,7 @@ export class GameScene extends Phaser.Scene {
 
     if (!selectedType && cell) {
       const room = this.state.rooms.find(
-        r => r.gridX === cell.gridX && r.gridY === cell.gridY
+        r => r.floor === this.currentFloor && r.gridX === cell.gridX && r.gridY === cell.gridY
       );
       if (room) {
         this.facilityInspector.hide();
@@ -401,7 +411,7 @@ export class GameScene extends Phaser.Scene {
       }
 
       const facility = this.state.facilities.find(
-        f => f.gridX === cell.gridX && f.gridY === cell.gridY
+        f => f.floor === this.currentFloor && f.gridX === cell.gridX && f.gridY === cell.gridY
       );
       if (facility) {
         this.roomInspector.hide();
@@ -425,19 +435,33 @@ export class GameScene extends Phaser.Scene {
       this.grid.clearHoverPreview();
       return;
     }
-    const canPlace = this.canPlaceTile(selectedType, cell.gridX, cell.gridY);
+    const canPlace = this.tryBuild(selectedType, cell.gridX, cell.gridY) !== null;
     this.grid.showHoverPreview(cell.gridX, cell.gridY, selectedType, canPlace);
   }
 
-  private canPlaceTile(type: TileType, gridX: number, gridY: number): boolean {
-    if (isTileOccupied(this.state, gridX, gridY)) return false;
-    if (!isUnlocked(this.state, type)) return false;
-    const roomTypes = ['standard', 'deluxe', 'suite'];
-    if (roomTypes.includes(type)) {
-      return this.state.cash >= ROOM_CONFIG[type as RoomType].buildCost;
-    }
-    const fConfig = FACILITY_CONFIG[type];
-    return fConfig ? this.state.cash >= fConfig.buildCost : false;
+  /** The state after building `type` at a tile on the current floor, or null if not allowed (also used as the hover check). */
+  private tryBuild(type: BuildType, gridX: number, gridY: number): HotelState | null {
+    if (type === 'elevator') return addElevator(this.state, gridX, gridY);
+    if (type in ROOM_CONFIG) return addRoom(this.state, type as RoomType, gridX, gridY, this.currentFloor);
+    if (type in FACILITY_CONFIG) return addFacility(this.state, type as FacilityType, gridX, gridY, this.currentFloor);
+    return null;
+  }
+
+  private setFloor(floor: number) {
+    const next = Math.max(0, Math.min(this.state.floorCount - 1, floor));
+    if (next === this.currentFloor) return;
+    this.currentFloor = next;
+    this.roomInspector.hide();
+    this.facilityInspector.hide();
+    this.grid.clearHoverPreview();
+  }
+
+  private handleBuildFloor() {
+    const result = buildFloor(this.state);
+    if (!result) return;
+    this.state = result.state;
+    this.toasts.addEvents(result.events);
+    this.setFloor(this.state.floorCount - 1);
   }
 
   // === State change handlers ===

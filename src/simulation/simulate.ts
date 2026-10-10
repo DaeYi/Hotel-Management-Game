@@ -27,7 +27,7 @@ export function simulate(
     // 8 standard rooms in a row -- the "Open for Business" objective, and
     // the only room type unlocked at 1 star
     for (let x = 0; x < 8; x++) {
-      const result = addRoom(state, 'standard', x, 0);
+      const result = addRoom(state, 'standard', x, 1); // row 0 stays clear for elevator shafts
       if (result) state = result;
     }
   }

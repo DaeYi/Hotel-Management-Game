@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { RoomType, FacilityType, TileType, HotelState } from '../simulation/types';
-import { ROOM_CONFIG, FACILITY_CONFIG } from '../config/balance';
+import { ROOM_CONFIG, FACILITY_CONFIG, ELEVATOR } from '../config/balance';
 import { getRequiredStars, isUnlocked } from '../simulation/HotelState';
 import { getExpectedPrice } from '../simulation/StarRatingManager';
 
@@ -12,21 +12,26 @@ const ROOM_COLORS: Record<RoomType, number> = {
 
 const PANEL_WIDTH = 160;
 
+/** Anything the build panel can place: a room or facility tile, or an elevator shaft. */
+export type BuildType = TileType | 'elevator';
+
+const CATEGORY_HEADERS: Record<string, string> = { facility: 'FACILITIES', service: 'SERVICE' };
+
 interface BuildOption {
-  type: TileType;
+  type: BuildType;
   label: string;
   cost: number;
   subtitle: string;
   color: number;
-  category: 'room' | 'facility';
+  category: 'room' | 'facility' | 'service';
 }
 
 export class BuildPanel {
   private scene: Phaser.Scene;
   private x: number;
   private y: number;
-  private selectedType: TileType | null = null;
-  private onSelect: (type: TileType | null) => void;
+  private selectedType: BuildType | null = null;
+  private onSelect: (type: BuildType | null) => void;
   private buttonBackgrounds: Map<string, Phaser.GameObjects.Graphics> = new Map();
   private costTexts: Map<string, Phaser.GameObjects.Text> = new Map();
   private subtitleTexts: Map<string, Phaser.GameObjects.Text> = new Map();
@@ -38,7 +43,7 @@ export class BuildPanel {
     scene: Phaser.Scene,
     x: number,
     y: number,
-    onSelect: (type: TileType | null) => void
+    onSelect: (type: BuildType | null) => void
   ) {
     this.scene = scene;
     this.x = x;
@@ -72,10 +77,20 @@ export class BuildPanel {
         category: 'facility',
       });
     }
+    // Elevator shafts run through every floor
+    this.options.push({
+      type: 'elevator',
+      label: 'Elevator',
+      cost: ELEVATOR.buildCost,
+      subtitle: `${ELEVATOR.roomsServed} upper rooms`,
+      color: 0x7f8c8d,
+      category: 'service',
+    });
   }
 
   private create() {
-    const totalHeight = 40 + this.options.length * 56 + 20; // header + buttons + padding
+    const headers = new Set(this.options.map(o => o.category)).size - 1;
+    const totalHeight = 40 + this.options.length * 56 + headers * 22 + 4; // header + buttons + category labels
 
     // Panel background
     const bg = this.scene.add.graphics();
@@ -93,13 +108,13 @@ export class BuildPanel {
 
     for (const option of this.options) {
       // Category divider
-      if (option.category !== lastCategory && option.category === 'facility') {
+      if (option.category !== lastCategory && CATEGORY_HEADERS[option.category]) {
         // Divider line
         const divG = this.scene.add.graphics();
         divG.lineStyle(1, 0x3a3a5a, 0.5);
         divG.lineBetween(this.x + 8, btnY + 2, this.x + PANEL_WIDTH - 8, btnY + 2);
 
-        this.scene.add.text(this.x + 12, btnY + 6, 'FACILITIES', {
+        this.scene.add.text(this.x + 12, btnY + 6, CATEGORY_HEADERS[option.category], {
           fontSize: '11px', fontFamily: 'monospace', color: '#8888aa',
         });
         btnY += 22;
@@ -197,7 +212,7 @@ export class BuildPanel {
       const container = this.containers.get(option.type);
       if (!costText || !subtitle || !container) continue;
 
-      const unlocked = isUnlocked(state, option.type);
+      const unlocked = option.type === 'elevator' || isUnlocked(state, option.type);
       if (unlocked) {
         this.locked.delete(option.type);
         container.setAlpha(1);
@@ -206,7 +221,7 @@ export class BuildPanel {
       } else {
         this.locked.add(option.type);
         container.setAlpha(0.45);
-        costText.setText(`🔒 Unlocks at ${getRequiredStars(option.type)}★`);
+        costText.setText(`🔒 Unlocks at ${getRequiredStars(option.type as TileType)}★`);
         costText.setColor('#aaaacc');
         if (this.selectedType === option.type) this.clearSelection();
       }
@@ -217,8 +232,12 @@ export class BuildPanel {
     }
   }
 
-  getSelectedType(): TileType | null {
+  getSelectedType(): BuildType | null {
     return this.selectedType;
+  }
+
+  isElevatorSelected(): boolean {
+    return this.selectedType === 'elevator';
   }
 
   /** Check if selected type is a room type */
@@ -228,7 +247,7 @@ export class BuildPanel {
 
   /** Check if selected type is a facility type */
   isFacilitySelected(): boolean {
-    return this.selectedType !== null && !this.isRoomSelected();
+    return this.selectedType !== null && !this.isRoomSelected() && !this.isElevatorSelected();
   }
 
   clearSelection() {

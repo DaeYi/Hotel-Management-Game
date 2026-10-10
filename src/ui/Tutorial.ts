@@ -3,7 +3,7 @@ import Phaser from 'phaser';
 const STEPS = [
   {
     title: 'Step 1: Build Rooms',
-    text: 'Click a room type in the BUILD panel on the right,\nthen click on the grid to place it.',
+    text: 'Click a room type in the BUILD panel, then\nclick the grid to place it. Out of space?\nBuild up (FLOORS, far right) and add an\nelevator so guests can reach the new floor.',
   },
   {
     title: 'Step 2: Guests Arrive',

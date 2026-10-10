@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import type { HotelState, RoomType, FacilityType, GuestTrait } from '../simulation/types';
 import { GRID, ECONOMY, NOISE, FACILITY_CONFIG, DECOR } from '../config/balance';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
-import { formatRoomLabel } from '../simulation/HotelState';
+import { formatRoomLabel, isRoomReachable } from '../simulation/HotelState';
 
 /** Guest dot color by trait, in one place so every trait gets an explicit,
  * distinct color instead of silently falling through to the default. */
@@ -15,7 +15,7 @@ export function getGuestDotColor(trait: GuestTrait): number {
   }
 }
 
-export const TILE_SIZE = 32;
+export const TILE_SIZE = 64;
 export const GRID_OFFSET_X = 16;
 export const GRID_OFFSET_Y = 72;
 
@@ -24,6 +24,8 @@ const ROOM_COLORS: Record<RoomType, number> = {
   deluxe: 0x9b59b6,
   suite: 0xf1c40f,
 };
+
+const ELEVATOR_COLOR = 0x7f8c8d;
 
 const ROOM_OCCUPIED_COLORS: Record<RoomType, number> = {
   standard: 0x2e6da4,
@@ -109,7 +111,7 @@ export class GridRenderer {
     // Get color: room types use ROOM_COLORS, facilities use FACILITY_CONFIG
     const color = ROOM_COLORS[type as RoomType]
       ?? FACILITY_CONFIG[type]?.color
-      ?? 0xcccccc;
+      ?? ELEVATOR_COLOR;
 
     if (canPlace) {
       this.hoverGraphics.fillStyle(color, 0.4);
@@ -150,18 +152,20 @@ export class GridRenderer {
     this.feedbackTimer = 300;
   }
 
-  renderRooms(state: HotelState) {
+  /** Draw the rooms on one floor. Upper-floor rooms with no elevator to reach them are dimmed. */
+  renderRooms(state: HotelState, floor: number) {
     this.roomGraphics.clear();
     const seenRoomIds = new Set<string>();
 
     for (const room of state.rooms) {
+      if (room.floor !== floor) continue;
       const x = GRID_OFFSET_X + room.gridX * TILE_SIZE;
       const y = GRID_OFFSET_Y + room.gridY * TILE_SIZE;
       const color = room.status === 'occupied' ? ROOM_OCCUPIED_COLORS[room.type]
         : room.status === 'cleaning' ? 0x888888
         : room.status === 'renovating' ? 0xd35400
         : ROOM_COLORS[room.type];
-      const alpha = room.condition <= ECONOMY.roomBreakdownThreshold ? 0.3 : 0.85;
+      const alpha = room.condition <= ECONOMY.roomBreakdownThreshold || !isRoomReachable(state, room) ? 0.3 : 0.85;
 
       this.roomGraphics.fillStyle(color, alpha);
       this.roomGraphics.fillRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);
@@ -184,15 +188,15 @@ export class GridRenderer {
       let label = this.roomLabels.get(room.id);
       if (!label) {
         label = this.scene.add.text(0, 0, '', {
-          fontSize: '7px', fontFamily: 'monospace', color: '#ffffff',
-        }).setAlpha(0.55).setDepth(2);
+          fontSize: '10px', fontFamily: 'monospace', color: '#ffffff',
+        }).setAlpha(0.6).setDepth(2);
         this.roomLabels.set(room.id, label);
       }
-      label.setText(formatRoomLabel(room.gridX, room.gridY));
-      label.setPosition(x + 2, y + 1);
+      label.setText(formatRoomLabel(room.gridX, room.gridY, room.floor));
+      label.setPosition(x + 4, y + 4);
     }
 
-    // A demolished room's label is removed rather than left dangling.
+    // A demolished room's label (or one on another floor) is removed rather than left dangling.
     for (const [roomId, label] of this.roomLabels) {
       if (!seenRoomIds.has(roomId)) {
         label.destroy();
@@ -201,9 +205,24 @@ export class GridRenderer {
     }
   }
 
-  renderFacilities(state: HotelState) {
+  /** Draw one floor's facilities, plus every elevator shaft (they run through all floors). */
+  renderFacilities(state: HotelState, floor: number) {
+    for (const elevator of state.elevators) {
+      const x = GRID_OFFSET_X + elevator.gridX * TILE_SIZE;
+      const y = GRID_OFFSET_Y + elevator.gridY * TILE_SIZE;
+      const cx = x + TILE_SIZE / 2;
+      const cy = y + TILE_SIZE / 2;
+      this.roomGraphics.fillStyle(ELEVATOR_COLOR, 0.9);
+      this.roomGraphics.fillRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+      // Up/down arrows
+      this.roomGraphics.fillStyle(0xffffff, 0.8);
+      this.roomGraphics.fillTriangle(cx - 8, cy - 4, cx + 8, cy - 4, cx, cy - 14);
+      this.roomGraphics.fillTriangle(cx - 8, cy + 4, cx + 8, cy + 4, cx, cy + 14);
+    }
+
     // Facilities are drawn on the same graphics layer as rooms
     for (const facility of state.facilities) {
+      if (facility.floor !== floor) continue;
       const x = GRID_OFFSET_X + facility.gridX * TILE_SIZE;
       const y = GRID_OFFSET_Y + facility.gridY * TILE_SIZE;
       const fConfig = FACILITY_CONFIG[facility.type];
@@ -213,9 +232,7 @@ export class GridRenderer {
       this.roomGraphics.fillStyle(fConfig.color, 0.85);
       this.roomGraphics.fillRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);
 
-      // Icon/label: first letter of the facility type
-      const label = fConfig.label.charAt(0);
-      // Draw a small centered letter (using graphics since text would need separate objects)
+      // Small centered icon per facility type (graphics, not text objects)
       this.roomGraphics.fillStyle(0xffffff, 0.7);
       // Simple centered dot pattern for identification
       const cx = x + TILE_SIZE / 2;
@@ -223,38 +240,38 @@ export class GridRenderer {
       switch (facility.type) {
         case 'gym':
           // Dumbbell shape: two circles connected
-          this.roomGraphics.fillCircle(cx - 6, cy, 4);
-          this.roomGraphics.fillCircle(cx + 6, cy, 4);
-          this.roomGraphics.fillRect(cx - 6, cy - 1.5, 12, 3);
+          this.roomGraphics.fillCircle(cx - 12, cy, 8);
+          this.roomGraphics.fillCircle(cx + 12, cy, 8);
+          this.roomGraphics.fillRect(cx - 12, cy - 3, 24, 6);
           break;
         case 'restaurant':
           // Fork/plate: circle with lines
-          this.roomGraphics.fillCircle(cx, cy, 7);
+          this.roomGraphics.fillCircle(cx, cy, 14);
           this.roomGraphics.fillStyle(fConfig.color, 1);
-          this.roomGraphics.fillCircle(cx, cy, 5);
+          this.roomGraphics.fillCircle(cx, cy, 10);
           break;
         case 'pool':
           // Wave lines
           this.roomGraphics.fillStyle(0xffffff, 0.7);
-          this.roomGraphics.fillRect(cx - 8, cy - 2, 16, 2);
-          this.roomGraphics.fillRect(cx - 6, cy + 2, 12, 2);
+          this.roomGraphics.fillRect(cx - 16, cy - 4, 32, 4);
+          this.roomGraphics.fillRect(cx - 12, cy + 4, 24, 4);
           break;
         case 'shop':
           // Shopping bag shape
-          this.roomGraphics.fillRect(cx - 5, cy - 3, 10, 8);
+          this.roomGraphics.fillRect(cx - 10, cy - 6, 20, 16);
           this.roomGraphics.fillStyle(fConfig.color, 1);
-          this.roomGraphics.fillRect(cx - 3, cy - 1, 6, 4);
+          this.roomGraphics.fillRect(cx - 6, cy - 2, 12, 8);
           break;
       }
     }
   }
 
-  renderGuests(state: HotelState) {
+  renderGuests(state: HotelState, floor: number) {
     this.guestGraphics.clear();
 
     for (const guest of state.guests) {
       const room = state.rooms.find(r => r.guestId === guest.id);
-      if (!room) continue;
+      if (!room || room.floor !== floor) continue;
 
       const x = GRID_OFFSET_X + room.gridX * TILE_SIZE + TILE_SIZE / 2;
       const y = GRID_OFFSET_Y + room.gridY * TILE_SIZE + TILE_SIZE / 2;
@@ -262,13 +279,13 @@ export class GridRenderer {
       const dotColor = getGuestDotColor(guest.trait);
 
       this.guestGraphics.fillStyle(dotColor, 0.9);
-      this.guestGraphics.fillCircle(x, y, 4);
+      this.guestGraphics.fillCircle(x, y, 6);
 
       // Return-guest marker (design-review D7/D10): a thin ring around the
       // existing trait-color dot, visible on the grid during actual play.
       if (guest.isReturning) {
         this.guestGraphics.lineStyle(1.5, 0xffffff, 0.9);
-        this.guestGraphics.strokeCircle(x, y, 6.5);
+        this.guestGraphics.strokeCircle(x, y, 9);
       }
     }
   }
@@ -300,12 +317,13 @@ export class GridRenderer {
     return this.showNoiseOverlay;
   }
 
-  /** Render noise levels as a color overlay on rooms */
-  renderNoise(state: HotelState) {
+  /** Render noise levels as a color overlay on one floor's rooms */
+  renderNoise(state: HotelState, floor: number) {
     this.noiseGraphics.clear();
     if (!this.showNoiseOverlay) return;
 
     for (const room of state.rooms) {
+      if (room.floor !== floor) continue;
       const noise = calculateRoomNoise(room, state);
       if (noise <= 0) continue;
 
@@ -322,10 +340,11 @@ export class GridRenderer {
   }
 
   /** Render construction zones with animated stripes */
-  renderConstruction(state: HotelState) {
+  renderConstruction(state: HotelState, floor: number) {
     this.constructionGraphics.clear();
 
     for (const ns of state.noiseSources) {
+      if (ns.floor !== floor) continue;
       const x = GRID_OFFSET_X + ns.gridX * TILE_SIZE;
       const y = GRID_OFFSET_Y + ns.gridY * TILE_SIZE;
 
@@ -337,9 +356,9 @@ export class GridRenderer {
       // Small construction icon (hammer)
       this.constructionGraphics.fillStyle(0xf39c12, 0.8);
       this.constructionGraphics.fillTriangle(
-        x + TILE_SIZE - 10, y + 3,
-        x + TILE_SIZE - 3, y + 3,
-        x + TILE_SIZE - 6, y + 10
+        x + TILE_SIZE - 14, y + 4,
+        x + TILE_SIZE - 4, y + 4,
+        x + TILE_SIZE - 9, y + 14
       );
     }
   }

@@ -2,6 +2,8 @@ import Phaser from 'phaser';
 import type { HotelState } from '../simulation/types';
 import { getOccupancyRate } from '../simulation/HotelState';
 import { getSeasonInfo } from '../simulation/SeasonManager';
+import { GRID } from '../config/balance';
+import { TILE_SIZE } from './GridRenderer';
 import { getNextLoanPaymentDay } from '../simulation/EconomyManager';
 import { calculateValuation } from '../simulation/ObjectivesManager';
 import { formatMoneyShort } from './ObjectiveTracker';
@@ -39,10 +41,13 @@ export class InfoBar {
       color: '#888899',
     });
 
+    // Wraps under the floor plan rather than running into the build panel
     this.statusText = scene.add.text(x, bottomY, '', {
       fontSize: '13px',
       fontFamily: 'monospace',
       color: '#aaaacc',
+      lineSpacing: 4,
+      wordWrap: { width: GRID.width * TILE_SIZE },
     });
   }
 

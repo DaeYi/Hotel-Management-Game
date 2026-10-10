@@ -50,6 +50,38 @@
 **Priority:** P3
 **Depends on:** None
 
+### Bankruptcy threshold scaled to hotel size
+
+**What:** Replace the flat -$10,000 bankruptcy line with one that scales with the hotel (e.g. a credit line based on property value), or warn well before it.
+
+**Why:** A $1M+ hotel that hits a slow winter can go under over a ~$10k shortfall, because debt interest is 5%/day. The balanced bot only avoids this by keeping ~10 days of running costs in reserve; strategies that skip renovations still go bankrupt 8-13% of the time this way (docs/designs/floors.md).
+
+**Effort:** S
+**Priority:** P2
+**Depends on:** None
+
+## Floors
+
+### Elevator inspector
+
+**What:** Clicking an elevator should open an inspector showing load (upper rooms served / capacity) with a demolish button.
+
+**Why:** `demolishElevator` exists in the simulation but there's no way to reach it from the UI; clicking a shaft does nothing.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
+### Floor-placement bonuses
+
+**What:** Make where a facility sits matter: a rooftop pool, a ground-floor restaurant or shop that draws walk-ins, a lobby.
+
+**Why:** Floors currently differ only by the view premium. Placement rules give the vertical layout decisions of its own, and read well in 3D.
+
+**Effort:** M
+**Priority:** P3
+**Depends on:** None
+
 ## Story Generator
 
 ### Always-on incident HUD/glanceability
@@ -90,5 +122,6 @@
 
 ## Completed
 
+- **Multiple floors** (2026-10-10): stacked 8x5 floor plans, floors bought upward, elevator shafts, vertical noise, view premium, floor switcher. See docs/designs/floors.md
 - **Late-game money sinks** (2026-10-10): prestige upkeep, decor + renovation, facility upgrades, marketing campaigns, valuation and endless legacy goals. See docs/designs/late-game-economy.md
 - **Deploy pipeline** (2026-10-10): GitHub Actions runs tests + build on every push/PR and deploys `dist` to GitHub Pages from `main` -- https://daeyi.github.io/Hotel-Management-Game/

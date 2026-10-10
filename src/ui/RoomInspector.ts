@@ -4,7 +4,7 @@ import { ROOM_CONFIG, ECONOMY, AMENITIES, DECOR, RENOVATION } from '../config/ba
 import { getExpectedPrice } from '../simulation/StarRatingManager';
 import { TILE_SIZE, GRID_OFFSET_X, GRID_OFFSET_Y } from './GridRenderer';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
-import { getDemolishRefund, formatRoomLabel, getRenovationCost } from '../simulation/HotelState';
+import { getDemolishRefund, formatRoomLabel, getRenovationCost, isRoomReachable } from '../simulation/HotelState';
 
 const PANEL_W = 220;
 const PANEL_H = 275;
@@ -220,7 +220,7 @@ export class RoomInspector {
   private updateContent(room: Room, state: HotelState) {
     const config = ROOM_CONFIG[room.type];
     const typeName = room.type.charAt(0).toUpperCase() + room.type.slice(1);
-    const roomLabel = formatRoomLabel(room.gridX, room.gridY);
+    const roomLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
 
     this.titleText.setText(`${typeName} Room ${roomLabel}`);
 
@@ -235,7 +235,7 @@ export class RoomInspector {
     } else if (room.condition <= ECONOMY.roomBreakdownThreshold) {
       statusLine = 'Status:     OUT OF ORDER';
     } else {
-      statusLine = 'Status:     Vacant';
+      statusLine = isRoomReachable(state, room) ? 'Status:     Vacant' : 'Status:     No elevator!';
     }
 
     const condBar = '\u2588'.repeat(Math.round(room.condition / 10))
