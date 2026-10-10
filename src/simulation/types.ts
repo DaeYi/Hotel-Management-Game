@@ -121,6 +121,32 @@ export interface HotelState {
   returningGuestPool: ReturningGuestProfile[]; // capped, oldest dropped first
   storyLog: StoryLogEntry[]; // capped by chain (see StoryGenerator.ts)
   activeReputationPenalties: ReputationPenalty[]; // Review Goes Semi-Viral's temporary arrival penalty
+  peakStarRating: number; // highest star rating ever reached -- drives build unlocks, never decreases
+  loan: Loan;
+  objectives: ObjectiveProgress;
+  dailyStats: DailyStat[]; // one entry per finished day, capped at DAILY_STATS_MAX_DAYS
+}
+
+/** The opening bank loan: a fixed weekly payment covers interest first, then principal. */
+export interface Loan {
+  balance: number; // principal still owed
+  weeklyPayment: number;
+  missedPayments: number; // payments made while cash went (or already was) negative
+}
+
+export type ObjectiveOutcome = 'completed' | 'failed';
+
+/** Owner objectives are a fixed sequence (OBJECTIVES in balance.ts); this tracks where the player is. */
+export interface ObjectiveProgress {
+  currentIndex: number; // index into OBJECTIVES; === OBJECTIVES.length once all are resolved
+  outcomes: ObjectiveOutcome[]; // one per resolved objective, in order
+}
+
+/** End-of-day snapshot, used by objectives that look back over a window of days. */
+export interface DailyStat {
+  day: number;
+  occupancy: number; // 0-1, rooms occupied overnight
+  totalRevenue: number; // HotelState.totalRevenue at end of day (cumulative)
 }
 
 /** A temporary arrival-multiplier penalty from a Review Goes Semi-Viral incident. */
@@ -139,6 +165,11 @@ export interface SimulationSummary {
   wentBankrupt: boolean;
   reviewScoreHistory: number[];
   finalStarRating: number;
+  finalRoomCount: number;
+  objectivesCompleted: number;
+  objectivesFailed: number;
+  loanBalance: number;
+  bankruptDay: number | null;
 }
 
 export interface TickResult {
@@ -147,7 +178,7 @@ export interface TickResult {
 }
 
 export interface GameEvent {
-  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved';
+  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked';
   message: string;
   data?: Record<string, unknown>;
 }

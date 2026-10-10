@@ -1,5 +1,5 @@
 import type { HotelState, GameEvent, RoomType } from './types.js';
-import { ECONOMY, REVIEW, AMENITIES, FACILITY_CONFIG } from '../config/balance.js';
+import { ECONOMY, REVIEW, AMENITIES, FACILITY_CONFIG, LOAN } from '../config/balance.js';
 import type { DepartureResult } from './GuestManager.js';
 
 export interface EconomyResult {
@@ -96,6 +96,62 @@ export function calculateEarlyDepartureSettlement(
   const revenue = nightRate * daysStayed;
   const comp = ECONOMY.earlyDepartureRefundRate * nightRate * nightsRemaining;
   return { revenue, comp, cashDelta: revenue - comp };
+}
+
+/** Whether a weekly loan payment falls due at the start of `day`. */
+export function isLoanPaymentDay(day: number): boolean {
+  return day > 1 && (day - 1) % LOAN.paymentIntervalDays === 0;
+}
+
+/** Day the next loan payment is due, counting from `day` (exclusive). */
+export function getNextLoanPaymentDay(day: number): number {
+  return day + LOAN.paymentIntervalDays - ((day - 1) % LOAN.paymentIntervalDays);
+}
+
+/**
+ * Take the weekly loan payment: interest on the balance first, the rest
+ * toward principal. The payment comes out even if cash can't cover it -- the
+ * shortfall becomes debt that accrues ECONOMY.debtInterestRate daily.
+ */
+export function processLoanPayment(state: HotelState): { state: HotelState; events: GameEvent[] } {
+  const { loan } = state;
+  if (loan.balance <= 0) return { state, events: [] };
+
+  const interest = loan.balance * LOAN.weeklyInterestRate;
+  const payment = Math.min(loan.weeklyPayment, loan.balance + interest);
+  const balance = Math.max(0, loan.balance + interest - payment);
+  const missed = state.cash - payment < 0;
+
+  const events: GameEvent[] = [{
+    type: 'loan_payment',
+    message: missed
+      ? `Loan payment of $${payment.toFixed(0)} put you in debt!`
+      : `Loan payment: $${payment.toFixed(0)} ($${balance.toFixed(0)} left)`,
+    data: { payment, interest, balance, missed },
+  }];
+  if (balance === 0) {
+    events.push({ type: 'loan_paid_off', message: 'Bank loan paid off!' });
+  }
+
+  return {
+    state: {
+      ...state,
+      cash: state.cash - payment,
+      loan: { ...loan, balance, missedPayments: loan.missedPayments + (missed ? 1 : 0) },
+    },
+    events,
+  };
+}
+
+/** Pay down the loan early from cash. Returns null if there's nothing to pay or no cash for it. */
+export function repayLoan(state: HotelState, amount: number): HotelState | null {
+  const payment = Math.min(amount, state.loan.balance, Math.floor(state.cash));
+  if (payment <= 0) return null;
+  return {
+    ...state,
+    cash: state.cash - payment,
+    loan: { ...state.loan, balance: state.loan.balance - payment },
+  };
 }
 
 export function checkBankruptcy(state: HotelState): boolean {

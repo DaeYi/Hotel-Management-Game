@@ -3,6 +3,8 @@ import { PRNG } from './prng.js';
 import { createHotelState, addRoom } from './HotelState.js';
 import { tickSimulation } from './tick.js';
 import { ECONOMY } from '../config/balance.js';
+import { STRATEGIES, idleStrategy } from './strategies.js';
+import type { Strategy } from './strategies.js';
 
 /**
  * Run a headless simulation for N days and return a summary.
@@ -11,7 +13,8 @@ import { ECONOMY } from '../config/balance.js';
 export function simulate(
   days: number,
   seed: number = 42,
-  setupFn?: (state: ReturnType<typeof createHotelState>, prng: PRNG) => ReturnType<typeof createHotelState>
+  setupFn?: (state: ReturnType<typeof createHotelState>, prng: PRNG) => ReturnType<typeof createHotelState>,
+  strategy: Strategy = idleStrategy
 ): SimulationSummary {
   const prng = new PRNG(seed);
   let state = createHotelState();
@@ -20,15 +23,10 @@ export function simulate(
   if (setupFn) {
     state = setupFn(state, prng);
   } else {
-    // Place 5 standard rooms, 3 deluxe, 1 suite
-    const placements: Array<[string, number, number]> = [
-      ['standard', 0, 0], ['standard', 1, 0], ['standard', 2, 0],
-      ['standard', 3, 0], ['standard', 4, 0],
-      ['deluxe', 0, 1], ['deluxe', 1, 1], ['deluxe', 2, 1],
-      ['suite', 0, 2],
-    ];
-    for (const [type, x, y] of placements) {
-      const result = addRoom(state, type as 'standard' | 'deluxe' | 'suite', x, y);
+    // 8 standard rooms in a row -- the "Open for Business" objective, and
+    // the only room type unlocked at 1 star
+    for (let x = 0; x < 8; x++) {
+      const result = addRoom(state, 'standard', x, 0);
       if (result) state = result;
     }
   }
@@ -38,6 +36,7 @@ export function simulate(
   const totalHours = days * 24;
 
   for (let tick = 0; tick < totalHours; tick++) {
+    state = strategy(state);
     const { state: newState } = tickSimulation(state, prng);
     state = newState;
 
@@ -69,72 +68,61 @@ export function simulate(
     wentBankrupt,
     reviewScoreHistory,
     finalStarRating: state.starRating,
+    finalRoomCount: state.rooms.length,
+    objectivesCompleted: state.objectives.outcomes.filter(o => o === 'completed').length,
+    objectivesFailed: state.objectives.outcomes.filter(o => o === 'failed').length,
+    loanBalance: state.loan.balance,
+    bankruptDay: wentBankrupt ? state.day : null,
   };
 }
 
-// CLI runner: run when executed directly
+// CLI runner: run when executed directly.
+// Usage: npm run simulate -- [days=120] [runs=100] [strategy=all]
 const isMainModule = typeof process !== 'undefined'
   && process.argv[1]
   && (process.argv[1].endsWith('simulate.ts') || process.argv[1].endsWith('simulate.js'));
 
 if (isMainModule) {
-  console.log('Running 100 simulations (30 days each)...\n');
+  const days = Number(process.argv[2] ?? 120);
+  const runs = Number(process.argv[3] ?? 100);
+  const only = process.argv[4];
+  const names = only ? [only] : Object.keys(STRATEGIES);
 
-  const results: SimulationSummary[] = [];
-  for (let i = 0; i < 100; i++) {
-    results.push(simulate(30, i));
+  const avg = (xs: number[]) => xs.reduce((s, x) => s + x, 0) / Math.max(1, xs.length);
+  const pct = (n: number) => `${Math.round((n / runs) * 100)}%`;
+  const quantile = (xs: number[], q: number) => {
+    const sorted = [...xs].sort((a, b) => a - b);
+    return sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))];
+  };
+  const money = (n: number) => `$${Math.round(n).toLocaleString()}`;
+
+  console.log(`Balance report: ${runs} runs x ${days} days per strategy
+`);
+
+  for (const name of names) {
+    const strategy = STRATEGIES[name];
+    if (!strategy) {
+      console.error(`Unknown strategy "${name}" (have: ${Object.keys(STRATEGIES).join(', ')})`);
+      process.exit(1);
+    }
+    const results = Array.from({ length: runs }, (_, i) => simulate(days, i, undefined, strategy));
+
+    const bankrupt = results.filter(r => r.wentBankrupt);
+    const survivors = results.filter(r => !r.wentBankrupt);
+    const starCounts = [1, 2, 3, 4, 5].map(s => results.filter(r => r.finalStarRating === s).length);
+    const cash = survivors.map(r => r.finalCash);
+
+    console.log(`=== ${name} ===`);
+    console.log(`  Bankrupt:        ${pct(bankrupt.length)}${bankrupt.length ? ` (median day ${quantile(bankrupt.map(r => r.bankruptDay ?? 0), 0.5)})` : ''}`);
+    if (survivors.length) {
+      console.log(`  Final cash:      p10 ${money(quantile(cash, 0.1))} / median ${money(quantile(cash, 0.5))} / p90 ${money(quantile(cash, 0.9))}`);
+    }
+    console.log(`  Revenue:         ${money(avg(results.map(r => r.totalRevenue)))} avg`);
+    console.log(`  Review score:    ${avg(results.map(r => r.avgReviewScore)).toFixed(2)} avg`);
+    console.log(`  Rooms:           ${avg(results.map(r => r.finalRoomCount)).toFixed(1)} avg`);
+    console.log(`  Stars:           ${starCounts.map((c, i) => `${i + 1}*:${pct(c)}`).join('  ')}`);
+    console.log(`  Goals done:      ${avg(results.map(r => r.objectivesCompleted)).toFixed(1)} avg, ${avg(results.map(r => r.objectivesFailed)).toFixed(1)} missed`);
+    console.log(`  Loan left:       ${money(avg(results.map(r => r.loanBalance)))} avg, paid off in ${pct(results.filter(r => r.loanBalance <= 0).length)}`);
+    console.log();
   }
-
-  const bankruptcies = results.filter(r => r.wentBankrupt).length;
-  const avgCash = results.reduce((s, r) => s + r.finalCash, 0) / results.length;
-  const avgReview = results.reduce((s, r) => s + r.avgReviewScore, 0) / results.length;
-  const avgRevenue = results.reduce((s, r) => s + r.totalRevenue, 0) / results.length;
-  const avgTurnedAway = results.reduce((s, r) => s + r.totalTurnedAway, 0) / results.length;
-
-  // Star rating distribution
-  const starCounts: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
-  for (const r of results) starCounts[r.finalStarRating]++;
-
-  console.log('=== Balance Report (100 runs x 30 days) ===');
-  console.log(`Bankruptcies:     ${bankruptcies}/100 (${bankruptcies}%)`);
-  console.log(`Avg final cash:   $${avgCash.toFixed(0)}`);
-  console.log(`Avg review score: ${avgReview.toFixed(2)} / 10`);
-  console.log(`Avg revenue:      $${avgRevenue.toFixed(0)}`);
-  console.log(`Avg turned away:  ${avgTurnedAway.toFixed(1)} guests`);
-  console.log();
-
-  console.log('Star rating distribution:');
-  for (let s = 1; s <= 5; s++) {
-    console.log(`  ${s}-star: ${starCounts[s]}%`);
-  }
-
-  // Cash distribution
-  const cashBuckets = { negative: 0, low: 0, mid: 0, high: 0 };
-  for (const r of results) {
-    if (r.finalCash < 0) cashBuckets.negative++;
-    else if (r.finalCash < 50000) cashBuckets.low++;
-    else if (r.finalCash < 100000) cashBuckets.mid++;
-    else cashBuckets.high++;
-  }
-  console.log('\nCash distribution:');
-  console.log(`  Negative: ${cashBuckets.negative}%`);
-  console.log(`  $0-50k:   ${cashBuckets.low}%`);
-  console.log(`  $50k-100k: ${cashBuckets.mid}%`);
-  console.log(`  $100k+:   ${cashBuckets.high}%`);
-
-  // Review score distribution (0-10 scale)
-  const reviewBuckets = { terrible: 0, poor: 0, average: 0, good: 0, excellent: 0 };
-  for (const r of results) {
-    if (r.avgReviewScore < 3) reviewBuckets.terrible++;
-    else if (r.avgReviewScore < 5) reviewBuckets.poor++;
-    else if (r.avgReviewScore < 7) reviewBuckets.average++;
-    else if (r.avgReviewScore < 8.5) reviewBuckets.good++;
-    else reviewBuckets.excellent++;
-  }
-  console.log('\nReview score distribution:');
-  console.log(`  < 3.0:     ${reviewBuckets.terrible}%`);
-  console.log(`  3.0-5.0:   ${reviewBuckets.poor}%`);
-  console.log(`  5.0-7.0:   ${reviewBuckets.average}%`);
-  console.log(`  7.0-8.5:   ${reviewBuckets.good}%`);
-  console.log(`  8.5+:      ${reviewBuckets.excellent}%`);
 }

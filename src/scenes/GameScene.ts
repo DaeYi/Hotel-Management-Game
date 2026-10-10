@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
-import { createHotelState, addRoom, setRoomPrice, repairRoom, demolishRoom, addFacility, demolishFacility, isTileOccupied } from '../simulation/HotelState';
+import { createHotelState, addRoom, setRoomPrice, repairRoom, demolishRoom, addFacility, demolishFacility, isTileOccupied, isUnlocked } from '../simulation/HotelState';
 import { tickSimulation } from '../simulation/tick';
-import { checkBankruptcy } from '../simulation/EconomyManager';
+import { checkBankruptcy, repayLoan } from '../simulation/EconomyManager';
 import { PRNG } from '../simulation/prng';
 import { ROOM_CONFIG } from '../config/balance';
 import type { HotelState, RoomType, FacilityType, TileType, StaffConfig, AmenityTier, CleaningQuality, DailyCleaningCadence } from '../simulation/types';
@@ -13,6 +13,8 @@ import { RoomInspector } from '../ui/RoomInspector';
 import { FacilityInspector } from '../ui/FacilityInspector';
 import { NotificationToast, INCIDENT_EVENT_TYPES } from '../ui/NotificationToast';
 import { StoryLogPanel } from '../ui/StoryLogPanel';
+import { GoalsPanel } from '../ui/GoalsPanel';
+import { ObjectiveTracker } from '../ui/ObjectiveTracker';
 import { FinanceChart } from '../ui/FinanceChart';
 import { Tutorial } from '../ui/Tutorial';
 import { BankruptcyOverlay, NoVacancySign, ZeroRoomsPrompt } from '../ui/Overlays';
@@ -38,6 +40,8 @@ export class GameScene extends Phaser.Scene {
   private facilityInspector!: FacilityInspector;
   private toasts!: NotificationToast;
   private storyLogPanel!: StoryLogPanel;
+  private goalsPanel!: GoalsPanel;
+  private objectiveTracker!: ObjectiveTracker;
   private chart!: FinanceChart;
   private noVacancy!: NoVacancySign;
   private zeroRooms!: ZeroRoomsPrompt;
@@ -113,6 +117,18 @@ export class GameScene extends Phaser.Scene {
 
     // Story log panel (toggle, controlled by toolbar -- design-review D6)
     this.storyLogPanel = new StoryLogPanel(this, PANEL_X, PANEL_Y);
+
+    // Goals panel: opened from the always-on objective tracker (top right)
+    this.goalsPanel = new GoalsPanel(
+      this, PANEL_X, PANEL_Y,
+      (amount) => this.handleRepayLoan(amount),
+    );
+    this.objectiveTracker = new ObjectiveTracker(this, 960 - GRID_OFFSET_X, 4, () => {
+      const wasVisible = this.goalsPanel.isVisible();
+      this.hideAllPanels();
+      this.toolbar.clearActivePanel();
+      if (!wasVisible) this.goalsPanel.show();
+    });
 
     // Finance chart (no toggle button, controlled by toolbar)
     this.chart = new FinanceChart(
@@ -190,7 +206,9 @@ export class GameScene extends Phaser.Scene {
     this.grid.updateDayNight(this.state.hour);
     this.grid.updateFeedback(delta);
     this.infoBar.update(this.state, this.paused, this.speedMultiplier);
-    this.buildPanel.updateAffordability(this.state.cash);
+    this.buildPanel.update(this.state);
+    this.objectiveTracker.update(this.state);
+    this.goalsPanel.update(this.state);
     this.roomInspector.update(this.state);
     this.facilityInspector.update(this.state);
     this.housekeepingPanel.update(this.state);
@@ -313,6 +331,7 @@ export class GameScene extends Phaser.Scene {
     this.amenitiesPanel.hide();
     this.chart.hide();
     this.storyLogPanel.hide();
+    this.goalsPanel.hide();
   }
 
   // === Click handlers ===
@@ -386,6 +405,7 @@ export class GameScene extends Phaser.Scene {
 
   private canPlaceTile(type: TileType, gridX: number, gridY: number): boolean {
     if (isTileOccupied(this.state, gridX, gridY)) return false;
+    if (!isUnlocked(this.state, type)) return false;
     const roomTypes = ['standard', 'deluxe', 'suite'];
     if (roomTypes.includes(type)) {
       return this.state.cash >= ROOM_CONFIG[type as RoomType].buildCost;
@@ -409,6 +429,11 @@ export class GameScene extends Phaser.Scene {
       ...this.state,
       housekeeping: { turnoverQuality: quality, dailyCadence: cadence },
     };
+  }
+
+  private handleRepayLoan(amount: number) {
+    const result = repayLoan(this.state, amount);
+    if (result) this.state = result;
   }
 
   private handleDemolish(roomId: string) {

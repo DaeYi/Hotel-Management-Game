@@ -13,6 +13,10 @@ const STEPS = [
     title: 'Step 3: Manage Your Rating',
     text: 'Keep ratings high to attract more guests.\nClick rooms to adjust pricing. Watch for noise\nwhen occupancy gets above 65%.',
   },
+  {
+    title: 'Step 4: Goals & the Loan',
+    text: 'Your $50,000 is a bank loan: $1,000 is due\nevery week. Follow the owner\'s goals (top right)\nfor cash rewards. Earn stars to unlock deluxe\nrooms, suites, and new facilities.',
+  },
 ];
 
 const STORAGE_KEY = 'hotel-game-tutorial-seen';

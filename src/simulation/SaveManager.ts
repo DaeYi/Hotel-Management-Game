@@ -1,9 +1,10 @@
 import type { HotelState } from './types.js';
 import type { PRNG } from './prng.js';
-import { GUEST_NAMES } from '../config/balance.js';
+import { GUEST_NAMES, LOAN } from '../config/balance.js';
+import { calculateStarRating } from './StarRatingManager.js';
 
 const SAVE_KEY = 'hotel-game-save';
-const SAVE_VERSION = 10; // v10: added Story Generator milestone (satisfaction, incidents, story log)
+const SAVE_VERSION = 11; // v11: opening loan, owner objectives, star-gated unlocks
 
 interface SaveData {
   version: number;
@@ -133,6 +134,19 @@ export function loadGame(): SaveData | null {
       }));
       data.version = 10;
       console.log('Migrated save from v9 to v10');
+    }
+
+    if (data.version === 10) {
+      // Saves from before the loan existed start debt-free rather than being
+      // handed a $50k balance mid-game. Star thresholds also changed in v11, so
+      // recompute the rating and treat it as the peak for unlocks.
+      data.state.loan = data.state.loan ?? { balance: 0, weeklyPayment: LOAN.weeklyPayment, missedPayments: 0 };
+      data.state.objectives = data.state.objectives ?? { currentIndex: 0, outcomes: [] };
+      data.state.dailyStats = data.state.dailyStats ?? [];
+      data.state.starRating = calculateStarRating(data.state);
+      data.state.peakStarRating = data.state.peakStarRating ?? data.state.starRating;
+      data.version = 11;
+      console.log('Migrated save from v10 to v11');
     }
 
     if (data.version !== SAVE_VERSION) {

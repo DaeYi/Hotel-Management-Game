@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import type { HotelState, Room } from '../simulation/types';
 import { ROOM_CONFIG, ECONOMY, AMENITIES } from '../config/balance';
+import { getExpectedPrice } from '../simulation/StarRatingManager';
 import { TILE_SIZE, GRID_OFFSET_X, GRID_OFFSET_Y } from './GridRenderer';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
 import { getDemolishRefund, formatRoomLabel } from '../simulation/HotelState';
@@ -13,6 +14,7 @@ export class RoomInspector {
   private container: Phaser.GameObjects.Container;
   private titleText: Phaser.GameObjects.Text;
   private statsText: Phaser.GameObjects.Text;
+  private priceLabel: Phaser.GameObjects.Text;
   private priceValue: Phaser.GameObjects.Text;
   private sliderTrack: Phaser.GameObjects.Graphics;
   private sliderThumb: Phaser.GameObjects.Graphics;
@@ -78,9 +80,10 @@ export class RoomInspector {
     this.container.add(this.statsText);
 
     // Price label
-    this.container.add(scene.add.text(12, 120, 'Price per night:', {
+    this.priceLabel = scene.add.text(12, 120, '', {
       fontSize: '11px', fontFamily: 'monospace', color: '#888899',
-    }));
+    });
+    this.container.add(this.priceLabel);
 
     // Price value
     this.priceValue = scene.add.text(PANEL_W - 16, 120, '', {
@@ -156,7 +159,7 @@ export class RoomInspector {
     this.container.setPosition(this.panelWorldX, this.panelWorldY);
 
     this.updateContent(room, state);
-    this.updateSliderPosition(room);
+    this.updateSliderPosition(room, state.starRating);
     this.container.setVisible(true);
   }
 
@@ -239,6 +242,7 @@ export class RoomInspector {
       `Amenities:  ${amenityLabel}  |  Noise: ${noiseLabel}`
     );
 
+    this.priceLabel.setText(`Price/night (fair $${getExpectedPrice(room.type, state.starRating)}):`);
     this.priceValue.setText(`$${room.pricePerNight}`);
 
     // Show repair button when condition is below 80% and room is vacant
@@ -258,12 +262,14 @@ export class RoomInspector {
     this.demolishBtn.setText(`Demolish (+$${refund})`);
   }
 
-  private updateSliderPosition(room: Room) {
+  private updateSliderPosition(room: Room, starRating: number) {
     const config = ROOM_CONFIG[room.type];
     const range = config.maxPrice - config.minPrice;
     const pct = (room.pricePerNight - config.minPrice) / range;
 
-    this.drawSliderTrack(config.minPrice, config.maxPrice, config.expectedPrice);
+    // The green tick marks the fair price, which rises with the hotel's stars
+    const fair = Math.min(config.maxPrice, getExpectedPrice(room.type, starRating));
+    this.drawSliderTrack(config.minPrice, config.maxPrice, fair);
     this.drawThumb(this.sliderX + pct * this.sliderW);
   }
 

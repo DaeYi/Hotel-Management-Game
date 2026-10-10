@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import type { HotelState } from '../simulation/types';
 import { getOccupancyRate } from '../simulation/HotelState';
 import { getSeasonInfo } from '../simulation/SeasonManager';
+import { getNextLoanPaymentDay } from '../simulation/EconomyManager';
 
 const SEASON_ICONS: Record<string, string> = {
   spring: '\ud83c\udf38',
@@ -75,11 +76,15 @@ export class InfoBar {
     const cleaning = state.rooms.filter(r => r.status === 'cleaning').length;
     const cleaningStr = cleaning > 0 ? `  |  Cleaning: ${cleaning}` : '';
 
+    const loanStr = state.loan.balance > 0
+      ? `  |  Loan: $${Math.ceil(state.loan.balance).toLocaleString()} ($${state.loan.weeklyPayment.toLocaleString()} due day ${getNextLoanPaymentDay(state.day)})`
+      : '';
+
     this.statusText.setText(
       `Occupancy: ${occupancy}%  |  ` +
       `Rooms: ${state.rooms.length}  |  ` +
       `Guests: ${state.guests.length}  |  ` +
-      `Turned away: ${state.totalTurnedAway}${cleaningStr}`
+      `Turned away: ${state.totalTurnedAway}${cleaningStr}${loanStr}`
     );
   }
 }

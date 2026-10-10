@@ -1,13 +1,14 @@
 import type { HotelState, TickResult, GameEvent, Booking } from './types.js';
 import type { PRNG } from './prng.js';
 import { processArrivals, processDepartures, calculateGuestReviewBreakdown } from './GuestManager.js';
-import { processRevenue, processDailyCosts, updateReviewScore, checkBankruptcy, degradeRoomConditions, calculateEarlyDepartureSettlement } from './EconomyManager.js';
+import { processRevenue, processDailyCosts, updateReviewScore, checkBankruptcy, degradeRoomConditions, calculateEarlyDepartureSettlement, isLoanPaymentDay, processLoanPayment } from './EconomyManager.js';
+import { processObjectives, recordDailyStat } from './ObjectivesManager.js';
 import { tickNoiseSources } from './NoiseManager.js';
 import { processCleaningTick, processDailyHousekeeping, degradeCleanliness, startTurnoverCleaning } from './HousekeepingManager.js';
 import { calculateStarRating } from './StarRatingManager.js';
 import { checkSeasonChange } from './SeasonManager.js';
 import { processMaintenanceTick, getStaffDailyCost } from './MaintenanceManager.js';
-import { ECONOMY, REVIEW, HOUSEKEEPING, STAFF } from '../config/balance.js';
+import { ECONOMY, REVIEW, HOUSEKEEPING, STAFF, ROOM_CONFIG, FACILITY_CONFIG } from '../config/balance.js';
 import {
   driftSatisfaction, advanceIncidents, dropIncidentsForGuests, selectNewIncident,
   recordReturnGuestEntries, checkReviewSemiViral, tickReputationPenalties,
@@ -204,6 +205,12 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
     const staffCost = getStaffDailyCost(current);
     current = { ...current, cash: current.cash + costs.cashDelta - staffCost };
     current = degradeCleanliness(current);
+
+    if (isLoanPaymentDay(current.day)) {
+      const loanResult = processLoanPayment(current);
+      current = loanResult.state;
+      events.push(...loanResult.events);
+    }
   }
 
   // 6. Update review score
@@ -229,6 +236,30 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
       message: `Hotel ${direction} to ${current.starRating}-star!`,
     });
   }
+
+  // 7.5 New peak star rating unlocks room types and facilities (never re-locks)
+  if (current.starRating > current.peakStarRating) {
+    const prevPeak = current.peakStarRating;
+    current = { ...current, peakStarRating: current.starRating };
+    const unlocked = [
+      ...Object.entries(ROOM_CONFIG).map(([type, c]) => ({ label: `${type} room`, stars: c.requiredStars })),
+      ...Object.values(FACILITY_CONFIG).map(c => ({ label: c.label.toLowerCase(), stars: c.requiredStars })),
+    ].filter(u => u.stars > prevPeak && u.stars <= current.starRating);
+    if (unlocked.length > 0) {
+      events.push({
+        type: 'build_unlocked',
+        message: `Unlocked: ${unlocked.map(u => u.label).join(', ')}`,
+      });
+    }
+  }
+
+  // 7.6 End-of-day snapshot (hour 23 = overnight occupancy), then owner objectives
+  if (current.hour === 23) {
+    current = recordDailyStat(current);
+  }
+  const objectiveResult = processObjectives(current);
+  current = objectiveResult.state;
+  events.push(...objectiveResult.events);
 
   // 8. Check bankruptcy
   if (checkBankruptcy(current)) {

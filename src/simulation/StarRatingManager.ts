@@ -1,5 +1,5 @@
 import type { HotelState, RoomType } from './types.js';
-import { STAR_RATING, AMENITIES, FACILITY_CONFIG } from '../config/balance.js';
+import { STAR_RATING, AMENITIES, FACILITY_CONFIG, ROOM_CONFIG } from '../config/balance.js';
 
 /**
  * Accumulate the hotel's raw star points from everything it has: room type
@@ -68,8 +68,34 @@ export function calculateStarPoints(state: HotelState): number {
  * This is structural, not experiential. A dirty 5-star hotel is still 5 stars.
  */
 export function calculateStarRating(state: HotelState): number {
-  const points = calculateStarPoints(state);
-  return Math.max(1, Math.min(5, Math.floor(points) + 1));
+  return starsForPoints(calculateStarPoints(state));
+}
+
+/** Convert raw star points to a 1-5 star level using STAR_RATING.pointThresholds. */
+export function starsForPoints(points: number): number {
+  let stars = 1;
+  STAR_RATING.pointThresholds.forEach((threshold, i) => {
+    if (points >= threshold) stars = i + 1;
+  });
+  return stars;
+}
+
+/** Star points needed to reach a given star level (1-5). */
+export function pointsForStars(stars: number): number {
+  return STAR_RATING.pointThresholds[Math.max(1, Math.min(5, stars)) - 1];
+}
+
+/** What guests consider a fair nightly price for a room type at a given star level. */
+export function getExpectedPrice(type: RoomType, starRating: number): number {
+  return Math.round(ROOM_CONFIG[type].expectedPrice * getPriceMultiplier(starRating));
+}
+
+export function getPriceMultiplier(starRating: number): number {
+  return STAR_RATING.priceMultiplier[starRating] ?? 1.0;
+}
+
+export function getStarDemandMultiplier(starRating: number): number {
+  return STAR_RATING.demandMultiplier[starRating] ?? 1.0;
 }
 
 /**
@@ -110,7 +136,7 @@ export function getNextStarRequirements(state: HotelState): string | null {
   // enough for a hint string; see TODOS.md "exact numeric-search star-rating
   // hint" for the fully-precise alternative.
   if (target >= 3) {
-    const requiredPoints = target - 1;
+    const requiredPoints = pointsForStars(target);
     const otherPoints = calculateStarPoints(state)
       - (deluxePct * STAR_RATING.deluxeRatioPoints + suitePct * STAR_RATING.suiteRatioPoints);
     const neededDeluxePct = (requiredPoints - otherPoints - suitePct * STAR_RATING.suiteRatioPoints)
@@ -122,7 +148,8 @@ export function getNextStarRequirements(state: HotelState): string | null {
       } else {
         const neededSuitePct = (requiredPoints - otherPoints - deluxePct * STAR_RATING.deluxeRatioPoints)
           / STAR_RATING.suiteRatioPoints;
-        if (neededSuitePct > suitePct && neededSuitePct <= 1) {
+        // Suites unlock at 3 stars, so only suggest them when aiming past that.
+        if (target >= 4 && neededSuitePct > suitePct && neededSuitePct <= 1) {
           hints.push(`Add more suites (need ${Math.round(neededSuitePct * 100)}%+)`);
         }
         // else: room mix alone can't reach this star even at 100% suites —
@@ -130,14 +157,18 @@ export function getNextStarRequirements(state: HotelState): string | null {
       }
     }
   }
-  if (target >= 3 && state.housekeeping.turnoverQuality === 'quick') {
-    hints.push('Upgrade turnover cleaning to standard or thorough');
+  // Hints only point at things that are already unlocked on the way to `target`
+  // (see requiredStars in balance.ts), so a 1-star hotel is never told to build a pool.
+  if (target >= 2 && state.housekeeping.turnoverQuality !== 'thorough') {
+    hints.push('Upgrade turnover cleaning to thorough');
   }
-  if (target >= 4 && state.housekeeping.dailyCadence !== 'daily') {
+  if (target >= 2 && state.housekeeping.dailyCadence !== 'daily') {
     hints.push('Switch to daily housekeeping');
   }
-  if (target >= 3 && total < STAR_RATING.roomCountThresholds.medium) {
+  if (target >= 2 && total < STAR_RATING.roomCountThresholds.medium) {
     hints.push(`Build at least ${STAR_RATING.roomCountThresholds.medium} rooms`);
+  } else if (target >= 4 && total < STAR_RATING.roomCountThresholds.large) {
+    hints.push(`Build at least ${STAR_RATING.roomCountThresholds.large} rooms`);
   }
 
   // Amenity tier upgrades
@@ -152,16 +183,12 @@ export function getNextStarRequirements(state: HotelState): string | null {
     }
   }
 
-  // Facility suggestions
-  const facilityTypes = new Set(state.facilities.map(f => f.type));
-  if (target >= 3 && !facilityTypes.has('restaurant')) {
-    hints.push('Build a restaurant');
-  }
-  if (target >= 4 && !facilityTypes.has('pool')) {
-    hints.push('Build a pool');
-  }
-  if (target >= 3 && !facilityTypes.has('gym')) {
-    hints.push('Build a gym');
+  // Facility suggestions, each only once it's unlocked (one star below target)
+  const facilityTypes = new Set<string>(state.facilities.map(f => f.type));
+  for (const [type, fConfig] of Object.entries(FACILITY_CONFIG)) {
+    if (target > fConfig.requiredStars && !facilityTypes.has(type)) {
+      hints.push(`Build a ${fConfig.label.toLowerCase()}`);
+    }
   }
 
   return hints.length > 0 ? hints.join('; ') : 'Maximize all room and service quality';

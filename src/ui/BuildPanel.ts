@@ -1,6 +1,8 @@
 import Phaser from 'phaser';
-import type { RoomType, FacilityType, TileType } from '../simulation/types';
+import type { RoomType, FacilityType, TileType, HotelState } from '../simulation/types';
 import { ROOM_CONFIG, FACILITY_CONFIG } from '../config/balance';
+import { getRequiredStars, isUnlocked } from '../simulation/HotelState';
+import { getExpectedPrice } from '../simulation/StarRatingManager';
 
 const ROOM_COLORS: Record<RoomType, number> = {
   standard: 0x4a90d9,
@@ -27,6 +29,9 @@ export class BuildPanel {
   private onSelect: (type: TileType | null) => void;
   private buttonBackgrounds: Map<string, Phaser.GameObjects.Graphics> = new Map();
   private costTexts: Map<string, Phaser.GameObjects.Text> = new Map();
+  private subtitleTexts: Map<string, Phaser.GameObjects.Text> = new Map();
+  private containers: Map<string, Phaser.GameObjects.Container> = new Map();
+  private locked: Set<string> = new Set();
   private options: BuildOption[] = [];
 
   constructor(
@@ -134,9 +139,12 @@ export class BuildPanel {
     this.costTexts.set(option.type, costText);
 
     // Subtitle
-    container.add(this.scene.add.text(6, 36, option.subtitle, {
+    const subtitle = this.scene.add.text(6, 36, option.subtitle, {
       fontSize: '10px', fontFamily: 'monospace', color: '#888899',
-    }));
+    });
+    container.add(subtitle);
+    this.subtitleTexts.set(option.type, subtitle);
+    this.containers.set(option.type, container);
 
     // Hit area
     const hitArea = this.scene.add.rectangle(
@@ -147,6 +155,7 @@ export class BuildPanel {
     container.add(hitArea);
 
     hitArea.on('pointerdown', () => {
+      if (this.locked.has(option.type)) return;
       this.selectedType = this.selectedType === option.type ? null : option.type;
       this.refreshAllButtons();
       this.onSelect(this.selectedType);
@@ -180,11 +189,30 @@ export class BuildPanel {
     }
   }
 
-  updateAffordability(cash: number) {
+  /** Refresh lock state, affordability, and room prices (which follow the star rating). */
+  update(state: HotelState) {
     for (const option of this.options) {
-      const text = this.costTexts.get(option.type);
-      if (text) {
-        text.setColor(cash >= option.cost ? '#aaaacc' : '#e74c3c');
+      const costText = this.costTexts.get(option.type);
+      const subtitle = this.subtitleTexts.get(option.type);
+      const container = this.containers.get(option.type);
+      if (!costText || !subtitle || !container) continue;
+
+      const unlocked = isUnlocked(state, option.type);
+      if (unlocked) {
+        this.locked.delete(option.type);
+        container.setAlpha(1);
+        costText.setText(`$${option.cost.toLocaleString()}`);
+        costText.setColor(state.cash >= option.cost ? '#aaaacc' : '#e74c3c');
+      } else {
+        this.locked.add(option.type);
+        container.setAlpha(0.45);
+        costText.setText(`🔒 Unlocks at ${getRequiredStars(option.type)}★`);
+        costText.setColor('#aaaacc');
+        if (this.selectedType === option.type) this.clearSelection();
+      }
+
+      if (option.category === 'room') {
+        subtitle.setText(`$${getExpectedPrice(option.type as RoomType, state.starRating)}/night`);
       }
     }
   }

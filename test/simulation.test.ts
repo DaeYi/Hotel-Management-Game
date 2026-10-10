@@ -19,6 +19,12 @@ import { ECONOMY, REVIEW, ROOM_CONFIG, FACILITY_CONFIG, GUEST_TRAITS, NOISE, HOU
 import type { Room, Guest, Booking, GuestTrait, ActiveIncident, StoryLogEntry } from '../src/simulation/types.js';
 import { getGuestDotColor } from '../src/ui/GridRenderer';
 
+/** A fresh hotel with every room type and facility unlocked and cash to spare,
+ * for tests that aren't about progression (see requiredStars in balance.ts). */
+function unlockedState() {
+  return { ...createHotelState(), peakStarRating: 5, cash: 200000 };
+}
+
 describe('PRNG', () => {
   it('is deterministic with same seed', () => {
     const a = new PRNG(42);
@@ -66,7 +72,7 @@ describe('SaveManager', () => {
   });
 
   it('saves and loads a full round trip, including PRNG state', () => {
-    let state = createHotelState();
+    let state = unlockedState();
     state = addRoom(state, 'deluxe', 2, 3)!;
     const prng = new PRNG(123);
     prng.next();
@@ -140,7 +146,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(10);
+    expect(loaded!.version).toBe(11);
     expect(loaded!.state.noiseSources).toEqual([]);
     expect(loaded!.state.facilities).toEqual([]); // added by the v8->v9 step
     expect(loaded!.state.activeIncidents).toEqual([]);
@@ -173,7 +179,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(10);
+    expect(loaded!.version).toBe(11);
     expect(loaded!.state.reviewScore).toBeCloseTo(7.2, 5); // 72 / 10
     expect((loaded!.state as any).reputationScore).toBeUndefined();
     expect(loaded!.state.bookings[0].reviewScore).toBe(8); // rating 4 * 2
@@ -234,7 +240,7 @@ describe('HotelState', () => {
   });
 
   it('demolishRoom refunds via the shared getDemolishRefund helper (regression: value unchanged by extraction)', () => {
-    let state = createHotelState();
+    let state = unlockedState();
     state = addRoom(state, 'deluxe', 0, 0)!;
     const cashAfterBuild = state.cash;
 
@@ -248,7 +254,7 @@ describe('HotelState', () => {
   });
 
   it('demolishFacility refunds the same 25% rate as rooms', () => {
-    let state = createHotelState();
+    let state = unlockedState();
     state = addFacility(state, 'gym', 0, 0)!;
     const cashAfterBuild = state.cash;
 
@@ -740,49 +746,55 @@ describe('StarRatingManager', () => {
     // 1 suite + 1 deluxe + 1 standard (default housekeeping/amenities):
     // deluxePct=(1+1)/3=0.667, suitePct=1/3=0.333.
     // points = 0.667*2 + 0.333*2 + 0.5 (hk standard) + 0.7 (cadence daily)
-    //        = 1.333 + 0.667 + 0.5 + 0.7 = 3.2 -> floor(3.2)+1 = 4 stars.
+    //        = 1.333 + 0.667 + 0.5 + 0.7 = 3.2 -> 2 stars (thresholds 2 / 4.5).
     // Pinned against the hand-computed value, not against the code's own
     // formula, so a regression in either function's math would be caught.
-    let state = createHotelState();
+    let state = unlockedState();
     state = addRoom(state, 'suite', 0, 0)!;
     state = addRoom(state, 'deluxe', 1, 0)!;
     state = addRoom(state, 'standard', 2, 0)!;
 
     expect(calculateStarPoints(state)).toBeCloseTo(3.2, 5);
-    expect(calculateStarRating(state)).toBe(4);
+    expect(calculateStarRating(state)).toBe(2);
   });
 
   it('getNextStarRequirements returns null once a hotel is already 5 stars', () => {
-    // 3 suites (100% suite ratio, affordable at $10k each against $50k starting
-    // cash) plus createHotelState's own defaults (standard housekeeping, daily
-    // cadence) already clears 5 stars: points = 1.0*2 + 1.0*2 (mix) + 0.5 (hk)
-    // + 0.7 (cadence) = 5.2 -> floor(5.2)+1 = 6, clamped to 5.
-    let state = createHotelState();
+    // 3 suites with thorough/daily housekeeping, luxury suite amenities and all
+    // four facilities: points = 1.0*2 + 1.0*2 (mix) + 1.0 (hk thorough) + 0.7
+    // (cadence) + 0.7 (luxury, 100% of rooms) + 0.5 + 1.0 + 1.0 + 0.3 (gym,
+    // restaurant, pool, shop) = 9.2 -> clears the 9-point 5-star threshold.
+    let state = unlockedState();
     for (let i = 0; i < 3; i++) {
       state = addRoom(state, 'suite', i, 0)!;
     }
+    state = { ...state, housekeeping: { turnoverQuality: 'thorough', dailyCadence: 'daily' }, amenities: { ...state.amenities, suite: 'luxury' } };
+    (['gym', 'restaurant', 'pool', 'shop'] as const).forEach((type, i) => { state = addFacility(state, type, i, 1)!; });
 
+    expect(calculateStarPoints(state)).toBeCloseTo(9.2, 5);
     expect(calculateStarRating(state)).toBe(5);
     expect(getNextStarRequirements(state)).toBeNull();
   });
 
   it('deluxe hint accounts for existing suite percentage (regression: formula must subtract suitePct*suiteRatioPoints)', () => {
-    let state = createHotelState();
+    let state = unlockedState();
     for (let i = 0; i < 7; i++) state = addRoom(state, 'standard', i, 0)!;
     for (let i = 0; i < 3; i++) state = addRoom(state, 'suite', i, 1)!;
+    state = { ...state, housekeeping: { turnoverQuality: 'thorough', dailyCadence: 'daily' } };
+    (['gym', 'restaurant', 'pool', 'shop'] as const).forEach((type, i) => { state = addFacility(state, type, i, 2)!; });
 
     // Hand-verified against calculateStarPoints: 10 rooms (0 deluxe, 3 suite),
-    // default housekeeping (standard/daily) and default basic amenities give
-    // points = 0.3*2 + 0.3*2 + 0.5 + 0.7 + 0.5 = 2.9 -> current = 3 stars,
-    // target = 4. otherPoints = 2.9 - (0.3*2 + 0.3*2) = 1.7.
-    // neededDeluxePct = (3 - 1.7 - 0.3*2) / 2 = 0.35 (35%).
+    // thorough/daily housekeeping, basic amenities, all four facilities give
+    // points = 0.3*2 + 0.3*2 + 1.0 + 0.7 + 0.5 + 2.8 = 6.2 -> 3 stars, target 4
+    // (7 points). otherPoints = 6.2 - (0.3*2 + 0.3*2) = 5.0.
+    // neededDeluxePct = (7 - 5.0 - 0.3*2) / 2 = 0.7 (70%).
     // A formula that forgets to subtract suitePct's own contribution would
-    // instead compute (3 - 1.7) / 2 = 0.65 (65%), overstating the requirement
+    // instead compute (7 - 5.0) / 2 = 1.0 (100%), overstating the requirement
     // even though 30% of the mix is already suites — the exact bug caught
     // during this plan's review.
+    expect(calculateStarRating(state)).toBe(3);
     const hint = getNextStarRequirements(state);
     expect(hint).not.toBeNull();
-    expect(hint).toContain('Add more deluxe/suite rooms (need 35%+)');
+    expect(hint).toContain('Add more deluxe/suite rooms (need 70%+)');
   });
 });
 
@@ -849,7 +861,7 @@ describe('EconomyManager', () => {
 
 describe('tickSimulation', () => {
   it('determinism: same seed produces same result', () => {
-    let state = createHotelState();
+    let state = unlockedState();
     state = addRoom(state, 'standard', 0, 0)!;
     state = addRoom(state, 'deluxe', 1, 0)!;
 
@@ -1336,11 +1348,14 @@ describe('simulate (headless)', () => {
 
   it('Story Generator: a long run stays bounded and does not spiral into zero arrivals (design-review D11 balance check)', () => {
     const prng = new PRNG(123);
-    let state = createHotelState();
+    let state = unlockedState();
     for (let i = 0; i < 9; i++) {
       const type = i < 5 ? 'standard' : i < 8 ? 'deluxe' : 'suite';
       state = addRoom(state, type as 'standard' | 'deluxe' | 'suite', i, 0)!;
     }
+    // A maintenance worker keeps rooms from breaking down over 90 days, so
+    // this isolates the story layer's feedback loops from plain neglect.
+    state = { ...state, staff: { ...state.staff, maintenanceWorkers: 1 } };
 
     const arrivalsPerWeek: number[] = [];
     let arrivalsThisWeek = 0;

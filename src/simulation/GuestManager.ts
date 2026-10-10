@@ -1,9 +1,9 @@
 import type { Guest, GuestTrait, Room, HotelState, Booking, GameEvent, ReturningGuestProfile } from './types.js';
 import type { PRNG } from './prng.js';
-import { ECONOMY, GUEST_TRAITS, REVIEW, ROOM_CONFIG, HOUSEKEEPING, STAFF, AMENITIES, FACILITY_CONFIG, GUEST_NAMES, SATISFACTION, STORY } from '../config/balance.js';
+import { ECONOMY, GUEST_TRAITS, REVIEW, HOUSEKEEPING, STAFF, AMENITIES, FACILITY_CONFIG, GUEST_NAMES, SATISFACTION, STORY } from '../config/balance.js';
 import { getAvailableRooms, getAdjacentFacilities } from './HotelState.js';
 import { calculateRoomNoise, noiseToRatingPenalty } from './NoiseManager.js';
-import { getExpectationMultiplier } from './StarRatingManager.js';
+import { getExpectationMultiplier, getExpectedPrice, getPriceMultiplier, getStarDemandMultiplier } from './StarRatingManager.js';
 import { getTotalDemandMultiplier, getCurrentSeason } from './SeasonManager.js';
 import { getReputationPenaltyMultiplier } from './StoryGenerator.js';
 
@@ -19,9 +19,14 @@ function generateGuestName(prng: PRNG): string {
   return GUEST_NAMES[Math.floor(prng.next() * GUEST_NAMES.length)];
 }
 
-function generateFreshGuest(prng: PRNG, day: number): Guest {
+/** A guest's nightly budget: a higher-star hotel attracts wealthier guests. */
+function generateBudget(prng: PRNG, starRating: number): number {
+  return prng.range(ECONOMY.guestMinBudget, ECONOMY.guestMaxBudget) * getPriceMultiplier(starRating);
+}
+
+function generateFreshGuest(prng: PRNG, day: number, starRating: number): Guest {
   const trait = generateGuestTrait(prng);
-  let budget = prng.range(ECONOMY.guestMinBudget, ECONOMY.guestMaxBudget);
+  let budget = generateBudget(prng, starRating);
   if (trait === 'big_spender') {
     budget *= GUEST_TRAITS.bigSpenderBudgetMult;
   }
@@ -40,8 +45,8 @@ function generateFreshGuest(prng: PRNG, day: number): Guest {
 }
 
 /** A guest pulled from returningGuestPool: same name/trait as their prior stay (design-review D7). */
-function generateReturningGuest(profile: ReturningGuestProfile, prng: PRNG, day: number): Guest {
-  let budget = prng.range(ECONOMY.guestMinBudget, ECONOMY.guestMaxBudget);
+function generateReturningGuest(profile: ReturningGuestProfile, prng: PRNG, day: number, starRating: number): Guest {
+  let budget = generateBudget(prng, starRating);
   if (profile.trait === 'big_spender') {
     budget *= GUEST_TRAITS.bigSpenderBudgetMult;
   }
@@ -76,9 +81,30 @@ export function getWordOfMouthMultiplier(state: HotelState): number {
   return Math.max(STORY.wordOfMouthFloorMultiplier, Math.min(STORY.wordOfMouthCeilingMultiplier, raw));
 }
 
-function matchGuestToRoom(guest: Guest, availableRooms: Room[]): Room | null {
+/**
+ * Expected guest arrivals for the current day: a base market plus hotel
+ * visibility (room count), scaled by star rating, review score, season/weekday
+ * demand, word-of-mouth, and any active reputation penalty.
+ */
+export function getExpectedArrivalsPerDay(state: HotelState): number {
+  const market = ECONOMY.baseArrivalsPerDay + ECONOMY.arrivalsPerRoom * state.rooms.length;
+  return market
+    * getStarDemandMultiplier(state.starRating)
+    * (state.reviewScore / REVIEW.arrivalScoreDivisor)
+    * getTotalDemandMultiplier(state.day)
+    * getWordOfMouthMultiplier(state)
+    * getReputationPenaltyMultiplier(state);
+}
+
+/**
+ * Cheapest available room the guest can afford and considers worth the price:
+ * within their budget, and no more than `priceTolerance` x the fair price for
+ * that room type at the hotel's current star level.
+ */
+function matchGuestToRoom(guest: Guest, availableRooms: Room[], priceTolerance: number, starRating: number): Room | null {
   for (const room of availableRooms) {
-    if (room.pricePerNight <= guest.budget) {
+    const fairPrice = getExpectedPrice(room.type, starRating);
+    if (room.pricePerNight <= guest.budget && room.pricePerNight <= fairPrice * priceTolerance) {
       return room;
     }
   }
@@ -104,12 +130,7 @@ export function processArrivals(
   }
 
   const hoursInWindow = ECONOMY.checkInEndHour - ECONOMY.checkInStartHour;
-  // Arrival rate: base * reviewScore factor * seasonal demand * word-of-mouth
-  const demandMult = getTotalDemandMultiplier(state.day);
-  const wordOfMouthMult = getWordOfMouthMultiplier(state);
-  const reputationMult = getReputationPenaltyMultiplier(state);
-  const arrivalsPerDay = ECONOMY.baseArrivalsPerDay * (state.reviewScore / REVIEW.arrivalScoreDivisor) * demandMult * wordOfMouthMult * reputationMult;
-  const arrivalsThisHour = arrivalsPerDay / hoursInWindow;
+  const arrivalsThisHour = getExpectedArrivalsPerDay(state) / hoursInWindow;
 
   const guaranteed = Math.floor(arrivalsThisHour);
   const extra = prng.chance(arrivalsThisHour - guaranteed) ? 1 : 0;
@@ -132,9 +153,9 @@ export function processArrivals(
       const idx = Math.floor(prng.next() * pool.length);
       const profile = pool[idx];
       pool = [...pool.slice(0, idx), ...pool.slice(idx + 1)];
-      guest = generateReturningGuest(profile, prng, state.day);
+      guest = generateReturningGuest(profile, prng, state.day, state.starRating);
     } else {
-      guest = generateFreshGuest(prng, state.day);
+      guest = generateFreshGuest(prng, state.day, state.starRating);
     }
 
     // Front desk at capacity: guest leaves impatiently
@@ -149,7 +170,8 @@ export function processArrivals(
     }
 
     const remainingRooms = available.slice(availableIdx);
-    const room = matchGuestToRoom(guest, remainingRooms);
+    const priceTolerance = 1 + prng.next() * ECONOMY.priceToleranceSpread;
+    const room = matchGuestToRoom(guest, remainingRooms, priceTolerance, state.starRating);
 
     if (room) {
       const roomIdx = available.indexOf(room);
@@ -172,7 +194,7 @@ export function processArrivals(
       result.turnedAway++;
       result.events.push({
         type: 'guest_turned_away',
-        message: 'Guest turned away (no affordable room available)',
+        message: 'Guest turned away (no room at a price they would pay)',
       });
     }
   }
@@ -257,7 +279,7 @@ export function calculateGuestReviewBreakdown(
   guest: Guest,
   prng: PRNG
 ): GuestReviewBreakdown {
-  const expectedPrice = ROOM_CONFIG[room.type].expectedPrice;
+  const expectedPrice = getExpectedPrice(room.type, state.starRating);
   const priceFairness = 1 - Math.abs(room.pricePerNight - expectedPrice) / expectedPrice;
 
   // Proximity-based noise

@@ -1,6 +1,7 @@
-import type { HotelState, Room, RoomType, Facility, FacilityType } from './types.js';
-import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG } from '../config/balance.js';
+import type { HotelState, Room, RoomType, Facility, FacilityType, TileType } from './types.js';
+import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN } from '../config/balance.js';
 import { createConstructionNoise } from './NoiseManager.js';
+import { getExpectedPrice } from './StarRatingManager.js';
 
 export function createHotelState(): HotelState {
   return {
@@ -34,7 +35,27 @@ export function createHotelState(): HotelState {
     returningGuestPool: [],
     storyLog: [],
     activeReputationPenalties: [],
+    peakStarRating: 1,
+    loan: {
+      balance: LOAN.principal,
+      weeklyPayment: LOAN.weeklyPayment,
+      missedPayments: 0,
+    },
+    objectives: { currentIndex: 0, outcomes: [] },
+    dailyStats: [],
   };
+}
+
+/** Star rating a room or facility type unlocks at. */
+export function getRequiredStars(type: TileType): number {
+  if (type in ROOM_CONFIG) return ROOM_CONFIG[type as RoomType].requiredStars;
+  return FACILITY_CONFIG[type]?.requiredStars ?? 1;
+}
+
+/** Whether a room or facility type can be built yet. Uses the peak star rating,
+ * so a temporary star downgrade never re-locks something already unlocked. */
+export function isUnlocked(state: HotelState, type: TileType): boolean {
+  return state.peakStarRating >= getRequiredStars(type);
 }
 
 export function addRoom(
@@ -55,17 +76,23 @@ export function addRoom(
     return null;
   }
 
-  // Check affordability
+  // Check affordability and unlock
   if (state.cash < config.buildCost) {
     return null;
   }
+  if (!isUnlocked(state, type)) {
+    return null;
+  }
+
+  // New rooms start at the fair price for the hotel's current star level
+  const startingPrice = Math.max(config.minPrice, Math.min(config.maxPrice, getExpectedPrice(type, state.starRating)));
 
   const room: Room = {
     id: `room-${gridX}-${gridY}`,
     type,
     gridX,
     gridY,
-    pricePerNight: config.defaultPrice,
+    pricePerNight: startingPrice,
     condition: 100,
     cleanliness: HOUSEKEEPING.initialCleanliness,
     status: 'vacant',
@@ -166,6 +193,7 @@ export function addFacility(
   if (gridX < 0 || gridX >= GRID.width || gridY < 0 || gridY >= GRID.height) return null;
   if (isTileOccupied(state, gridX, gridY)) return null;
   if (state.cash < config.buildCost) return null;
+  if (!isUnlocked(state, type)) return null;
 
   const facility: Facility = {
     id: `facility-${gridX}-${gridY}`,

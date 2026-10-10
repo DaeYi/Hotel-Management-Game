@@ -31,7 +31,17 @@ const EVENT_COLORS: Record<string, string> = {
   noise_complaint_filed: '#e67e22',
   noise_complaint_escalated: '#e74c3c',
   mid_stay_breakdown_resolved: '#2ecc71',
+  loan_payment: '#f39c12',
+  loan_paid_off: '#2ecc71',
+  objective_completed: '#2ecc71',
+  objective_failed: '#e74c3c',
+  build_unlocked: '#9b59b6',
 };
+
+/** Progression events: always shown right away, never batched or suppressed. */
+const PROGRESSION_EVENT_TYPES = new Set([
+  'loan_payment', 'loan_paid_off', 'objective_completed', 'objective_failed', 'build_unlocked',
+]);
 
 /** Incident-related event types (design-review D13): suppressed as toasts while
  * the Story Log panel is open, since the player is already looking at them there. */
@@ -59,7 +69,11 @@ export class NotificationToast {
   addEvents(events: GameEvent[]) {
     for (const event of events) {
       // Always show these immediately
-      if (event.type === 'bankrupt' || event.type === 'room_broken' || event.type === 'star_rating_changed' || event.type === 'season_changed' || INCIDENT_EVENT_TYPES.has(event.type)) {
+      if (event.type === 'loan_payment' && event.data?.missed) {
+        this.showToast(event.message, '#e74c3c');
+        continue;
+      }
+      if (event.type === 'bankrupt' || event.type === 'room_broken' || event.type === 'star_rating_changed' || event.type === 'season_changed' || INCIDENT_EVENT_TYPES.has(event.type) || PROGRESSION_EVENT_TYPES.has(event.type)) {
         this.showToast(event.message, EVENT_COLORS[event.type] ?? '#ffffff');
         continue;
       }

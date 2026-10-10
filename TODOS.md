@@ -40,6 +40,30 @@
 **Priority:** P3
 **Depends on:** Facility parity (inspector UI) shipping first, so there's a UI surface to show condition/repair on.
 
+## Balance
+
+### Late-game money sinks
+
+**What:** Give a successful hotel something to spend on once it's past 4-5 stars: renovations, expansions to a second building, staff upgrades, or rising property taxes that scale with size.
+
+**Why:** After the stakes & progression milestone, the `balanced` bot is bankruptcy-proof and sits on ~$1.1M by day 400 (`npm run simulate -- 400`). Once the loan is paid and 5 stars reached, cash stops meaning anything.
+
+**Context:** The early game now has real pressure (opening loan, demand that tracks size and stars, overpricing loses guests). The late game has none. See docs/designs/stakes-and-progression.md.
+
+**Effort:** M
+**Priority:** P2
+**Depends on:** None
+
+### Faster consequences for neglect
+
+**What:** Make a hands-off hotel fail sooner and more visibly, e.g. broken rooms hurting reviews immediately, or out-of-order rooms still costing upkeep plus a reputation hit.
+
+**Why:** An `idle` hotel (8 rooms, no changes) breaks down around day 70 but doesn't go bankrupt until ~day 200, because a broken room just goes quiet. The original target was ~30-50% bankrupt by day 90.
+
+**Effort:** S
+**Priority:** P3
+**Depends on:** None
+
 ## Story Generator
 
 ### Always-on incident HUD/glanceability
@@ -78,18 +102,6 @@
 **Priority:** P4
 **Depends on:** `returningGuestPool` + arrival-generation hook shipping first (Story Generator milestone).
 
-## Infrastructure
-
-### Deploy pipeline / distribution
-
-**What:** Stand up the itch.io + GitHub Pages deploy pipeline specified in the original April 2026 design doc.
-
-**Why:** The game has no live deployment today — it can't be shown to anyone. This becomes load-bearing the moment the founder revisits the deferred-validation checkpoint (now placed between PR1 and PR2, per the 2026-09-08 plan-eng-review) and wants to actually get it in front of a real player.
-
-**Context:** The original 2026-04-09 design doc specified `itch.io` (free browser game) + GitHub Pages (`push to main = deploy`) with no pipeline complexity beyond that. The 2026-09-08 codebase survey confirmed this was never executed — no deploy config exists in the repo.
-
-**Effort:** S
-**Priority:** P2
-**Depends on:** None — can happen anytime, but matters most once validation is back on the table.
-
 ## Completed
+
+- **Deploy pipeline** (2026-10-10): GitHub Actions runs tests + build on every push/PR and deploys `dist` to GitHub Pages from `main` -- https://daeyi.github.io/Hotel-Management-Game/

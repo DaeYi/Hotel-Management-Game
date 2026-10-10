@@ -179,6 +179,14 @@ export class Toolbar {
     btn.setBackgroundColor(active ? '#4a4a6a' : '#22223a');
   }
 
+  /** Clear the active-panel highlight when a panel is opened from outside the toolbar. */
+  clearActivePanel() {
+    if (this.activePanel) {
+      this.updateButton(this.activePanel, false);
+      this.activePanel = null;
+    }
+  }
+
   /** Programmatically set pause state (e.g., from tutorial) */
   setPaused(paused: boolean) {
     if (paused) {

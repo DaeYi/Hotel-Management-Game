@@ -6,6 +6,7 @@ export const ROOM_CONFIG: Record<RoomType, {
   defaultPrice: number;
   minPrice: number;
   maxPrice: number;
+  requiredStars: number; // unlocks once the hotel's peak star rating reaches this
 }> = {
   standard: {
     buildCost: 2000,
@@ -13,6 +14,7 @@ export const ROOM_CONFIG: Record<RoomType, {
     defaultPrice: 80,
     minPrice: 30,
     maxPrice: 200,
+    requiredStars: 1,
   },
   deluxe: {
     buildCost: 5000,
@@ -20,6 +22,7 @@ export const ROOM_CONFIG: Record<RoomType, {
     defaultPrice: 150,
     minPrice: 80,
     maxPrice: 350,
+    requiredStars: 2,
   },
   suite: {
     buildCost: 10000,
@@ -27,23 +30,33 @@ export const ROOM_CONFIG: Record<RoomType, {
     defaultPrice: 250,
     minPrice: 150,
     maxPrice: 500,
+    requiredStars: 3,
   },
 };
 
 export const ECONOMY = {
   startingCash: 50000,
-  baseArrivalsPerDay: 12,
+  // Arrivals per day at a 5/10 review score, before season/weekday multipliers:
+  // (baseArrivalsPerDay + arrivalsPerRoom * rooms) * STAR_RATING.demandMultiplier[stars].
+  // The per-room term is the hotel's visibility -- bigger hotels draw more walk-ins,
+  // but sub-linearly enough that overbuilding leaves rooms empty.
+  baseArrivalsPerDay: 2,
+  arrivalsPerRoom: 0.3,
   checkInStartHour: 14,
   checkInEndHour: 22,
   guestMinBudget: 60,
   guestMaxBudget: 300,
+  // Each arriving guest will pay up to (fair price x tolerance), with tolerance drawn
+  // uniformly from 1 to 1 + this spread. Fair price is always accepted; overpricing
+  // loses a growing share of guests, so raising prices only pays when you're full.
+  priceToleranceSpread: 0.8,
   guestMinStay: 1,
   guestMaxStay: 3,
-  dailyOperatingCostPerRoom: 20,
+  dailyOperatingCostPerRoom: 10,
   debtInterestRate: 0.05, // 5% per game-day (intentionally punishing)
   bankruptcyThreshold: -10000,
   roomRepairCost: 500,
-  roomConditionDecayPerDay: 2, // condition points lost per day when occupied
+  roomConditionDecayPerDay: 3, // condition points lost per day when occupied
   roomBreakdownThreshold: 0, // condition at which room goes out of order
   initialReviewScore: 5.0, // cold start: 5/10 (neutral)
   demolishRefundRate: 0.25, // fraction of build cost refunded on demolish (rooms and facilities)
@@ -151,15 +164,15 @@ export const HOUSEKEEPING = {
   } as Record<string, number>,
 
   turnoverCost: {
-    quick: 15,     // cost per room cleaning
-    standard: 30,
-    thorough: 50,
+    quick: 8,      // cost per room cleaning
+    standard: 15,
+    thorough: 25,
   } as Record<string, number>,
 
   // Daily cleaning: happens during guest stay
   dailyCleaningHour: 10, // housekeeping comes at 10 AM
   dailyCleaningBoost: 15, // cleanliness points restored per daily clean
-  dailyCleaningCost: 20, // cost per room per daily cleaning
+  dailyCleaningCost: 5, // cost per room per daily cleaning
 
   // Cleanliness degradation
   cleanlinessDecayPerDay: 8, // how much cleanliness drops per day while occupied
@@ -221,7 +234,7 @@ export const NOISE = {
 
 export const STAFF = {
   maintenance: {
-    dailyWage: 100, // per worker per day
+    dailyWage: 80, // per worker per day
     repairPerHour: 8, // condition points restored per hour of work
     conditionThreshold: 70, // auto-repair rooms below this condition
     maxRoomsPerWorker: 8, // one worker can maintain up to 8 rooms effectively
@@ -229,14 +242,14 @@ export const STAFF = {
     workEndHour: 22, // maintenance shift ends
   },
   housekeeping: {
-    dailyWage: 80, // per housekeeper per day
+    dailyWage: 60, // per housekeeper per day
     turnoverRoomsPerHour: 1, // rooms a housekeeper can turn over per hour
     dailyCleanRoomsPerHour: 2, // rooms a housekeeper can daily-clean per hour
     workStartHour: 6,
     workEndHour: 22,
   },
   frontDesk: {
-    dailyWage: 90, // per front desk worker per day
+    dailyWage: 70, // per front desk worker per day
     checkInsPerHour: 3, // guests a worker can check in per hour
     selfServiceCapacity: 1, // check-ins per hour with 0 staff (kiosk)
     checkoutDelayWithoutStaff: 2, // extra hours added to cleaning if no front desk
@@ -269,6 +282,31 @@ export const STAR_RATING = {
     large: 20,   // +0.5 more at 20+ rooms
   },
 
+  // Minimum star points for each star level (index 0 = 1 star). Spread out so a
+  // fresh hotel with default housekeeping starts at 1 star and each star is a real
+  // step: 2 stars is reachable with standard rooms only, which matters because
+  // deluxe rooms themselves unlock at 2 stars.
+  pointThresholds: [0, 2, 4.5, 7, 9],
+
+  // What guests expect to pay (price fairness) and can afford (budget) scales with
+  // stars -- the payoff for climbing, on top of demandMultiplier below.
+  priceMultiplier: {
+    1: 1.0,
+    2: 1.15,
+    3: 1.35,
+    4: 1.6,
+    5: 1.9,
+  } as Record<number, number>,
+
+  // Arrival multiplier per star level: a better-rated hotel reaches a bigger market.
+  demandMultiplier: {
+    1: 1.0,
+    2: 1.2,
+    3: 1.45,
+    4: 1.7,
+    5: 2.0,
+  } as Record<number, number>,
+
   // Expectation multiplier per star level
   // Higher star = guests expect more = penalties hit harder
   expectationMultiplier: {
@@ -287,6 +325,7 @@ export const FACILITY_CONFIG: Record<string, {
   noiseOutput: number; // noise generated (uses proximity system)
   starPoints: number; // contribution to star rating
   dailyRevenue: number; // direct revenue per day (shops sell to guests)
+  requiredStars: number; // unlocks once the hotel's peak star rating reaches this
   seasonalMultiplier?: string; // if set, bonus is multiplied by this season's demand
   label: string;
   description: string;
@@ -299,6 +338,7 @@ export const FACILITY_CONFIG: Record<string, {
     noiseOutput: 0.3,
     starPoints: 0.5,
     dailyRevenue: 0,
+    requiredStars: 2,
     label: 'Gym',
     description: 'Fitness center. Boosts satisfaction for nearby rooms.',
     color: 0x27ae60,
@@ -310,6 +350,7 @@ export const FACILITY_CONFIG: Record<string, {
     noiseOutput: 0.5,
     starPoints: 1.0,
     dailyRevenue: 0,
+    requiredStars: 3,
     label: 'Restaurant',
     description: 'On-site dining. Big satisfaction boost but generates noise.',
     color: 0xe67e22,
@@ -322,6 +363,7 @@ export const FACILITY_CONFIG: Record<string, {
     starPoints: 1.0,
     dailyRevenue: 0,
     seasonalMultiplier: 'summer',
+    requiredStars: 4,
     label: 'Pool',
     description: 'Swimming pool. Huge satisfaction boost, especially in summer.',
     color: 0x3498db,
@@ -333,6 +375,7 @@ export const FACILITY_CONFIG: Record<string, {
     noiseOutput: 0.1,
     starPoints: 0.3,
     dailyRevenue: 15, // $15/day per guest in the hotel from shop sales
+    requiredStars: 1,
     label: 'Shop',
     description: 'Gift shop and sundries. Small bonus, earns revenue from guests.',
     color: 0x9b59b6,
@@ -403,6 +446,51 @@ export const SEASON = {
     { name: 'Harvest Fair', startDay: 250, duration: 5, demandMultiplier: 1.3 },
   ] as Array<{ name: string; startDay: number; duration: number; demandMultiplier: number }>,
 };
+
+// The opening bank loan. Starting cash is borrowed money: a fixed weekly payment
+// covers interest on the remaining balance first, then principal. Payments still
+// come out when cash is short, so they push you into debt (ECONOMY.debtInterestRate).
+export const LOAN = {
+  principal: 50000, // equals ECONOMY.startingCash -- the whole opening budget is borrowed
+  weeklyInterestRate: 0.01,
+  weeklyPayment: 1000,
+  paymentIntervalDays: 7,
+  earlyRepaymentStep: 5000, // the "pay extra" button repays in chunks of this size
+};
+
+export type ObjectiveKind =
+  | 'room_count'      // own at least `target` rooms
+  | 'occupancy_7d'    // average overnight occupancy over the last 7 days >= target (0-1)
+  | 'review_score'    // review score >= target (0-10)
+  | 'star_rating'     // star rating >= target
+  | 'revenue_30d'     // revenue earned over the last 30 days >= target
+  | 'loan_paid_off';  // loan balance is zero
+
+export interface ObjectiveConfig {
+  id: string;
+  title: string;
+  description: string;
+  kind: ObjectiveKind;
+  target: number;
+  deadlineDay: number; // absolute game day; missing it fails the objective and moves on
+  reward: number; // cash paid on completion
+}
+
+// Owner objectives, worked through in order. Deadlines are absolute days so a
+// slow start eats into later goals' time rather than resetting the clock.
+export const OBJECTIVES: ObjectiveConfig[] = [
+  { id: 'open', title: 'Open for Business', description: 'Build 8 rooms', kind: 'room_count', target: 8, deadlineDay: 10, reward: 2000 },
+  { id: 'full_house', title: 'Full House', description: 'Average 70% occupancy over 7 days', kind: 'occupancy_7d', target: 0.7, deadlineDay: 40, reward: 3000 },
+  { id: 'good_word', title: 'Good Word', description: 'Reach a 7.0 review score', kind: 'review_score', target: 7.0, deadlineDay: 50, reward: 3000 },
+  { id: 'two_stars', title: 'Moving Up', description: 'Reach 2 stars', kind: 'star_rating', target: 2, deadlineDay: 70, reward: 5000 },
+  { id: 'good_month', title: 'A Good Month', description: 'Earn $25,000 in 30 days', kind: 'revenue_30d', target: 25000, deadlineDay: 120, reward: 6000 },
+  { id: 'three_stars', title: 'Three-Star Hotel', description: 'Reach 3 stars', kind: 'star_rating', target: 3, deadlineDay: 160, reward: 10000 },
+  { id: 'debt_free', title: 'Debt Free', description: 'Pay off the bank loan', kind: 'loan_paid_off', target: 0, deadlineDay: 240, reward: 10000 },
+  { id: 'four_stars', title: 'Four-Star Hotel', description: 'Reach 4 stars', kind: 'star_rating', target: 4, deadlineDay: 260, reward: 15000 },
+  { id: 'five_stars', title: 'Five-Star Legend', description: 'Reach 5 stars', kind: 'star_rating', target: 5, deadlineDay: 360, reward: 25000 },
+];
+
+export const DAILY_STATS_MAX_DAYS = 60; // covers the longest objective window (30 days) with room to spare
 
 export const GRID = {
   width: 20,
