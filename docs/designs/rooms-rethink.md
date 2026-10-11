@@ -12,6 +12,15 @@ Depends on: the 11:00 checkout rebalance and guest outings, both in flight and u
 
 Three approaches were written up independently and scored by three judges. This document combines them into one direction. It does not schedule any work.
 
+## Owner decisions (2026-10-11)
+
+1. **Bathroom, closet and furniture placement: both preset layouts and free placement.** Players can pick a ready-made arrangement or place items themselves. The free editor is now part of the plan (phase 2), not an optional last phase. The classifier therefore needs the hardening listed under risk 5: crowding penalties, a sleeps cap per tile, and property tests.
+2. **Per-tile earnings: bigger rooms generally earn more per tile, depending on amenities, but it isn't guaranteed.** A big room that is well furnished out-earns small rooms per tile. A big room that is bare or cramped can earn less. Pricing is re-curved so that area pays only through what fills it (see Pricing). Legacy 1x1 rooms keep their exact numbers.
+3. **Parties on screen: several people walking together.** A party is N figures on one itinerary: a leader with followers half a tile behind, and kids drawn smaller.
+4. **Staff hiring: picking specific people** (see guest-staff-personalities.md). This is recorded here because parties and staff identity ship on the same roster and figure plumbing.
+
+The open questions at the end are updated to match.
+
 ## Goals
 
 1. **Furniture is real.** Beds, the bathroom, storage, seating, the TV and the desk are things in the room. They are drawn where they are, and they change what the simulation does: price, capacity, cleaning time and noise.
@@ -119,12 +128,12 @@ There were three judges. J1 weighted fun, J2 weighted engineering fit and risk, 
    - Every per-person scaling is normalized so that solo and couple bookings reproduce today's numbers.
    - A "guest" today is really a 1-2 person booking, so only parties of 3 or more scale anything up.
 6. **Every position inside a room is a planned leg** (A's `TilePos.sub`, C's `StayLeg.slot`). Time-only choreography is rejected for anything shown moving. That honors J2 and J3, and it is what 3D will need anyway.
-7. **Bigger rooms come before any free editor.** Footprints arrive in phase 3. The free editor is phase 5 and optional.
+7. **Presets and free placement, both (owner decision).** Presets ship first (phase 1). The free editor follows in phase 2, editing the same item list, with the classifier hardened for it. Bigger rooms (footprints) arrive in phase 3.
 8. **Bulk tools ship with the first per-room choice.** House standards with "Apply to all N rooms" come in phase 1, not later.
 
 Each phase changes one balance-relevant thing, behind a flag where it can be. That is J2's rule, and it is why parties (phase 2) and footprints (phase 3) don't land together, which was A's bundling problem.
 
-### The per-tile economics problem (read before phase 3)
+### The per-tile economics problem (decided: area pays through amenities)
 
 Today a 1x1 tile earns $80, $150 or $250 a night as standard, deluxe or suite. Budgets cap absolute prices: at 3 stars a guest's budget is $81-$405, or up to $607 for a big spender.
 
@@ -136,7 +145,7 @@ So a 2x2 suite cannot charge four times a 1x1 suite. With the curve below, multi
 
 There are two consequences:
 - The Executive Studio must leave the build menu when real suites ship. Existing ones keep their exact numbers. Otherwise it beats every multi-tile suite per tile forever.
-- Whether exact legacy pricing can coexist with fun big rooms is the first thing to measure in phase 3. The alternative is A's approach: re-curve so revenue per tile rises with size, and convert legacy rooms at their next renovation. This is open question 2.
+- **Decided by the owner:** bigger rooms should generally earn more per tile, depending on their amenities, without a guarantee. So area is priced through what fills it. In the Pricing section's formula, the area term is multiplied by the room's furnishing quality. A well-furnished 2x1 or 2x2 room earns more per tile than a 1x1. A bare or cramped one earns less. Legacy 1x1 rooms keep their exact numbers, so existing hotels don't change overnight.
 
 ## Data model sketch
 
@@ -348,10 +357,12 @@ Every number below is illustrative, to be tuned against the current balanced, un
 ### Pricing
 
 - `getExpectedPrice(room, stars)` reads `profile.fairBase` × the star multiplier × the view premium. The price slider becomes 0.4×–2.5× fairBase instead of `ROOM_CONFIG` min/max.
-- `fairBase = CLASS_BASE[class] × (1 + 0.875 × (quality − 1)) + AREA_RATE × (tiles − 1)`
+- `fairBase = CLASS_BASE[class] × (1 + 0.875 × (quality − 1)) + AREA_RATE × (tiles − 1) × amenityFactor`
   - CLASS_BASE: single 60, double 80, twin 85, family 100, junior_suite 133, suite 160.
-  - AREA_RATE: about 70.
+  - AREA_RATE: about 110, so a well-furnished big room clears a 1x1 per tile.
+  - `amenityFactor` scales with how well the extra area is furnished: `0.4 + 0.6 × (quality − 1) / 2`, with a further ×0.6 for a cramped room (under 25% free floor) or a sparse one (under 1 item per tile of living or comfort furniture).
   - Grade is a label; only quality, class and area move the price, so there are no cliffs.
+  - **Target (owner decision):** a tier-2 or tier-3 big room earns more per tile than a 1x1 deluxe. A tier-1 or sparse big room earns about the same or less. Tune the constants in the phase 3 harness against this, not against the illustrative table below.
 
 | Preset (phase) | Footprint | Sleeps | Tier | Derived label | Fair base | Per tile |
 |---|---|---|---|---|---|---|
@@ -377,14 +388,14 @@ The per-tile column is the problem described in "The per-tile economics problem"
 
 ### Cleaning time (sized for the 11:00 checkout)
 
-- **Turnover** = (shell + Σ item cleanHours) × quality factor (0.5 / 1 / 1.5). Legacy 1x1 rooms reproduce 2 / 4 / 6 h exactly; the nook's clean hours on the Executive Studio are set to 0 for parity.
+- **Turnover** = (shell + Σ item cleanHours) × quality factor (0.5 / 1 / 1.5). Legacy 1x1 rooms reproduce today's 1 / 2 / 3 h exactly (after the 11:00 checkout rebalance); the nook's clean hours on the Executive Studio are set to 0 for parity.
 - **Daily clean** = Σ dailyCleanHours, which is 0.5 h for every legacy room.
-- **Bigger rooms** take about 5.5 h (2x1 family) and 7-8 h (2x2 suite) at standard quality.
-  - A suite checked out at 11:00 and started at once is ready around 18:00-19:00.
-  - It misses most of the 14:00-22:00 arrivals but catches the evening ones. That is a real cost, priced into suites until crew cleaning ships in phase 4.
-- **Fixes made urgent by the checkout move**, done in the checkout rebalance pass, before this feature:
-  - `jobQueues` sorts turnovers soonest-finished first, which starves big rooms. Prioritize rooms needed for today's arrivals, then value per hour remaining.
-  - `estimateHousekeepingHours` must sum per-room profiles, or the bots and staffing advice will under-hire once rooms vary.
+- **Bigger rooms** take about 3 h (2x1 family) and 4 h (2x2 suite) at standard quality, on today's scale.
+  - A suite checked out at 11:00 and started at once is ready around 15:00-16:00, so it misses the first arrivals but catches most of the afternoon.
+  - That is a real but moderate cost, until crew cleaning ships in phase 4.
+- **Fixes made urgent by the checkout move:**
+  - Done in the checkout rebalance: `estimateHousekeepingHours` no longer books daily cleans for guests leaving that day.
+  - Still to do, with this feature: `jobQueues` sorts turnovers soonest-finished first, which starves big rooms. Prioritize rooms needed for today's arrivals, then value per hour remaining. `estimateHousekeepingHours` must also sum per-room profiles, or the bots and staffing advice will under-hire once rooms vary.
 - **Visible per-slot cleaning (phase 1b).** The housekeeper's stay is split into sub-stays following `cleanPlan` (bath → beds → rest), derived from hours already done, so no new progress is saved. `StayLeg.slot` lets the renderer draw them there and lets the alignment test check it.
 - **Crew cleaning (phase 4).** Up to one housekeeper per zone. The `claimed` set becomes zone-scoped, and the alignment test's "one worker per room" becomes "one per zone". Drawn as a visible team.
 
@@ -578,7 +589,8 @@ This gives a measured baseline, so two balance passes don't confound each other.
 - **Not in phase 1:** parties, twins and families, multi-tile rooms, noise changes, tier 3, and the free editor.
 - **Phase 1b (stretch):** `StayLeg.slot`, so housekeepers visibly clean bath → bed → rest, checked by the alignment test.
 
-**Phase 2: "Who's staying" (M).**
+**Phase 2: "Make it yours" and "Who's staying" (L).**
+- **Free placement (owner decision).** A Preact/SVG room editor on the same item list: drag or tap items onto the room's sub-grid, rotate, delete, start from any preset, and see the live classification as you go (label, sleeps, fair price, issues). It is hardened against min-maxing with crowding penalties, a sleeps cap per tile, and property tests over random layouts. On phones it uses tap-to-place with a fixed palette. Bots keep using presets.
 - Parties behind the flag: the `hash01` mix, fit matching, the pay cap, the soft trickle of named turn-aways, normalized per-person scaling, and N figures on one itinerary.
 - New 1x1 presets: Twin and Bunk Family.
 - Preferences v1 (review only), wired to the personality list.
@@ -598,7 +610,7 @@ This gives a measured baseline, so two balance passes don't confound each other.
 - Noise heard at the bed plus wall buffers, behind a flag.
 - Crew cleaning by zone, with the alignment test rewritten around zones.
 
-**Phase 5: "Make it yours" (L, optional).** The free Preact/SVG editor on the same items, only if the slot catalog proves too limiting.
+**Phase 5:** folded into phase 2 by the owner's decision (free placement alongside presets).
 
 **Phase 6: depth and 3D.** Per-item wear and targeted breakdowns, minibar and kitchenette trade-offs, connecting rooms, then the 3D renderer.
 
@@ -625,13 +637,13 @@ This gives a measured baseline, so two balance passes don't confound each other.
 
 ## Open questions for the owner
 
-1. **Bathroom and closet placement:** is a choice of authored arrangements (bath by the door or at the back, mirrored) enough, or is true free placement wanted, and in which phase? *Recommended: arrangements now; the free editor in phase 5 only if wanted.*
-2. **Per-tile economics:** keep exact legacy prices, so big rooms earn less per tile and win through parties and stars? Or re-curve before phase 3 so revenue per tile rises with size, converting legacy rooms at renovation? *Recommended: exact through phase 2, decide with harness data before phase 3.*
+1. ~~Bathroom and closet placement~~ **Decided:** both presets and free placement (free editor in phase 2).
+2. ~~Per-tile economics~~ **Decided:** bigger rooms generally earn more per tile, depending on amenities. Area is priced through furnishing quality, and legacy 1x1 rooms keep their numbers.
 3. **Keys or area:** do demand and the room-count goals count keys, with the star tier mix weighted by area? *Recommended: yes to both.*
 4. **Grid size:** keep 10x6 per floor, so scarcity is the fun and floors are the space sink, or grow to 12x8 or 14x8? *Recommended: keep it.*
 5. **Footprints:** rectangles up to 2x2, with 3x2 later? No L-shapes? May a suite have two hallway doors?
 6. **The Executive Studio:** legacy-only once real suites ship (recommended), or buildable forever?
-7. **Parties on screen:** N figures on one itinerary (recommended), or one figure with a size badge?
+7. ~~Parties on screen~~ **Decided:** several people walking together (N figures on one itinerary).
 8. **Paying for parties:** one rate per room with larger budgets for 3+ (recommended), or per-person surcharges for sofa beds and cribs?
 9. **Unservable segments:** a soft 25% trickle of named turn-aways (recommended), full turn-aways, or simply no arrivals?
 10. **Crew cleaning:** may several housekeepers clean one big room (phase 4), or do suites carry a built-in vacancy risk?

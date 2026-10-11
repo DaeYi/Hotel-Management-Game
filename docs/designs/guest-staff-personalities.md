@@ -5,6 +5,11 @@ Status: PROPOSED
 Follows: aligned-movement.md, open-floor-plan.md, late-game-economy.md
 Builds on: the 11:00 checkout, guest day trips (`OutingManager.ts`, `GUEST_OUTINGS`) and presence-aware noise, which shipped together with this proposal (see aligned-movement.md).
 
+## Owner decisions (2026-10-11)
+
+- **Staff hiring is a choice of specific people.** Each role gets a shortlist of candidates with names, traits and wages, and the player picks who to hire and who to let go. The +/- buttons stay as a "hire the best value" shortcut. This is open question 4.
+- **Parties are shown as several people walking together** (from the rooms decision). This settles Party size's on-screen form: N figures on one itinerary.
+
 ## Request
 
 > Come up with a list of attributes or personalities that staff/guests can have that help inform/guide their behavior.
@@ -693,7 +698,7 @@ In rough order:
 1. **Figure colour.** Should it switch from trait to Purpose of stay? This removes the current unexplained trait colours.
 2. **Late checkout.** Should the policy (deny / free / fee) ship with the 11:00 rebalance? Should business and early-bird guests have their own earlier checkout hours, which spreads the turnover load?
 3. **Returning guests.** Should they keep their purpose (the honeymooners come back for an anniversary) or re-roll it for each trip?
-4. **Staff choices.** Do you want hiring and layoffs to become choices about specific people (a candidate shortlist, picking who leaves)? Or should headcount stay a number, with personalities assigned automatically?
+4. ~~Staff choices~~ **Decided:** hiring and layoffs are choices about specific people (a candidate shortlist, picking who leaves).
 5. **Quitting.** Is it acceptable for staff to quit on their own, given that it makes understaffing compound?
 6. **Spotlight guests.** Always announced in advance? Or hidden unless a concierge spots them, at the cost of a surprise penalty for players without one?
 7. **Party size before the room redesign.** Should it wait for the redesign, or ship early with the interim rule (standard 2, deluxe 3, suite 4)?
