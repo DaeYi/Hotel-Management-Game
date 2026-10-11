@@ -459,10 +459,3 @@ export function formatRoomLabel(gridX: number, gridY: number, floor: number): st
 
 export { isFacilityOpen, getOpenFacilities };
 
-/** Get open facilities adjacent to a room on the same floor (within 1 tile, all 8 directions) */
-export function getAdjacentFacilities(state: HotelState, gridX: number, gridY: number, floor: number): Facility[] {
-  return getOpenFacilities(state).filter(f =>
-    f.floor === floor && Math.abs(f.gridX - gridX) <= 1 && Math.abs(f.gridY - gridY) <= 1
-    && !(f.gridX === gridX && f.gridY === gridY)
-  );
-}

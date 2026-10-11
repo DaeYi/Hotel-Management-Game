@@ -187,7 +187,7 @@ input[type='range'] { width: 100%; accent-color: var(--gold); }
 
 /* ---------- Toasts & signs ---------- */
 
-.toasts { position: absolute; left: 8px; bottom: 8px; display: flex; flex-direction: column; gap: 4px; pointer-events: none; }
+.toasts { position: absolute; right: 8px; bottom: 8px; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; pointer-events: none; } /* bottom right: the lobby is bottom left */
 .toast {
   background: rgba(26, 26, 62, 0.88); border-left: 3px solid currentColor;
   border-radius: 4px; padding: 5px 10px; font-size: 12px; width: max-content; max-width: 320px;

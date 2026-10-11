@@ -50,6 +50,84 @@ export interface Guest {
   checkInDay: number;
   isReturning: boolean; // true if this arrival was pulled from returningGuestPool
   hadNoiseComplaint: boolean; // cooldown: one Noise Complaint arc per guest per stay
+  // Where the guest is going (walking in from the street, out to a facility and
+  // back, to a new room): absolute game-hour legs. Once the last leg ends -- or
+  // with no trip -- the guest is in their room. See Movement.ts.
+  trip?: Leg[] | null;
+  tripKind?: 'arrival' | 'visit' | 'move'; // what the trip is for (an arriving guest isn't in the building before it starts)
+  // Facilities this guest actually used this stay (best level used, and the
+  // day of the last visit): the facility part of their review. See FacilityManager.ts.
+  facilitiesUsed?: Partial<Record<FacilityType, { level: number; day: number }>>;
+}
+
+/** A tile in the building: (gridX, gridY) on a floor. A `door` means the tile is entered through that side only (a room or facility). */
+export interface TilePos {
+  gridX: number;
+  gridY: number;
+  floor: number;
+  door?: Direction;
+}
+
+/**
+ * One stretch of someone's time, in absolute game hours ((day - 1) * 24 + hour,
+ * plus the fraction of the hour). People are drawn wherever their legs put them
+ * at the current time, and the simulation acts on the same legs -- so what is
+ * shown is what happens.
+ */
+export interface WalkLeg {
+  kind: 'walk';
+  start: number;
+  end: number;
+  path: TilePos[]; // tile by tile; consecutive tiles on different floors are an elevator ride
+  hoursPerTile: number; // walking pace (a ride costs TRAVEL.hoursPerFloor per floor)
+}
+
+export type StayActivity = 'clean' | 'repair' | 'rest' | 'wait' | 'check_in' | 'inquire' | 'visit' | 'in_room';
+
+export interface StayLeg {
+  kind: 'stay';
+  start: number;
+  end: number;
+  at: TilePos;
+  activity: StayActivity;
+  placeId?: string; // the room, facility, desk, or break room being stayed in
+  job?: 'turnover' | 'daily' | 'repair'; // what the stay works on, for staff
+  credited?: boolean; // a facility visit whose bonus and sale have been counted (once the guest got there)
+}
+
+export type Leg = WalkLeg | StayLeg;
+
+/** Someone in the building who isn't (or is no longer) a checked-in guest: walking out after checking out, or turned away at the desk. */
+export interface Walker {
+  id: string;
+  trait: GuestTrait;
+  isReturning: boolean;
+  reason: 'checked_out' | 'walked_out' | 'turned_away' | 'impatient';
+  trip: Leg[];
+}
+
+export type StaffRole = 'housekeeper' | 'maintenance';
+
+/** A housekeeper or maintenance worker, as of the last hour boundary. */
+export interface StaffMember {
+  id: string;
+  role: StaffRole;
+  at: TilePos | null; // where they are; null = off site
+  roomId?: string; // the room they were working on when the hour ended (they keep at it)
+  carry?: WalkLeg; // a walk still under way when the hour ended
+  leaving?: boolean; // let go: walks out through the street entrance next hour
+}
+
+/** Every housekeeper's and maintenance worker's hour, planned at its start; the tick credits exactly the work in it. */
+export interface StaffPlan {
+  start: number; // absolute game hour the plan covers ([start, start + 1))
+  itineraries: StaffItinerary[];
+}
+
+export interface StaffItinerary {
+  staffId: string;
+  legs: Leg[];
+  end: Pick<StaffMember, 'at' | 'roomId' | 'carry'>; // where the hour leaves them
 }
 
 export interface Booking {
@@ -161,6 +239,9 @@ export interface HotelState {
   elevators: Elevator[];
   fixtures: Fixture[]; // street entrances, desks, closets, break rooms (every tile with nothing built on it is hallway)
   daysAtFiveStars: number; // consecutive end-of-day snapshots at 5 stars (legacy goals)
+  staffRoster?: StaffMember[]; // housekeepers and maintenance workers, one per head (see StaffManager.ts)
+  staffPlan?: StaffPlan | null; // this hour's plan for them, made at the last hour boundary
+  walkers?: Walker[]; // people walking out who are no longer guests
 }
 
 export interface ActiveCampaign {

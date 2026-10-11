@@ -1,4 +1,6 @@
 import type { SimulationSummary } from './types.js';
+import { settleChanges } from './Settle.js';
+import { hourStart } from './Movement.js';
 import { PRNG } from './prng.js';
 import { createStarterHotel, addRoom } from './HotelState.js';
 import { tickSimulation } from './tick.js';
@@ -37,7 +39,8 @@ export function simulate(
   const totalHours = days * 24;
 
   for (let tick = 0; tick < totalHours; tick++) {
-    state = strategy(state);
+    // The strategy acts at the start of the hour; anyone it affects re-plans (as in the game)
+    state = settleChanges(state, strategy(state), hourStart(state));
     const { state: newState } = tickSimulation(state, prng);
     state = newState;
 

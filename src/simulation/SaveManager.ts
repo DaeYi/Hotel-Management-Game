@@ -6,7 +6,7 @@ import { DIRECTIONS, doorTile, isReachableHallway, findOpenDoor } from './Layout
 import { calculateStarRating } from './StarRatingManager.js';
 
 const SAVE_KEY = 'hotel-game-save';
-const SAVE_VERSION = 17; // v17: street entrances, and facilities have doors
+const SAVE_VERSION = 18; // v18: people move on itineraries; guests visit facilities
 
 interface SaveData {
   version: number;
@@ -199,6 +199,18 @@ export function loadGame(): SaveData | null {
       addEntranceAndFacilityDoors(data.state);
       data.version = 17;
       console.log('Migrated save from v16 to v17');
+    }
+
+    if (data.version === 17) {
+      // Everyone starts where the old game had them: guests in their rooms,
+      // staff at work (the roster and its plan are made on load). Guests
+      // haven't used any facilities yet this stay.
+      data.state.guests = data.state.guests.map((g: any) => ({ ...g, trip: null, facilitiesUsed: g.facilitiesUsed ?? {} }));
+      data.state.walkers = [];
+      delete data.state.staffRoster;
+      data.state.staffPlan = null;
+      data.version = 18;
+      console.log('Migrated save from v17 to v18');
     }
 
     if (data.version !== SAVE_VERSION) {

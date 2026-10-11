@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { PRNG } from '../src/simulation/prng.js';
 import {
   createHotelState, createStarterHotel, addRoom, addFacility, buildFloor, getNextFloorCost, getFloorsBuildCost, addElevator, demolishElevator,
-  isTileOccupied, getAvailableRooms, getElevatorLoad, isRoomReachable, getElevatorWaitPenalty, formatRoomLabel, getAdjacentFacilities,
+  isTileOccupied, getAvailableRooms, getElevatorLoad, isRoomReachable, getElevatorWaitPenalty, formatRoomLabel,
 } from '../src/simulation/HotelState.js';
 import { calculateRoomNoise } from '../src/simulation/NoiseManager.js';
 import { calculateGuestReviewBreakdown } from '../src/simulation/GuestManager.js';
@@ -12,7 +12,8 @@ import { calculateValuation } from '../src/simulation/ObjectivesManager.js';
 import { packIntoLayout, openFloorPlan, addEntranceAndFacilityDoors } from '../src/simulation/SaveManager.js';
 import { simulate } from '../src/simulation/simulate.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
-import { FLOORS, ELEVATOR, GRID, NOISE, ROOM_CONFIG, STARTER_LAYOUT } from '../src/config/balance.js';
+import { FLOORS, ELEVATOR, GRID, NOISE, ROOM_CONFIG, STARTER_LAYOUT, TRAVEL, FACILITY_VISITS } from '../src/config/balance.js';
+import { findRoute } from '../src/simulation/Layout.js';
 import type { Guest, HotelState } from '../src/simulation/types.js';
 
 function richState(): HotelState {
@@ -86,11 +87,13 @@ describe('Floors', () => {
     expect(state.rooms[0].pricePerNight).toBe(getExpectedPrice('standard', 1, 2));
   });
 
-  it('facility bonuses only reach rooms on the same floor', () => {
-    let state = withFloors(richState(), 2);
-    state = addFacility(state, 'gym', 3, 2, 0)!;
-    expect(getAdjacentFacilities(state, 3, 3, 0)).toHaveLength(1);
-    expect(getAdjacentFacilities(state, 3, 3, 1)).toHaveLength(0);
+  it('guests upstairs can use a facility downstairs if the ride is short enough', () => {
+    let state = withFloors({ ...createStarterHotel(), cash: 1_000_000, peakStarRating: 5 }, 2);
+    state = addElevator(state, 0, 0)!;
+    state = addFacility(state, 'gym', 3, 0, 0, 'down')!;
+    const route = findRoute(state, { gridX: 2, gridY: 2, floor: 1, door: 'up' }, { gridX: 3, gridY: 0, floor: 0, door: 'down' }, TRAVEL.guestHoursPerTile)!;
+    expect(route.path.some((p, i) => i > 0 && p.floor !== route.path[i - 1].floor)).toBe(true);
+    expect(route.hours).toBeLessThanOrEqual(FACILITY_VISITS.maxWalkHours);
   });
 });
 

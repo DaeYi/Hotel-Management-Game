@@ -3,7 +3,9 @@ import type { PRNG } from './prng.js';
 import type { GuestReviewBreakdown } from './GuestManager.js';
 import { SATISFACTION, STORY, NOISE, ECONOMY, REVIEW, HOUSEKEEPING } from '../config/balance.js';
 import { calculateRoomNoise, noiseToRatingPenalty, getLoudestNeighborGuestId } from './NoiseManager.js';
-import { formatRoomLabel } from './HotelState.js';
+import { formatRoomLabel, isRoomReachable } from './HotelState.js';
+import { roomMoveTrip } from './GuestMovement.js';
+import { hourEnd } from './Movement.js';
 
 // ============================================================================
 // Story log: append + chain-aware cap/eviction (design-review D11).
@@ -113,10 +115,15 @@ function findHealthySameTypeRoom(state: HotelState, exclude: Room): Room | null 
     && r.type === exclude.type
     && r.status === 'vacant'
     && r.condition > ECONOMY.roomBreakdownThreshold
+    && isRoomReachable(state, r)
   ) ?? null;
 }
 
-export function advanceIncidents(state: HotelState, prng: PRNG): AdvanceResult {
+/**
+ * Advance in-progress incidents at the end of the hour (time T, when a moved
+ * guest sets off for their new room).
+ */
+export function advanceIncidents(state: HotelState, prng: PRNG, T = hourEnd(state)): AdvanceResult {
   const events: GameEvent[] = [];
   const earlyDepartureGuestIds = new Set<string>();
   let current = state;
@@ -194,8 +201,9 @@ export function advanceIncidents(state: HotelState, prng: PRNG): AdvanceResult {
         if (r.id === target.id) return { ...r, status: 'occupied' as const, guestId: guest.id };
         return r;
       });
+      const trip = roomMoveTrip(current, guest, target, T);
       guests = guests.map(g => g.id === guest.id
-        ? { ...g, satisfaction: Math.min(100, g.satisfaction + SATISFACTION.midStayBreakdownMoveBonus) }
+        ? { ...g, satisfaction: Math.min(100, g.satisfaction + SATISFACTION.midStayBreakdownMoveBonus), trip, tripKind: trip ? 'move' as const : undefined }
         : g);
       const appended = appendStoryLogEntry(current, {
         type: 'mid_stay_breakdown_resolved',

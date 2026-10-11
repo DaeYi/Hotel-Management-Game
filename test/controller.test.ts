@@ -92,7 +92,7 @@ describe('GameController: building', () => {
     c.selectTool('standard');
     c.tileMove({ gridX: 5, gridY: 2 }, false);
     expect(c.hover).toEqual({ gridX: 5, gridY: 2, canPlace: true, door: 'down', doorOpen: true });
-    c.tileMove({ gridX: 3, gridY: 0 }, false); // the lobby desk
+    c.tileMove({ gridX: 1, gridY: 3 }, false); // the lobby desk
     expect(c.hover?.canPlace).toBe(false);
     c.tileMove({ gridX: 5, gridY: 5 }, false); // bottom row: a door facing down opens onto the outside wall
     expect(c.hover).toMatchObject({ canPlace: true, doorOpen: false });
@@ -187,5 +187,75 @@ describe('GameController: floors and panels', () => {
     expect(c.state.amenities.standard).toBe('premium');
     c.repayLoan(5000);
     expect(c.state.loan.balance).toBe(45000);
+  });
+});
+
+describe('GameController: people keep up with changes mid-hour', () => {
+  it('building across a housekeeper\'s path mid-hour re-plans them around it, keeping what they did', async () => {
+    const { getStaffPlan, plannedWork } = await import('../src/simulation/StaffManager.js');
+    const { positionAt } = await import('../src/simulation/Movement.js');
+    const { startTurnoverCleaning } = await import('../src/simulation/HousekeepingManager.js');
+    const c = freshController();
+    c.state = { ...c.state, cash: 1_000_000, hour: 12 };
+    c.selectTool('standard');
+    c.doorDirection = 'up';
+    c.tileDown({ gridX: 8, gridY: 2 });
+    c.selectTool(null);
+    c.state = { ...c.state, rooms: c.state.rooms.map(r => startTurnoverCleaning(r, 'standard')), staffRoster: undefined, staffPlan: null };
+    c.state = { ...c.state, staffPlan: getStaffPlan(c.state) };
+    c.update(TICK_INTERVAL_MS * 0.05); // a little into the hour: the housekeeper is on the way
+    const t = c.gameTime;
+    const before = c.state.staffPlan!.itineraries[0];
+    const walk = before.legs.find(l => l.kind === 'walk')!;
+    expect(walk.start).toBeLessThan(t);
+    expect(walk.end).toBeGreaterThan(t);
+    const ahead = (walk as any).path[(walk as any).path.length - 3];
+    c.selectTool('standard');
+    c.doorDirection = 'down';
+    c.tileDown({ gridX: ahead.gridX, gridY: ahead.gridY }); // a room right in their way
+    const after = c.state.staffPlan!.itineraries[0];
+    expect(after).not.toEqual(before);
+    for (let i = 1; i < after.legs.length; i++) expect(after.legs[i].start).toBeCloseTo(after.legs[i - 1].end, 9);
+    for (const leg of after.legs) if (leg.kind === 'walk' && leg.end > t) {
+      expect(leg.path.some(p => p.gridX === ahead.gridX && p.gridY === ahead.gridY && !p.door)).toBe(false);
+    }
+    const a = positionAt(before.legs, t - 0.01)!, b = positionAt(after.legs, t - 0.01)!;
+    expect([b.x, b.y]).toEqual([a.x, a.y]); // what already happened stays happened
+    expect(plannedWork(c.state.staffPlan!, 'turnover').size).toBeGreaterThan(0); // still gets there
+  });
+
+  it('renovating a room mid-repair frees the maintenance worker (no repairing a room under renovation)', async () => {
+    const { getStaffPlan } = await import('../src/simulation/StaffManager.js');
+    const c = freshController();
+    c.state = { ...c.state, cash: 1_000_000, hour: 12, staff: { ...c.state.staff, maintenanceWorkers: 1 } };
+    c.selectTool('standard');
+    c.doorDirection = 'up';
+    c.tileDown({ gridX: 3, gridY: 2 });
+    c.selectTool(null);
+    c.state = { ...c.state, rooms: c.state.rooms.map(r => ({ ...r, condition: 40, decor: 50 })), staffRoster: undefined, staffPlan: null };
+    c.state = { ...c.state, staffPlan: getStaffPlan(c.state) };
+    const room = c.state.rooms[0];
+    const repairing = () => c.state.staffPlan!.itineraries.flatMap(it => it.legs).some(l => l.kind === 'stay' && l.job === 'repair' && l.placeId === room.id && l.end > c.gameTime);
+    c.update(TICK_INTERVAL_MS * 0.4);
+    expect(repairing()).toBe(true);
+    c.renovateRoom(room.id);
+    expect(c.state.rooms[0].status).toBe('renovating');
+    expect(repairing()).toBe(false);
+  });
+
+  it('loading an older save puts the staff at work and plans their hour', () => {
+    localStorage.clear();
+    localStorage.setItem('hotel-game-tutorial-seen', '1');
+    const c0 = new GameController();
+    const state: any = { ...c0.state, hour: 12, staff: { ...c0.state.staff, housekeepers: 2, maintenanceWorkers: 1 } };
+    delete state.staffRoster;
+    delete state.staffPlan;
+    delete state.walkers;
+    localStorage.setItem('hotel-game-save', JSON.stringify({ version: 17, prngState: 1, state }));
+    const c = new GameController();
+    expect(c.state.staffRoster!.map(m => m.role).sort()).toEqual(['housekeeper', 'housekeeper', 'maintenance']);
+    expect(c.state.staffRoster!.every(m => m.at !== null)).toBe(true); // on shift at noon
+    expect(c.state.staffPlan).not.toBeNull();
+    localStorage.clear();
   });
 });

@@ -109,7 +109,7 @@ export class ToastQueue {
 }
 
 function batchLabel(type: string, count: number, lastMessage: string): string {
-  if (type === 'guest_arrived') return `${count} guests checked in`;
+  if (type === 'guest_arrived') return `${count} guests arriving`;
   if (type === 'guest_departed') return `${count} guests checked out`;
   if (type === 'guest_turned_away') return `${count} guests turned away`;
   return `${count}x ${lastMessage}`;

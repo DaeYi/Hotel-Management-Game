@@ -1,57 +1,35 @@
-import type { HotelState, Room, GameEvent } from './types.js';
-import { STAFF, TRAVEL } from '../config/balance.js';
-import { getStaffTravelHours } from './Layout.js';
+import type { HotelState, GameEvent } from './types.js';
+import { STAFF } from '../config/balance.js';
 import { getUpkeepMultiplier } from './StarRatingManager.js';
+import { getStaffPlan, plannedWork, isOnShift } from './StaffManager.js';
 
 /**
- * Which room each maintenance worker repairs during the coming hour (null =
- * idle): vacant rooms below the condition threshold that staff can walk to,
- * worst first, one per worker. processMaintenanceTick applies exactly this,
- * and the walking-staff animation follows it.
- */
-export function planMaintenance(state: HotelState): Array<string | null> {
-  const workers = state.staff.maintenanceWorkers;
-  if (workers <= 0) return [];
-  if (state.hour < STAFF.maintenance.workStartHour || state.hour >= STAFF.maintenance.workEndHour) {
-    return Array.from({ length: workers }, () => null);
-  }
-  const rooms = state.rooms
-    .filter(r => r.status === 'vacant' && r.condition < STAFF.maintenance.conditionThreshold)
-    .filter(r => Number.isFinite(getStaffTravelHours(state, r)))
-    .sort((a, b) => a.condition - b.condition); // worst condition first
-  return Array.from({ length: workers }, (_, i) => rooms[i]?.id ?? null);
-}
-
-/**
- * Process maintenance workers repairing rooms: apply planMaintenance's plan.
- * Runs each game-hour during the work shift.
+ * One hour of maintenance: each room gets STAFF.maintenance.repairPerHour for
+ * every hour the staff plan has a worker repairing it this hour (getStaffPlan --
+ * the plan the walking staff on screen follow). The walk there comes out of
+ * that time.
  */
 export function processMaintenanceTick(state: HotelState): { state: HotelState; events: GameEvent[] } {
   const events: GameEvent[] = [];
-  const plannedIds = planMaintenance(state).filter((id): id is string => id !== null);
-  if (plannedIds.length === 0) return { state, events };
+  if (!isOnShift('maintenance', state.hour)) return { state, events };
+  const work = plannedWork(getStaffPlan(state), 'repair');
+  if (work.size === 0) return { state, events };
 
-  const roomsToRepair = state.rooms.filter(r => plannedIds.includes(r.id));
   const repairAmount = STAFF.maintenance.repairPerHour;
-
-  const repairedIds = new Set(roomsToRepair.map(r => r.id));
-
+  let repaired = 0;
   const updatedRooms = state.rooms.map(room => {
-    if (!repairedIds.has(room.id)) return room;
-
-    // The walk there comes out of the hour's work
-    const efficiency = Math.max(TRAVEL.minRepairEfficiency, 1 - getStaffTravelHours(state, room));
-    const newCondition = Math.min(100, room.condition + repairAmount * efficiency);
-    return { ...room, condition: newCondition };
+    const hours = work.get(room.id);
+    if (hours === undefined || room.status !== 'vacant') return room;
+    repaired++;
+    return { ...room, condition: Math.min(100, room.condition + repairAmount * hours) };
   });
 
-  const roomsActuallyRepaired = roomsToRepair.length;
-  if (roomsActuallyRepaired > 0) {
+  if (repaired > 0) {
     // Only emit event once per tick, batched
     events.push({
       type: 'maintenance_repair',
-      message: `Maintenance: ${roomsActuallyRepaired} room${roomsActuallyRepaired > 1 ? 's' : ''} repaired (+${repairAmount} condition)`,
-      data: { roomsRepaired: roomsActuallyRepaired, repairAmount },
+      message: `Maintenance: ${repaired} room${repaired > 1 ? 's' : ''} repaired`,
+      data: { roomsRepaired: repaired, repairAmount },
     });
   }
 

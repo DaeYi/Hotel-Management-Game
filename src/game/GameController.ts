@@ -6,6 +6,9 @@ import {
   addFacility, demolishFacility, renovateRoom, renovateFacility, upgradeFacility, addElevator, buildFloor, setRoomDoor, setFacilityDoor,
 } from '../simulation/HotelState';
 import { rotateDirection, doorTile, isReachableHallway } from '../simulation/Layout';
+import { getRoster, getStaffPlan } from '../simulation/StaffManager';
+import { settleChanges } from '../simulation/Settle';
+import { hourStart } from '../simulation/Movement';
 import { startCampaign } from '../simulation/MarketingManager';
 import { tickSimulation } from '../simulation/tick';
 import { checkBankruptcy, repayLoan } from '../simulation/EconomyManager';
@@ -77,11 +80,11 @@ export class GameController {
   constructor(private storage: Storage = localStorage) {
     const save = loadGame();
     if (save) {
-      this.state = save.state;
+      this.state = withPlans(save.state);
       this.prng = PRNG.fromState(save.prngState);
     } else {
       this.prng = new PRNG(Date.now());
-      this.state = createStarterHotel(); // free lobby: hallways and a check-in desk
+      this.state = withPlans(createStarterHotel()); // all hallway, a free street entrance and a check-in desk beside it
     }
     this.tutorialOpen = !save && !this.storage.getItem(TUTORIAL_SEEN_KEY);
   }
@@ -112,6 +115,23 @@ export class GameController {
   /** How far through the current game hour the clock is (0-1), for animating within the hour. */
   get hourProgress(): number {
     return Math.min(1, this.tickAccumulator / TICK_INTERVAL_MS);
+  }
+
+  /** The current game time in absolute hours ((day - 1) * 24 + hour + progress): where everyone's itinerary is drawn at. */
+  get gameTime(): number {
+    return hourStart(this.state) + this.hourProgress;
+  }
+
+  /**
+   * After the player changes something mid-hour, the people it affects carry
+   * on from where they are: staff re-plan when the building or their work
+   * changes (a room built across a hallway, a room renovated mid-repair), and
+   * guests find new ways when the building or the front desk changes. So
+   * nobody walks through a new wall, keeps cleaning a room that's gone, or
+   * checks in at a desk nobody's sitting at.
+   */
+  private settle(before: HotelState) {
+    this.state = settleChanges(before, this.state, this.gameTime);
   }
 
   /** Whether the clock is actually running (not paused, and no dialog in the way). */
@@ -274,8 +294,12 @@ export class GameController {
     if (this.tutorialOpen) return;
     if (this.tool) {
       this.lastPainted = tile;
+      const before = this.state;
       const result = this.tryBuild(this.tool, tile.gridX, tile.gridY);
-      if (result) this.state = result;
+      if (result) {
+        this.state = result;
+        this.settle(before);
+      }
       this.feedback = { ...tile, ok: result !== null, id: (this.feedback?.id ?? 0) + 1 };
       this.refreshHover(tile);
       this.changed();
@@ -308,6 +332,7 @@ export class GameController {
             Math.round(from.gridY + (tile.gridY - from.gridY) * t));
           if (result) this.state = result;
         }
+        this.settle(before);
         this.lastPainted = tile;
         this.refreshHover(tile);
       }
@@ -362,7 +387,9 @@ export class GameController {
   /** Apply an action that returns null when it isn't allowed (can't afford, wrong state). */
   private apply(result: HotelState | null): boolean {
     if (!result) return false;
+    const before = this.state;
     this.state = result;
+    this.settle(before);
     this.changed();
     return true;
   }
@@ -414,4 +441,10 @@ export class GameController {
   demolishFacility(facilityId: string) {
     if (this.apply(demolishFacility(this.state, facilityId))) this.clearSelection();
   }
+}
+
+/** A state with its staff roster and this hour's plan in place (new games and loaded saves). */
+function withPlans(state: HotelState): HotelState {
+  const staffRoster = getRoster(state);
+  return { ...state, staffRoster, staffPlan: getStaffPlan({ ...state, staffRoster }), walkers: state.walkers ?? [] };
 }

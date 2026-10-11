@@ -1,5 +1,6 @@
 import type { ComponentChildren } from 'preact';
-import type { Room, Facility, HotelState } from '../simulation/types';
+import { useEffect, useState } from 'preact/hooks';
+import type { Room, Facility, HotelState, Guest, FacilityType } from '../simulation/types';
 import { ROOM_CONFIG, ECONOMY, AMENITIES, DECOR, RENOVATION, GRID, FACILITY_CONFIG, FACILITY_LEVELS } from '../config/balance';
 import {
   formatRoomLabel, getDemolishRefund, isFacilityOpen, getRenovationCost, isRoomReachable, getFacilityUpgradeCost,
@@ -8,6 +9,8 @@ import { getExpectedPrice, getUpkeepMultiplier } from '../simulation/StarRatingM
 import { calculateRoomNoise } from '../simulation/NoiseManager';
 import { DOOR_ARROWS } from './BuildPanel';
 import { getStaffTravelHours } from '../simulation/Layout';
+import { positionAt, legsEnd } from '../simulation/Movement';
+import { facilityCapacity, guestsInFacility, openingHours } from '../simulation/FacilityManager';
 import { useController } from './context';
 import { formatBar, formatMoney, formatWalk, capitalize } from './format';
 
@@ -22,6 +25,15 @@ export function Inspector() {
   }
   const facility = state.facilities.find(f => f.id === selection.id);
   return facility ? <FacilityInspector facility={facility} state={state} /> : null;
+}
+
+/** Re-render every so often while the clock runs, so what's shown (who's where) keeps up with the game. */
+function useLiveClock(ms = 250) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(n => n + 1), ms);
+    return () => clearInterval(id);
+  }, [ms]);
 }
 
 /** A card beside the selected tile: to its right, or its left on the right half of the floor. */
@@ -55,12 +67,16 @@ function noiseLabel(noise: number): string {
 
 function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
   const c = useController();
+  useLiveClock();
   const config = ROOM_CONFIG[room.type];
   const guest = state.guests.find(g => g.id === room.guestId);
   const fair = getExpectedPrice(room.type, state.starRating, room.floor);
 
   let status: string;
-  if (room.status === 'occupied') status = `Occupied (${guest?.trait ?? 'unknown'})`;
+  if (room.status === 'occupied') {
+    const where = guest ? guestWhereabouts(guest, state, c.gameTime) : null;
+    status = `Occupied (${guest?.trait ?? 'unknown'})${where ? `, ${where}` : ''}`;
+  }
   else if (room.status === 'cleaning') status = `Cleaning (${Math.ceil(room.cleaningHoursRemaining)}h left)`;
   else if (room.status === 'renovating') status = `Renovating (${room.renovationHoursRemaining}h left)`;
   else if (room.condition <= ECONOMY.roomBreakdownThreshold) status = 'OUT OF ORDER';
@@ -117,8 +133,27 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
   );
 }
 
+/** Where a checked-in guest is, when they're not in their room: "arriving", "at the Gym", "moving rooms". */
+function guestWhereabouts(guest: Guest, state: HotelState, t: number): string | null {
+  const trip = guest.trip;
+  if (!trip || trip.length === 0 || t >= legsEnd(trip)) return null;
+  if (guest.tripKind === 'arrival') return t < trip[0].start ? 'arriving soon' : 'arriving';
+  if (t < trip[0].start) return null; // not set out yet
+  if (guest.tripKind === 'move') return 'moving rooms';
+  const visit = trip.find(l => l.kind === 'stay' && l.activity === 'visit');
+  if (!visit || visit.kind !== 'stay') return 'on the way back';
+  const facility = state.facilities.find(f => f.id === visit.placeId);
+  const label = facility ? FACILITY_CONFIG[facility.type].label : 'a facility';
+  if (positionAt(trip, t)?.leg === visit) return `at the ${label}`;
+  return t < visit.start ? `off to the ${label}` : `back from the ${label}`;
+}
+
 function FacilityInspector({ facility, state }: { facility: Facility; state: HotelState }) {
   const c = useController();
+  useLiveClock();
+  const capacity = facilityCapacity(facility);
+  const inUse = guestsInFacility(state, facility.id, c.gameTime).length;
+  const usedBy = state.guests.filter(g => g.facilitiesUsed?.[facility.type as FacilityType]).length;
   const config = FACILITY_CONFIG[facility.type];
   const level = FACILITY_LEVELS[facility.level - 1];
   const next = FACILITY_LEVELS[facility.level];
@@ -130,8 +165,15 @@ function FacilityInspector({ facility, state }: { facility: Facility; state: Hot
     <TileCard tile={facility} title={`${config.label}  (Lv ${facility.level}/${FACILITY_LEVELS.length})`}>
       <p class="body small">{config.description}</p>
       <pre class="stats" style={{ marginTop: '6px' }}>
-        {`Operating cost: ${formatMoney(operating)}/day\nDecor: ${facility.decor.toFixed(0)}%${facility.decor < DECOR.freshThreshold ? ' (stale)' : ''}`
-          + (isFacilityOpen(state, facility) ? '' : '\nDoor blocked: guests can\'t get in!')}
+        {[
+          `Open hours:     ${openingHours(facility.type)}`,
+          `In use:         ${inUse}/${capacity}`,
+          `Guests who've used one: ${usedBy}`,
+          ...(config.spendPerVisit > 0 ? [`Spend/visit:    ${formatMoney(config.spendPerVisit * level.revenueMult)}`] : []),
+          `Operating cost: ${formatMoney(operating)}/day`,
+          `Decor:          ${facility.decor.toFixed(0)}%${facility.decor < DECOR.freshThreshold ? ' (stale)' : ''}`,
+          ...(isFacilityOpen(state, facility) ? [] : ['Door blocked: guests can\'t get in!']),
+        ].join('\n')}
       </pre>
       <div class="actions">
         <button onClick={() => c.turnFacilityDoor(facility.id)} aria-label="Turn door">

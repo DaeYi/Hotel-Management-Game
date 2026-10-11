@@ -41,17 +41,12 @@ export function processDailyCosts(state: HotelState): EconomyResult {
     }
   }
 
-  // Facility operating costs and revenue
+  // Facility operating costs (shop sales come from visits: FacilityManager.ts)
   for (const facility of state.facilities) {
     const fConfig = FACILITY_CONFIG[facility.type];
     if (fConfig) {
       const level = FACILITY_LEVELS[facility.level - 1];
       result.cashDelta -= fConfig.dailyOperatingCost * level.operatingMult * upkeep;
-      // Shops generate revenue per guest
-      if (fConfig.dailyRevenue > 0) {
-        const guestCount = state.guests.length;
-        result.cashDelta += fConfig.dailyRevenue * level.revenueMult * guestCount;
-      }
     }
   }
 

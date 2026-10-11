@@ -146,7 +146,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(17);
+    expect(loaded!.version).toBe(18);
     expect(loaded!.state.noiseSources).toEqual([]);
     expect(loaded!.state.facilities).toEqual([]); // added by the v8->v9 step
     expect(loaded!.state.activeIncidents).toEqual([]);
@@ -179,7 +179,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(17);
+    expect(loaded!.version).toBe(18);
     expect(loaded!.state.reviewScore).toBeCloseTo(7.2, 5); // 72 / 10
     expect((loaded!.state as any).reputationScore).toBeUndefined();
     expect(loaded!.state.bookings[0].reviewScore).toBe(8); // rating 4 * 2
@@ -437,7 +437,8 @@ describe('HousekeepingManager', () => {
       ...state,
       hour: 10, // within the 6-22 work shift
       staff: { ...state.staff, housekeepers: 1 },
-      rooms: state.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: 1, cleanliness: 0 })),
+      // half an hour left: the housekeeper's walk from the lobby fits in the hour too
+      rooms: state.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: 0.5, cleanliness: 0 })),
     };
 
     const result = processCleaningTick(state);

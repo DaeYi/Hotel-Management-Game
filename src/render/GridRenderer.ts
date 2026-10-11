@@ -351,11 +351,12 @@ export class GridRenderer {
   }
 
   /** Guest dots in their rooms. `walking` guests are drawn by the ActorLayer instead until they arrive. */
-  renderGuests(state: HotelState, floor: number, walking: Set<string> = new Set()) {
+  /** Draw a dot in each guest's room while they're in it (not while they're on their way in, out at a facility, or moving rooms). */
+  renderGuests(state: HotelState, floor: number, away: Set<string> = new Set()) {
     this.guestGraphics.clear();
 
     for (const guest of state.guests) {
-      if (walking.has(guest.id)) continue;
+      if (away.has(guest.id)) continue;
       const room = state.rooms.find(r => r.guestId === guest.id);
       if (!room || room.floor !== floor) continue;
 

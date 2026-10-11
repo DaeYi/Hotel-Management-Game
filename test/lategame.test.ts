@@ -277,7 +277,7 @@ describe('SaveManager v11 -> current', () => {
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 11, prngState: 1, state: legacy, timestamp: 0 }));
 
     const loaded = loadGame()!;
-    expect(loaded.version).toBe(17);
+    expect(loaded.version).toBe(18);
     expect(loaded.state.rooms[0]).toMatchObject({ decor: 100, renovationHoursRemaining: 0 });
     expect(loaded.state.facilities[0]).toMatchObject({ decor: 100, level: 1 });
     expect(loaded.state.activeCampaign).toBeNull();

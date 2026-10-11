@@ -1,119 +1,44 @@
 import type { HotelState, Room, GameEvent } from './types.js';
 import { HOUSEKEEPING, STAFF, ECONOMY } from '../config/balance.js';
-import { formatRoomLabel } from './HotelState.js';
+import { formatRoomLabel, isRoomReachable } from './HotelState.js';
 import { getStaffTravelHours } from './Layout.js';
+import { getStaffPlan, plannedWork, isOnShift } from './StaffManager.js';
+import { isCheckoutDay } from './GuestManager.js';
 
 /**
- * Start turnover cleaning on a room after guest checkout. The housekeeper's
- * walk there (see getStaffTravelHours) is part of the job's time.
+ * Start turnover cleaning on a room after guest checkout. The housekeepers'
+ * walks are planned separately (StaffManager.ts), from wherever they are.
  * Room transitions: occupied → cleaning
  */
-export function startTurnoverCleaning(room: Room, quality: string, travelHours = 0): Room {
+export function startTurnoverCleaning(room: Room, quality: string): Room {
   const duration = HOUSEKEEPING.turnoverDuration[quality] ?? HOUSEKEEPING.turnoverDuration.standard;
   return {
     ...room,
     status: 'cleaning',
     guestId: undefined,
-    cleaningHoursRemaining: duration + (Number.isFinite(travelHours) ? travelHours : 0),
+    cleaningHoursRemaining: duration,
     dailyCleanHoursRemaining: 0, // a pending daily clean is moot once the guest leaves
   };
 }
 
-/** One stretch of a housekeeper's hour: `hours` of work on a room. */
-export interface HousekeepingJob {
-  roomId: string;
-  hours: number;
-  kind: 'turnover' | 'daily';
-}
-
 /**
- * Who works on what during the coming hour: one list of jobs per
- * housekeeper, each list filling at most one hour. Turnovers come first
- * (they block bookings), finish-soonest first, then the daily cleans queued
- * at HOUSEKEEPING.dailyCleaningHour, dirtiest first. A room gets at most one
- * housekeeper-hour per hour; a housekeeper who finishes a room partway
- * through the hour moves on to the next job, so walking time (folded into
- * each job) costs fractions of an hour. Rooms staff can't reach are skipped.
- *
- * processCleaningTick applies exactly this plan, and the walking-staff
- * animation follows it, so the two can't disagree about who is where.
- */
-export function planHousekeeping(state: HotelState): HousekeepingJob[][] {
-  const housekeepers = state.staff.housekeepers;
-  if (housekeepers <= 0) return [];
-  if (state.hour < STAFF.housekeeping.workStartHour || state.hour >= STAFF.housekeeping.workEndHour) {
-    return Array.from({ length: housekeepers }, () => []);
-  }
-
-  const reachable = (r: Room) => Number.isFinite(getStaffTravelHours(state, r));
-  const queue: Array<{ room: Room; remaining: number; kind: HousekeepingJob['kind'] }> = [
-    ...state.rooms.filter(r => r.status === 'cleaning' && reachable(r))
-      .sort((a, b) => a.cleaningHoursRemaining - b.cleaningHoursRemaining)
-      .map(room => ({ room, remaining: room.cleaningHoursRemaining, kind: 'turnover' as const })),
-    ...state.rooms.filter(r => r.status === 'occupied' && r.dailyCleanHoursRemaining > 0 && reachable(r))
-      .sort((a, b) => a.cleanliness - b.cleanliness)
-      .map(room => ({ room, remaining: room.dailyCleanHoursRemaining, kind: 'daily' as const })),
-  ];
-
-  const plan: HousekeepingJob[][] = Array.from({ length: housekeepers }, () => []);
-  let worker = 0;
-  let capacity = 1; // hours left in the current housekeeper's hour
-  for (const job of queue) {
-    let needed = Math.min(1, job.remaining);
-    while (needed > 1e-9 && worker < housekeepers) {
-      const take = Math.min(needed, capacity);
-      plan[worker].push({ roomId: job.room.id, hours: take, kind: job.kind });
-      needed -= take;
-      capacity -= take;
-      if (capacity <= 1e-9) {
-        worker++;
-        capacity = 1;
-      }
-    }
-    if (worker >= housekeepers) break;
-  }
-  return plan;
-}
-
-/**
- * The job a housekeeper is on at a point in the hour (0-1), from their
- * plan -- or null once their work for the hour is done (or they have none).
- */
-export function currentJob(jobs: HousekeepingJob[], hourProgress: number): HousekeepingJob | null {
-  let elapsed = 0;
-  for (const job of jobs) {
-    elapsed += job.hours;
-    if (hourProgress < elapsed) return job;
-  }
-  return null;
-}
-
-/**
- * One hour of housekeeping: apply planHousekeeping's plan. Daily cleans still
- * pending when the shift ends are skipped.
- * No housekeepers = rooms stay in 'cleaning' state indefinitely.
+ * One hour of housekeeping: credit each room exactly the cleaning the staff
+ * plan has a housekeeper doing in it this hour (getStaffPlan -- the plan the
+ * walking staff on screen follow). Daily cleans still pending when the shift
+ * ends are skipped. No housekeepers = rooms stay in 'cleaning' indefinitely.
  */
 export function processCleaningTick(state: HotelState): { state: HotelState; events: GameEvent[] } {
   const events: GameEvent[] = [];
   const quality = state.housekeeping.turnoverQuality;
   const targetCleanliness = HOUSEKEEPING.turnoverCleanlinessResult[quality] ?? 85;
-  const housekeepers = state.staff.housekeepers;
-
-  // No housekeepers = no cleaning progress
-  if (housekeepers <= 0) return { state, events };
 
   // Outside work hours = no cleaning
-  if (state.hour < STAFF.housekeeping.workStartHour || state.hour >= STAFF.housekeeping.workEndHour) {
-    return { state, events };
-  }
+  if (!isOnShift('housekeeper', state.hour)) return { state, events };
 
   // Hours of work each room gets this hour, per the plan
-  const turnoverWork = new Map<string, number>();
-  const dailyWork = new Map<string, number>();
-  for (const job of planHousekeeping(state).flat()) {
-    const work = job.kind === 'turnover' ? turnoverWork : dailyWork;
-    work.set(job.roomId, (work.get(job.roomId) ?? 0) + job.hours);
-  }
+  const plan = getStaffPlan(state);
+  const turnoverWork = plannedWork(plan, 'turnover');
+  const dailyWork = plannedWork(plan, 'daily');
   const cleaningRooms = state.rooms.filter(r => r.status === 'cleaning');
 
   const lastShiftHour = state.hour === STAFF.housekeeping.workEndHour - 1;
@@ -123,7 +48,7 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
 
   const updatedRooms = state.rooms.map(room => {
     const turnover = turnoverWork.get(room.id);
-    if (turnover !== undefined) {
+    if (turnover !== undefined && room.status === 'cleaning') {
       const remaining = room.cleaningHoursRemaining - turnover;
       if (remaining <= 1e-9) {
         events.push({
@@ -184,8 +109,8 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
 
 /**
  * At HOUSEKEEPING.dailyCleaningHour, queue a daily clean for every occupied
- * room due one (per the cadence). Each job is a light clean plus the walk
- * there; processCleaningTick works through them alongside turnovers.
+ * room due one (per the cadence) that staff can get to. Housekeepers work
+ * through them alongside turnovers, walking from room to room.
  */
 export function processDailyHousekeeping(state: HotelState): { state: HotelState; events: GameEvent[] } {
   const cadence = state.housekeeping.dailyCadence;
@@ -197,10 +122,11 @@ export function processDailyHousekeeping(state: HotelState): { state: HotelState
   let queued = 0;
   const rooms = state.rooms.map(room => {
     if (room.status !== 'occupied' || room.lastDailyCleanDay >= state.day) return room;
-    const travel = getStaffTravelHours(state, room);
-    if (!Number.isFinite(travel)) return room;
+    if (!isRoomReachable(state, room)) return room;
+    const guest = state.guests.find(g => g.id === room.guestId);
+    if (guest && isCheckoutDay(guest, state.day)) return room; // leaving today: the turnover will do
     queued++;
-    return { ...room, dailyCleanHoursRemaining: cleanHours + travel };
+    return { ...room, dailyCleanHoursRemaining: cleanHours };
   });
 
   if (queued === 0) return { state, events: [] };
@@ -212,7 +138,8 @@ const AVERAGE_STAY_NIGHTS = (ECONOMY.guestMinStay + ECONOMY.guestMaxStay) / 2;
 
 /**
  * Housekeeper-hours a day of work needs at a given occupancy (0-1): turnovers
- * for the day's checkouts plus the daily-clean round, each with its walk.
+ * for the day's checkouts plus the daily-clean round, each with a walk there
+ * (estimated as the average walk from a staff base).
  */
 export function estimateHousekeepingHours(state: HotelState, occupancy: number): number {
   const walks = state.rooms.map(r => getStaffTravelHours(state, r)).filter(Number.isFinite);

@@ -1,13 +1,14 @@
 import type { Guest, GuestTrait, Room, HotelState, Booking, GameEvent, ReturningGuestProfile } from './types.js';
 import type { PRNG } from './prng.js';
-import { ECONOMY, GUEST_TRAITS, REVIEW, HOUSEKEEPING, STAFF, AMENITIES, FACILITY_CONFIG, FACILITY_LEVELS, GUEST_NAMES, SATISFACTION, STORY } from '../config/balance.js';
+import { ECONOMY, GUEST_TRAITS, REVIEW, HOUSEKEEPING, STAFF, AMENITIES, GUEST_NAMES, SATISFACTION, STORY } from '../config/balance.js';
 import { getDecorReviewPenalty } from './DecorManager.js';
 import { getCampaignDemandMultiplier } from './MarketingManager.js';
 import { getCheckInCapacity } from './Layout.js';
-import { getAvailableRooms, getAdjacentFacilities, getElevatorWaitPenalty } from './HotelState.js';
+import { getAvailableRooms, getElevatorWaitPenalty } from './HotelState.js';
+import { facilityReviewBonus } from './FacilityManager.js';
 import { calculateRoomNoise, noiseToRatingPenalty } from './NoiseManager.js';
 import { getExpectationMultiplier, getExpectedPrice, getPriceMultiplier, getStarDemandMultiplier } from './StarRatingManager.js';
-import { getTotalDemandMultiplier, getCurrentSeason } from './SeasonManager.js';
+import { getTotalDemandMultiplier } from './SeasonManager.js';
 import { getReputationPenaltyMultiplier } from './StoryGenerator.js';
 
 export function generateGuestTrait(prng: PRNG): GuestTrait {
@@ -120,6 +121,7 @@ export interface ArrivalResult {
   turnedAway: number;
   events: GameEvent[];
   returningGuestPool: ReturningGuestProfile[]; // after any pulls this hour
+  walkIns: Array<{ guest: Guest; outcome: 'impatient' | 'turned_away' }>; // came in but didn't stay
 }
 
 export function processArrivals(
@@ -127,7 +129,7 @@ export function processArrivals(
   hour: number,
   prng: PRNG
 ): ArrivalResult {
-  const result: ArrivalResult = { checkedIn: [], turnedAway: 0, events: [], returningGuestPool: state.returningGuestPool };
+  const result: ArrivalResult = { checkedIn: [], turnedAway: 0, events: [], returningGuestPool: state.returningGuestPool, walkIns: [] };
 
   if (hour < ECONOMY.checkInStartHour || hour >= ECONOMY.checkInEndHour) {
     return result;
@@ -162,10 +164,11 @@ export function processArrivals(
     // Front desk at capacity: guest leaves impatiently
     if (checkedInThisHour >= checkInCapacity) {
       result.turnedAway++;
+      result.walkIns.push({ guest, outcome: 'impatient' });
       result.events.push({
         type: 'guest_impatient',
-        message: 'Guest left (front desk too busy)',
-        data: { reason: 'front_desk_capacity' },
+        message: checkInCapacity === 0 ? 'Guest left (no staffed check-in desk)' : 'Guest left (front desk too busy)',
+        data: { reason: checkInCapacity === 0 ? 'no_desk' : 'front_desk_capacity', guestId: guest.id },
       });
       continue;
     }
@@ -181,7 +184,7 @@ export function processArrivals(
       result.checkedIn.push({ guest, roomId: room.id });
       result.events.push({
         type: 'guest_arrived',
-        message: `Guest checked into ${room.type} room`,
+        message: `Guest arriving for a ${room.type} room`,
         data: { guestId: guest.id, roomId: room.id, trait: guest.trait },
       });
       if (guest.isReturning) {
@@ -193,15 +196,27 @@ export function processArrivals(
       }
     } else {
       result.turnedAway++;
+      result.walkIns.push({ guest, outcome: 'turned_away' });
       result.events.push({
         type: 'guest_turned_away',
         message: 'Guest turned away (no room at a price they would pay)',
+        data: { guestId: guest.id },
       });
     }
   }
 
   result.returningGuestPool = pool;
   return result;
+}
+
+/** Whether a guest's stay is up: the last night is over and it's checkout time (ECONOMY.checkOutHour). */
+export function isCheckoutDue(guest: Guest, state: Pick<HotelState, 'day' | 'hour'>): boolean {
+  return state.day - guest.checkInDay >= guest.stayLength && state.hour >= ECONOMY.checkOutHour;
+}
+
+/** Whether a guest leaves today (their checkout time may not have come yet). */
+export function isCheckoutDay(guest: Guest, day: number): boolean {
+  return day - guest.checkInDay >= guest.stayLength;
 }
 
 export interface DepartureResult {
@@ -218,8 +233,7 @@ export function processDepartures(
   let pool = [...state.returningGuestPool];
 
   for (const guest of state.guests) {
-    const daysStayed = state.day - guest.checkInDay;
-    if (daysStayed >= guest.stayLength) {
+    if (isCheckoutDue(guest, state)) {
       const room = state.rooms.find(r => r.status === 'occupied' && r.guestId === guest.id);
       if (!room) continue;
 
@@ -295,24 +309,8 @@ export function calculateGuestReviewBreakdown(
   const decorPenalty = getDecorReviewPenalty(room.decor);
   const elevatorPenalty = getElevatorWaitPenalty(state, room);
 
-  // Building facility bonus (gym, restaurant, pool, shop adjacent to this room)
-  let facilityBonus = 0;
-  const adjacentFacilities = getAdjacentFacilities(state, room.gridX, room.gridY, room.floor);
-  const seenTypes = new Set<string>(); // don't double-count same type
-  for (const facility of adjacentFacilities) {
-    if (seenTypes.has(facility.type)) continue;
-    seenTypes.add(facility.type);
-    const fConfig = FACILITY_CONFIG[facility.type];
-    if (fConfig) {
-      let bonus = fConfig.adjacentReviewBonus * FACILITY_LEVELS[facility.level - 1].reviewMult;
-      // Seasonal multiplier (pool is more valuable in summer)
-      if (fConfig.seasonalMultiplier) {
-        const season = getCurrentSeason(state.day);
-        if (season === fConfig.seasonalMultiplier) bonus *= 1.5;
-      }
-      facilityBonus += bonus;
-    }
-  }
+  // Facilities the guest actually used this stay (gym, restaurant, pool, shop)
+  const facilityBonus = facilityReviewBonus(guest, state.day);
 
   // In-room amenities bonus
   const amenityTier = state.amenities[room.type];

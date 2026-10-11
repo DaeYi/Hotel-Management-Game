@@ -54,6 +54,7 @@ interface LayoutCache {
   walkable: Set<string>;
   reachable?: Set<string>;
   travel?: Map<string, number>;
+  routes: Map<string, RouteTree>; // shortest-time trees, by pace and starting tile
 }
 const signatureCache = new WeakMap<object, string>();
 const layoutCache = new Map<string, LayoutCache>();
@@ -68,19 +69,31 @@ function signatureOf<T extends { gridX: number; gridY: number; floor?: number }>
   return sig;
 }
 
-function getLayout(state: HotelState): LayoutCache {
-  const sig = [
+/** A string that changes whenever anything is built, demolished, or turned (doors) -- for noticing layout changes. */
+export function layoutKey(state: HotelState): string {
+  return [
     state.floorCount,
     signatureOf(state.rooms, r => r.door),
-    signatureOf(state.facilities),
+    signatureOf(state.facilities, f => f.door),
     signatureOf(state.fixtures, f => f.type),
     signatureOf(state.elevators),
   ].join('|');
+}
+
+let currentLayoutSig: string | null = null;
+
+function getLayout(state: HotelState): LayoutCache {
+  const sig = layoutKey(state);
   let layout = layoutCache.get(sig);
   if (!layout) {
-    layout = { walkable: buildWalkableSet(state) };
+    layout = { walkable: buildWalkableSet(state), routes: new Map() };
     if (layoutCache.size >= MAX_CACHED_LAYOUTS) layoutCache.delete(layoutCache.keys().next().value!);
     layoutCache.set(sig, layout);
+  }
+  // Route trees are big: only the layout in use keeps them
+  if (sig !== currentLayoutSig) {
+    if (currentLayoutSig !== null) layoutCache.get(currentLayoutSig)?.routes.clear();
+    currentLayoutSig = sig;
   }
   return layout;
 }
@@ -123,14 +136,6 @@ export function getEntranceTiles(state: HotelState): Pos[] {
     .map(f => ({ gridX: f.gridX, gridY: f.gridY, floor: f.floor }));
 }
 
-/** The entrance guests use: the one nearest a check-in desk (or the first, without a desk). */
-export function getFrontDoor(state: HotelState): Pos | null {
-  const entrances = getEntranceTiles(state);
-  const desk = getAccessibleDesks(state)[0];
-  if (!desk) return entrances[0] ?? null;
-  const dist = (p: Pos) => Math.abs(p.gridX - desk.gridX) + Math.abs(p.gridY - desk.gridY);
-  return entrances.reduce<Pos | null>((best, p) => (best === null || dist(p) < dist(best) ? p : best), null);
-}
 
 /** Walkable neighbors of a walkable tile: same-floor hallway steps, plus the same shaft on other floors. */
 function walkableNeighbors(state: HotelState, walkable: Set<string>, pos: Pos): Pos[] {
@@ -232,20 +237,33 @@ export function getCheckInCapacity(state: HotelState): number {
  * none of those, staff come in off the street.
  */
 export function getStaffBases(state: HotelState): Pos[] {
-  const reachable = getReachableSet(state);
   const bases: Pos[] = [];
   for (const f of state.fixtures) {
     if (f.type === 'entrance') continue;
-    for (const [dx, dy] of FRONT_FIRST) {
-      const x = f.gridX + dx;
-      const y = f.gridY + dy;
-      if (reachable.has(key(x, y, f.floor))) {
-        bases.push({ gridX: x, gridY: y, floor: f.floor });
-        break;
-      }
-    }
+    const front = getFixtureFront(state, f);
+    if (front) bases.push(front);
   }
   return bases.length > 0 ? bases : getEntranceTiles(state);
+}
+
+/**
+ * The hallway tile in front of a desk, closet, or break room -- where guests
+ * stand to check in and staff gather: below it if that's a connected hallway,
+ * else above, right, or left. Null when no side opens onto one.
+ */
+export function getFixtureFront(state: HotelState, fixture: Pos): Pos | null {
+  const reachable = getReachableSet(state);
+  for (const [dx, dy] of FRONT_FIRST) {
+    const x = fixture.gridX + dx;
+    const y = fixture.gridY + dy;
+    if (reachable.has(key(x, y, fixture.floor))) return { gridX: x, gridY: y, floor: fixture.floor };
+  }
+  return null;
+}
+
+/** Whether a tile is a street entrance. */
+export function isEntranceTile(state: HotelState, pos: Pos): boolean {
+  return pos.floor === 0 && state.fixtures.some(f => f.type === 'entrance' && f.gridX === pos.gridX && f.gridY === pos.gridY);
 }
 
 /** Walking time (hours) from the nearest staff base to every reachable walkable tile. */
@@ -291,61 +309,176 @@ export function getStaffTravelHours(state: HotelState, room: Doorway): number {
   return best;
 }
 
+/** How long one step between neighboring path tiles takes: a hallway step at the walker's pace, or an elevator ride. */
+export function stepHours(a: Pos, b: Pos, hoursPerTile: number): number {
+  return a.floor !== b.floor ? TRAVEL.hoursPerFloor * Math.abs(a.floor - b.floor) : hoursPerTile;
+}
+
+/** A walk: the tiles in order (both ends included; a room or facility end keeps its door) and how long it takes. */
+export interface Route {
+  path: Doorway[];
+  hours: number;
+}
+
+interface RouteTree {
+  hours: Map<string, number>;
+  prev: Map<string, string | null>;
+  positions: Map<string, Pos>;
+}
+
+/** A tiny binary min-heap for Dijkstra. */
+class MinHeap<T> {
+  private items: Array<{ k: number; v: T }> = [];
+  get size() { return this.items.length; }
+  push(k: number, v: T) {
+    const a = this.items;
+    a.push({ k, v });
+    let i = a.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (a[p].k <= a[i].k) break;
+      [a[p], a[i]] = [a[i], a[p]];
+      i = p;
+    }
+  }
+  pop(): { k: number; v: T } {
+    const a = this.items;
+    const top = a[0];
+    const last = a.pop()!;
+    if (a.length > 0) {
+      a[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1;
+        const r = l + 1;
+        let m = i;
+        if (l < a.length && a[l].k < a[m].k) m = l;
+        if (r < a.length && a[r].k < a[m].k) m = r;
+        if (m === i) break;
+        [a[m], a[i]] = [a[i], a[m]];
+        i = m;
+      }
+    }
+    return top;
+  }
+}
+
 /**
- * Shortest walk from one tile to another through connected hallways and
- * elevators (riding a shaft counts as one step per floor). Either end may be
- * a non-walkable tile such as a room or desk, entered from an adjacent
- * hallway -- through its door, for a room. Returns the tiles in order
- * including both ends, or null if there's no route.
+ * Shortest-time walks from one tile to every hallway tile it can reach, at a
+ * pace (hours per hallway step; elevator rides cost TRAVEL.hoursPerFloor per
+ * floor whoever rides). A non-walkable start -- a room, facility, or desk --
+ * is left through its door (any side if it has none). Cached per layout.
  */
-export function findPath(state: HotelState, from: Doorway, to: Doorway): Pos[] | null {
-  const walkable = getWalkableSet(state);
-  const targetKey = key(to.gridX, to.gridY, to.floor);
+function routeTree(state: HotelState, from: Doorway, hoursPerTile: number): RouteTree {
+  const layout = getLayout(state);
+  const cacheKey = `${hoursPerTile}|${key(from.gridX, from.gridY, from.floor)}|${from.door ?? ''}`;
+  const cached = layout.routes.get(cacheKey);
+  if (cached) return cached;
+
+  const walkable = layout.walkable;
   const startKey = key(from.gridX, from.gridY, from.floor);
+  const tree: RouteTree = { hours: new Map(), prev: new Map(), positions: new Map() };
+  const heap = new MinHeap<{ pos: Pos; prev: string | null }>();
   const start: Pos = { gridX: from.gridX, gridY: from.gridY, floor: from.floor };
-  if (startKey === targetKey) return [start];
-  const targetEntries = new Set(entryTiles(to).map(p => key(p.gridX, p.gridY, p.floor)));
-
-  const cameFrom = new Map<string, string | null>([[startKey, null]]);
-  const positions = new Map<string, Pos>([[startKey, start]]);
-  const queue: Pos[] = [start];
-
-  const stepsFrom = (pos: Pos): Pos[] => {
-    const posKey = key(pos.gridX, pos.gridY, pos.floor);
-    const steps = walkable.has(posKey) ? walkableNeighbors(state, walkable, pos) : [];
-    // From a non-walkable start (a room or desk), step out into the hallway (through the door)
-    if (!walkable.has(posKey)) {
-      for (const p of entryTiles(posKey === startKey ? from : pos)) {
-        if (inBounds(p.gridX, p.gridY) && walkable.has(key(p.gridX, p.gridY, p.floor))) steps.push(p);
-      }
-    }
-    // The (non-walkable) destination is entered from the hallway outside its door
-    if (targetEntries.has(posKey) && walkable.has(posKey)) {
-      steps.push({ gridX: to.gridX, gridY: to.gridY, floor: to.floor });
-    }
-    return steps;
-  };
-
-  while (queue.length > 0) {
-    const pos = queue.shift()!;
-    const posKey = key(pos.gridX, pos.gridY, pos.floor);
-    if (posKey === targetKey) break;
-    if (posKey !== startKey && !walkable.has(posKey)) continue; // never walk through rooms
-
-    for (const next of stepsFrom(pos)) {
-      const k = key(next.gridX, next.gridY, next.floor);
-      if (!cameFrom.has(k)) {
-        cameFrom.set(k, posKey);
-        positions.set(k, next);
-        queue.push(next);
-      }
+  if (walkable.has(startKey)) {
+    heap.push(0, { pos: start, prev: null });
+  } else {
+    tree.hours.set(startKey, 0);
+    tree.prev.set(startKey, null);
+    tree.positions.set(startKey, start);
+    for (const p of entryTiles(from)) {
+      if (inBounds(p.gridX, p.gridY) && walkable.has(key(p.gridX, p.gridY, p.floor))) heap.push(hoursPerTile, { pos: p, prev: startKey });
     }
   }
 
-  if (!cameFrom.has(targetKey)) return null;
-  const path: Pos[] = [];
-  for (let k: string | null = targetKey; k !== null; k = cameFrom.get(k) ?? null) {
-    path.unshift(positions.get(k)!);
+  while (heap.size > 0) {
+    const { k: h, v: { pos, prev } } = heap.pop();
+    const pk = key(pos.gridX, pos.gridY, pos.floor);
+    if (tree.hours.has(pk)) continue;
+    tree.hours.set(pk, h);
+    tree.prev.set(pk, prev);
+    tree.positions.set(pk, pos);
+    for (const next of walkableNeighbors(state, walkable, pos)) {
+      const nk = key(next.gridX, next.gridY, next.floor);
+      if (!tree.hours.has(nk)) heap.push(h + stepHours(pos, next, hoursPerTile), { pos: next, prev: pk });
+    }
   }
+
+  layout.routes.set(cacheKey, tree);
+  return tree;
+}
+
+function pathTo(tree: RouteTree, endKey: string): Doorway[] {
+  const path: Doorway[] = [];
+  for (let k: string | null = endKey; k !== null; k = tree.prev.get(k) ?? null) path.unshift({ ...tree.positions.get(k)! });
   return path;
+}
+
+/**
+ * The quickest walk from one tile to another through connected hallways and
+ * elevators, at a pace (TRAVEL.hoursPerTile for staff, guestHoursPerTile for
+ * guests). Either end may be a room, facility, or desk, entered and left from
+ * the hallway outside it -- through its door if it has one. Null if there's
+ * no way through.
+ */
+export function findRoute(state: HotelState, from: Doorway, to: Doorway, hoursPerTile = TRAVEL.hoursPerTile): Route | null {
+  const startKey = key(from.gridX, from.gridY, from.floor);
+  const targetKey = key(to.gridX, to.gridY, to.floor);
+  if (startKey === targetKey) return { path: [asTile(from)], hours: 0 };
+
+  const tree = routeTree(state, from, hoursPerTile);
+  const walkable = getWalkableSet(state);
+  let path: Doorway[] | null = null;
+  let hours = Infinity;
+  if (walkable.has(targetKey)) {
+    const h = tree.hours.get(targetKey);
+    if (h !== undefined) {
+      hours = h;
+      path = pathTo(tree, targetKey);
+    }
+  } else {
+    for (const p of entryTiles(to)) {
+      const pk = key(p.gridX, p.gridY, p.floor);
+      if (!walkable.has(pk)) continue;
+      const h = tree.hours.get(pk);
+      if (h !== undefined && h + hoursPerTile < hours) {
+        hours = h + hoursPerTile;
+        path = [...pathTo(tree, pk), { gridX: to.gridX, gridY: to.gridY, floor: to.floor }];
+      }
+    }
+  }
+  if (!path) return null;
+  path[0] = asTile(from);
+  path[path.length - 1] = asTile(to);
+  return { path, hours };
+}
+
+/** Just the tile (and door) of something placed on the grid. */
+function asTile(p: Doorway): Doorway {
+  return p.door ? { gridX: p.gridX, gridY: p.gridY, floor: p.floor, door: p.door } : { gridX: p.gridX, gridY: p.gridY, floor: p.floor };
+}
+
+/** The tiles of findRoute's walk, or null if there's no way through. */
+export function findPath(state: HotelState, from: Doorway, to: Doorway, hoursPerTile = TRAVEL.hoursPerTile): Doorway[] | null {
+  return findRoute(state, from, to, hoursPerTile)?.path ?? null;
+}
+
+/** The quickest walk between a tile and the nearest street entrance (either way round), or null. */
+export function routeToStreet(state: HotelState, from: Doorway, hoursPerTile = TRAVEL.hoursPerTile): Route | null {
+  let best: Route | null = null;
+  for (const entrance of getEntranceTiles(state)) {
+    const route = findRoute(state, from, entrance, hoursPerTile);
+    if (route && (!best || route.hours < best.hours)) best = route;
+  }
+  return best;
+}
+
+/** The quickest walk in from the street to a tile, or null. */
+export function routeFromStreet(state: HotelState, to: Doorway, hoursPerTile = TRAVEL.hoursPerTile): Route | null {
+  let best: Route | null = null;
+  for (const entrance of getEntranceTiles(state)) {
+    const route = findRoute(state, entrance, to, hoursPerTile);
+    if (route && (!best || route.hours < best.hours)) best = route;
+  }
+  return best;
 }

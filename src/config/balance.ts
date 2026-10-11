@@ -45,6 +45,7 @@ export const ECONOMY = {
   arrivalsPerSqrtRoom: 1.65,
   checkInStartHour: 14,
   checkInEndHour: 22,
+  checkOutHour: 0, // guests whose stay is up leave at the end of this hour (midnight)
   guestMinBudget: 60,
   guestMaxBudget: 300,
   // Each arriving guest will pay up to (fair price x tolerance), with tolerance drawn
@@ -334,12 +335,15 @@ export const STAR_RATING = {
 export const FACILITY_CONFIG: Record<string, {
   buildCost: number;
   dailyOperatingCost: number;
-  adjacentReviewBonus: number; // review bonus for rooms adjacent to this facility
+  visitReviewBonus: number; // review bonus for a guest who used this facility during their stay
   noiseOutput: number; // noise generated (uses proximity system)
   starPoints: number; // contribution to star rating
-  dailyRevenue: number; // direct revenue per day (shops sell to guests)
+  spendPerVisit: number; // what a visiting guest spends (shop sales)
+  capacity: number; // guests inside at once, at level 1
+  visitHours: number; // how long a visit lasts
+  visitChance: Array<[number, number, number]>; // [fromHour, toHour (exclusive), chance per guest per hour]
   requiredStars: number; // unlocks once the hotel's peak star rating reaches this
-  seasonalMultiplier?: string; // if set, bonus is multiplied by this season's demand
+  seasonalMultiplier?: string; // if set, visits and their bonus go up in this season (FACILITY_VISITS)
   label: string;
   description: string;
   color: number; // tile color for rendering
@@ -347,50 +351,62 @@ export const FACILITY_CONFIG: Record<string, {
   gym: {
     buildCost: 8000,
     dailyOperatingCost: 30,
-    adjacentReviewBonus: 0.4,
+    visitReviewBonus: 0.3,
     noiseOutput: 0.3,
     starPoints: 0.5,
-    dailyRevenue: 0,
+    spendPerVisit: 0,
+    capacity: 4,
+    visitHours: 1,
+    visitChance: [[6, 9, 0.10], [9, 17, 0.03], [17, 22, 0.08]],
     requiredStars: 2,
     label: 'Gym',
-    description: 'Fitness center. Boosts satisfaction for nearby rooms.',
+    description: 'Fitness center. Guests work out mornings and evenings, and those who do review higher.',
     color: 0x27ae60,
   },
   restaurant: {
     buildCost: 15000,
     dailyOperatingCost: 50,
-    adjacentReviewBonus: 0.7,
+    visitReviewBonus: 0.45,
     noiseOutput: 0.5,
     starPoints: 1.0,
-    dailyRevenue: 0,
+    spendPerVisit: 0,
+    capacity: 8,
+    visitHours: 1,
+    visitChance: [[7, 10, 0.30], [12, 14, 0.15], [18, 22, 0.30]],
     requiredStars: 3,
     label: 'Restaurant',
-    description: 'On-site dining. Big satisfaction boost but generates noise.',
+    description: 'Breakfast, lunch and dinner. Diners review higher, but it is noisy next door.',
     color: 0xe67e22,
   },
   pool: {
     buildCost: 20000,
     dailyOperatingCost: 40,
-    adjacentReviewBonus: 0.8,
+    visitReviewBonus: 0.5,
     noiseOutput: 0.2,
     starPoints: 1.0,
-    dailyRevenue: 0,
+    spendPerVisit: 0,
+    capacity: 6,
+    visitHours: 1.5,
+    visitChance: [[9, 20, 0.06]],
     seasonalMultiplier: 'summer',
     requiredStars: 4,
     label: 'Pool',
-    description: 'Swimming pool. Huge satisfaction boost, especially in summer.',
+    description: 'Open in the daytime. Swimmers review higher, especially in summer.',
     color: 0x3498db,
   },
   shop: {
     buildCost: 6000,
     dailyOperatingCost: 20,
-    adjacentReviewBonus: 0.2,
+    visitReviewBonus: 0.15,
     noiseOutput: 0.1,
     starPoints: 0.3,
-    dailyRevenue: 15, // $15/day per guest in the hotel from shop sales
+    spendPerVisit: 26,
+    capacity: 4,
+    visitHours: 0.5,
+    visitChance: [[9, 17, 0.03], [17, 22, 0.08]],
     requiredStars: 1,
     label: 'Shop',
-    description: 'Gift shop and sundries. Small bonus, earns revenue from guests.',
+    description: 'Gift shop. Guests who stop by spend money and review a little higher.',
     color: 0x9b59b6,
   },
 };
@@ -547,12 +563,25 @@ export const MARKETING = {
 };
 
 // Facility upgrades: index 0 is level 1 (as built). Each level multiplies the
-// facility's adjacent review bonus, star points, shop revenue, and operating cost.
+// review bonus a visit earns, star points, shop spending, operating cost, and
+// how many guests fit at once.
 export const FACILITY_LEVELS = [
-  { requiredStars: 0, upgradeCostRate: 0, reviewMult: 1.0, starMult: 1.0, revenueMult: 1.0, operatingMult: 1.0 },
-  { requiredStars: 4, upgradeCostRate: 1.0, reviewMult: 1.5, starMult: 1.3, revenueMult: 1.5, operatingMult: 1.8 },
-  { requiredStars: 5, upgradeCostRate: 1.75, reviewMult: 2.0, starMult: 1.6, revenueMult: 2.0, operatingMult: 2.8 },
+  { requiredStars: 0, upgradeCostRate: 0, reviewMult: 1.0, starMult: 1.0, revenueMult: 1.0, operatingMult: 1.0, capacityMult: 1.0 },
+  { requiredStars: 4, upgradeCostRate: 1.0, reviewMult: 1.5, starMult: 1.3, revenueMult: 1.5, operatingMult: 1.8, capacityMult: 1.5 },
+  { requiredStars: 5, upgradeCostRate: 1.75, reviewMult: 2.0, starMult: 1.6, revenueMult: 2.0, operatingMult: 2.8, capacityMult: 2.0 },
 ];
+
+// Guests visit facilities on a schedule. Each hour, each guest in their room
+// may head out to a facility type that's open, by a chance that depends on the
+// hour (FACILITY_CONFIG[type].visitChance), if one is a short enough walk away
+// and has room. A guest uses each type at most once a day; the types they used
+// add to their review (visitReviewBonus), and shop visits are sales.
+export const FACILITY_VISITS = {
+  maxWalkHours: 0.75, // one way: guests won't walk further than this to a facility
+  seasonalBonusMult: 1.5, // a facility's review bonus in its season (the pool in summer)
+  seasonalChanceMult: { spring: 1.0, summer: 2.0, autumn: 0.7, winter: 0.3 } as Record<string, number>, // for seasonal facilities
+  maxBonusPerStay: 1.2, // facility review bonus cap per guest
+};
 
 // Hotel valuation: property (build spend, discounted by stale decor) plus a
 // multiple of recent revenue (the business as a going concern) plus net cash.
@@ -581,14 +610,15 @@ export const ENTRANCE = {
   buildCost: 5000,
 };
 
-// Staff walk from their nearest base -- the lobby (in front of a check-in desk)
-// or a staff closet -- to every job, and that walk is part of the job's time.
-// Turnover cleans take longer, the morning daily-clean round covers fewer
-// rooms, and repairs get less done per hour the further away a room is.
+// Everyone walks at these paces, in the simulation and on screen alike. Staff
+// walk from wherever they are to each job (StaffManager.ts), and that walk
+// comes out of their hour: far-flung rooms and long elevator rides mean less
+// cleaning and repair done. Guests stroll in from the street, to facilities,
+// and out again (GuestMovement.ts, FacilityManager.ts).
 export const TRAVEL = {
-  hoursPerTile: 0.03, // ~2 minutes per hallway tile
-  hoursPerFloor: 0.15, // ~9 minutes per floor of elevator ride
-  minRepairEfficiency: 0.25, // a far-off repair still gets at least this share of the hour
+  hoursPerTile: 0.03, // staff: ~2 minutes per hallway tile
+  guestHoursPerTile: 0.06, // guests stroll: ~4 minutes per tile
+  hoursPerFloor: 0.15, // ~9 minutes per floor of elevator ride, for everyone
 };
 
 // A staff closet is an extra staff base on its floor: housekeeping and
@@ -597,10 +627,11 @@ export const CLOSET = {
   buildCost: 2500,
 };
 
-// A staff break room is where off-duty and between-job staff wait: idle
+// A staff break room is where on-shift staff wait between jobs: idle
 // housekeepers and maintenance workers head there instead of standing in the
 // hallway, and front desk staff without a seat at a desk wait there too. Like
-// a closet, it's also a staff base, so walks to nearby rooms start from it.
+// a closet, it's also a staff base (the lobby-to-room walk estimates use it).
+// Off shift, staff go home through the street entrance.
 export const BREAK_ROOM = {
   buildCost: 3500,
   seats: 6, // staff drawn inside the tile; more than this still fit, just overlapping
@@ -625,8 +656,8 @@ export const STARTER_LAYOUT = {
     [GRID.width - 1, 2], [GRID.width - 1, 3],
   ] as Array<[number, number]>,
   entranceTile: [0, 4] as [number, number], // ground floor, the free street entrance: the end of the second corridor
-  deskTiles: [[3, 0], [4, 0]] as Array<[number, number]>, // ground floor; the first comes free
-  closetTile: [3, 0] as [number, number], // upper floors (the desk spot downstairs)
+  deskTiles: [[1, 3], [2, 3]] as Array<[number, number]>, // ground floor, just inside the street entrance (staff stand at (1,4)/(2,4)); the first comes free
+  closetTile: [3, 0] as [number, number], // upper floors, beside the elevator shafts
   elevatorTiles: [[0, 0], [1, 0], [2, 0]] as Array<[number, number]>, // kept clear for shafts
 };
 

@@ -151,7 +151,7 @@ describe('Star-scaled pricing and demand', () => {
     // Starter lobby plus extra desks so check-in capacity never limits the comparison
     let state = { ...createStarterHotel(), cash: 200000 };
     for (const x of [4, 5, 6, 7]) state = addFixture(state, 'desk', x, 0, 0)!;
-    for (const y of [2, 3, 5]) for (let x = 0; x < 9; x++) state = addRoom(state, 'standard', x, y)!; // x = 9 is the hallway spine
+    for (const y of [2, 3, 5]) for (let x = 0; x < 9; x++) state = addRoom(state, 'standard', x, y) ?? state; // (1,3) is the lobby desk; x = 9 is left open as a hallway
     state = { ...state, staff: { ...state.staff, frontDesk: 10 }, rooms: state.rooms.map(r => ({ ...r, pricePerNight: price })) };
     const prng = new PRNG(7);
     let checkedIn = 0;
@@ -256,7 +256,7 @@ describe('SaveManager v10 -> current', () => {
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 10, prngState: 1, state: legacy, timestamp: 0 }));
 
     const loaded = loadGame()!;
-    expect(loaded.version).toBe(17);
+    expect(loaded.version).toBe(18);
     expect(loaded.state.loan.balance).toBe(0);
     expect(loaded.state.objectives).toEqual({ currentIndex: 0, outcomes: [] });
     expect(loaded.state.dailyStats).toEqual([]);

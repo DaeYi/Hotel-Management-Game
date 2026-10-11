@@ -4,6 +4,7 @@ import {
 } from '../src/simulation/HotelState.js';
 import { getStaffTravelHours, getStaffBases, getAccessibleBreakRooms, getEntranceTiles } from '../src/simulation/Layout.js';
 import { startTurnoverCleaning, processCleaningTick, processDailyHousekeeping } from '../src/simulation/HousekeepingManager.js';
+import { findRoute } from '../src/simulation/Layout.js';
 import { processMaintenanceTick } from '../src/simulation/MaintenanceManager.js';
 import { TRAVEL, HOUSEKEEPING, STAFF, CLOSET, BREAK_ROOM, STARTER_LAYOUT } from '../src/config/balance.js';
 import type { HotelState, Room } from '../src/simulation/types.js';
@@ -27,20 +28,20 @@ const roomAt = (s: HotelState, x: number, y: number, floor = 0): Room =>
   s.rooms.find(r => r.gridX === x && r.gridY === y && r.floor === floor)!;
 
 describe('Staff travel time', () => {
-  it('staff start from the lobby, in front of the desk', () => {
-    const [deskX] = STARTER_LAYOUT.deskTiles[0];
-    expect(getStaffBases(createStarterHotel())).toEqual([{ gridX: deskX, gridY: 1, floor: 0 }]);
+  it('staff start from the lobby, in front of the desk (just inside the street entrance)', () => {
+    const [deskX, deskY] = STARTER_LAYOUT.deskTiles[0];
+    expect(getStaffBases(createStarterHotel())).toEqual([{ gridX: deskX, gridY: deskY + 1, floor: 0 }]);
   });
 
   it('is the hallway walk from the nearest base to the door', () => {
     let s = rich(createStarterHotel());
-    s = addRoom(s, 'standard', 4, 0, 0, 'down')!; // right beside the desk
-    s = addRoom(s, 'standard', 8, 2, 0, 'up')!; // further down the hall
-    const near = getStaffTravelHours(s, roomAt(s, 4, 0));
+    s = addRoom(s, 'standard', 2, 5, 0, 'up')!; // just across from the lobby
+    s = addRoom(s, 'standard', 8, 2, 0, 'up')!; // across the floor
+    const near = getStaffTravelHours(s, roomAt(s, 2, 5));
     const far = getStaffTravelHours(s, roomAt(s, 8, 2));
-    // Base is (3,1): (4,0) is one step along the hall plus the step in
+    // Base is (1,4): (2,5) is one step along the hall plus the step in
     expect(near).toBeCloseTo(2 * TRAVEL.hoursPerTile, 6);
-    expect(far).toBeCloseTo(6 * TRAVEL.hoursPerTile, 6);
+    expect(far).toBeCloseTo(11 * TRAVEL.hoursPerTile, 6);
   });
 
   it('includes the elevator ride for upper floors, and a closet up there cuts it', () => {
@@ -82,27 +83,28 @@ describe('Staff travel time', () => {
 });
 
 describe('Travel in housekeeping', () => {
-  it('a turnover clean includes the walk there', () => {
-    const s = addRoom(rich(createStarterHotel()), 'standard', 8, 2)!;
+  it('the walk to a turnover comes out of the housekeeper\'s hour, not the job', () => {
+    let s = addRoom(rich(createStarterHotel()), 'standard', 8, 2, 0, 'up')!;
     const room = roomAt(s, 8, 2);
-    const travel = getStaffTravelHours(s, room);
-    expect(startTurnoverCleaning(room, 'standard', travel).cleaningHoursRemaining)
-      .toBeCloseTo(HOUSEKEEPING.turnoverDuration.standard + travel, 6);
-    expect(startTurnoverCleaning(room, 'standard', Infinity).cleaningHoursRemaining)
-      .toBe(HOUSEKEEPING.turnoverDuration.standard); // never store Infinity in state
+    expect(startTurnoverCleaning(room, 'standard').cleaningHoursRemaining).toBe(HOUSEKEEPING.turnoverDuration.standard);
+    s = { ...s, hour: 12, rooms: [startTurnoverCleaning(room, 'standard')] };
+    const walk = getStaffTravelHours(s, room); // from the lobby, where the housekeeper waits
+    expect(processCleaningTick(s).state.rooms[0].cleaningHoursRemaining).toBeCloseTo(HOUSEKEEPING.turnoverDuration.standard - (1 - walk), 6);
   });
 
-  it('pooled hours: finishing a room early frees the rest of the hour for the next one', () => {
+  it('finishing a room partway through the hour, a housekeeper walks to the next and works the rest of the hour there', () => {
     let s = rich(createStarterHotel());
-    s = addRoom(s, 'standard', 5, 2)!;
-    s = addRoom(s, 'standard', 6, 2)!;
+    s = addRoom(s, 'standard', 5, 2, 0, 'up')!;
+    s = addRoom(s, 'standard', 6, 2, 0, 'up')!;
     s = {
       ...s, hour: 12, staff: { ...s.staff, housekeepers: 1 },
       rooms: s.rooms.map((r, i) => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: i === 0 ? 0.25 : 2 })),
     };
+    const first = getStaffTravelHours(s, s.rooms[0]);
+    const between = findRoute(s, { ...s.rooms[0] }, { ...s.rooms[1] })!.hours; // out one door, along the hall, in the next
     const after = processCleaningTick(s).state;
     expect(after.rooms[0].status).toBe('vacant');
-    expect(after.rooms[1].cleaningHoursRemaining).toBeCloseTo(1.25, 6);
+    expect(after.rooms[1].cleaningHoursRemaining).toBeCloseTo(2 - (1 - first - 0.25 - between), 6);
   });
 
   it('rooms staff cannot reach make no cleaning progress', () => {
@@ -118,18 +120,17 @@ describe('Travel in housekeeping', () => {
     });
     // The same two-room job, near the lobby vs at the far end of the hall
     let near = rich(createStarterHotel());
-    near = addRoom(near, 'standard', 2, 0)!;
-    near = addRoom(near, 'standard', 4, 0)!;
+    near = addRoom(near, 'standard', 2, 5, 0, 'up')!;
+    near = addRoom(near, 'standard', 3, 5, 0, 'up')!;
     let far = rich(createStarterHotel());
-    far = addRoom(far, 'standard', 7, 0)!;
-    far = addRoom(far, 'standard', 8, 0)!;
+    far = addRoom(far, 'standard', 8, 0, 0, 'down')!;
+    far = addRoom(far, 'standard', 9, 0, 0, 'down')!;
 
+    // The clean itself is the same job anywhere; the walks are what differ
     const queued = (s: HotelState) => processDailyHousekeeping(occupy(s)).state;
-    const queuedHours = (s: HotelState) => queued(s).rooms.reduce((sum, r) => sum + r.dailyCleanHoursRemaining, 0);
-    expect(queuedHours(far)).toBeGreaterThan(queuedHours(near));
-    expect(queuedHours(near)).toBeCloseTo(2 / STAFF.housekeeping.dailyCleanRoomsPerHour + near.rooms.reduce((sum, r) => sum + getStaffTravelHours(near, r), 0), 6);
-
-    // One housekeeper-hour: finishes both near rooms only if the walks fit
+    expect(queued(near).rooms.every(r => r.dailyCleanHoursRemaining === 1 / STAFF.housekeeping.dailyCleanRoomsPerHour)).toBe(true);
+    const remaining = (s: HotelState) => processCleaningTick(queued(s)).state.rooms.reduce((sum, r) => sum + r.dailyCleanHoursRemaining, 0);
+    expect(remaining(far)).toBeGreaterThan(remaining(near));
     const cleanedAfterAnHour = (s: HotelState) => processCleaningTick(queued(s)).state.rooms.filter(r => r.lastDailyCleanDay === 4).length;
     expect(cleanedAfterAnHour(far)).toBeLessThanOrEqual(cleanedAfterAnHour(near));
   });
@@ -138,15 +139,15 @@ describe('Travel in housekeeping', () => {
 describe('Travel in maintenance', () => {
   it('a far-off repair gets less done in the hour than a nearby one', () => {
     let s = twoFloors();
-    s = addRoom(s, 'standard', 4, 0, 0)!; // by the lobby
-    s = addRoom(s, 'standard', 8, 5, 1)!; // far corner upstairs
+    s = addRoom(s, 'standard', 2, 5, 0, 'up')!; // by the lobby
+    s = addRoom(s, 'standard', 8, 5, 1, 'up')!; // far corner upstairs
     s = { ...s, hour: 12, staff: { ...s.staff, maintenanceWorkers: 2 }, rooms: s.rooms.map(r => ({ ...r, condition: 30 })) };
     const after = processMaintenanceTick(s).state;
     const nearGain = after.rooms[0].condition - 30;
     const farGain = after.rooms[1].condition - 30;
     expect(nearGain).toBeGreaterThan(farGain);
-    expect(farGain).toBeGreaterThanOrEqual(STAFF.maintenance.repairPerHour * TRAVEL.minRepairEfficiency);
     expect(nearGain).toBeCloseTo(STAFF.maintenance.repairPerHour * (1 - getStaffTravelHours(s, s.rooms[0])), 6);
+    expect(farGain).toBeCloseTo(STAFF.maintenance.repairPerHour * (1 - getStaffTravelHours(s, s.rooms[1])), 6);
   });
 
   it('rooms staff cannot reach are not repaired', () => {

@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { PRNG } from '../src/simulation/prng.js';
 import {
   createHotelState, createStarterHotel, addRoom, addFixture, addElevator, buildFloor, demolishRoom, setRoomDoor,
-  isRoomReachable, getAvailableRooms, addFacility, setFacilityDoor, demolishFixture, getAdjacentFacilities,
+  isRoomReachable, getAvailableRooms, addFacility, setFacilityDoor, demolishFixture,
 } from '../src/simulation/HotelState.js';
 import { calculateStarPoints } from '../src/simulation/StarRatingManager.js';
 import {
-  getCheckInCapacity, getMannedDeskStaff, getAccessibleDesks, getEntranceTiles, findPath, isHallway, findOpenDoor,
+  getCheckInCapacity, getMannedDeskStaff, getAccessibleDesks, getEntranceTiles, findPath, isHallway, findOpenDoor, getOpenFacilities,
 } from '../src/simulation/Layout.js';
 import { processArrivals } from '../src/simulation/GuestManager.js';
 import { calculateRoomNoise } from '../src/simulation/NoiseManager.js';
@@ -128,18 +128,18 @@ describe('Street entrances', () => {
 });
 
 describe('Facility doors', () => {
-  it('a facility with a blocked door earns no stars and gives nearby rooms no bonus', () => {
+  it('a facility with a blocked door earns no stars and nobody can get in', () => {
     let state = addFacility(rich(createHotelState()), 'gym', 5, 2, 0, 'up')!;
     state = addRoom(state, 'standard', 6, 2, 0, 'up')!;
     const open = calculateStarPoints(state);
-    expect(getAdjacentFacilities(state, 6, 2, 0)).toHaveLength(1);
+    expect(getOpenFacilities(state)).toHaveLength(1);
 
     state = addRoom(state, 'standard', 5, 1, 0, 'up')!; // right outside the gym's door
-    expect(getAdjacentFacilities(state, 6, 2, 0)).toHaveLength(0);
+    expect(getOpenFacilities(state)).toHaveLength(0);
     expect(calculateStarPoints(state)).toBeLessThan(open);
 
     state = setFacilityDoor(state, state.facilities[0].id, 'down')!; // turn it to an open side
-    expect(getAdjacentFacilities(state, 6, 2, 0)).toHaveLength(1);
+    expect(getOpenFacilities(state)).toHaveLength(1);
   });
 });
 
@@ -192,7 +192,7 @@ describe('Pathfinding', () => {
     const [entrance] = getEntranceTiles(state);
     const path = findPath(state, entrance, state.rooms[0])!;
     expect(path[0]).toEqual(entrance);
-    expect(path[path.length - 1]).toEqual({ gridX: 6, gridY: 2, floor: 0 });
+    expect(path[path.length - 1]).toEqual({ gridX: 6, gridY: 2, floor: 0, door: 'left' });
     expect(path[path.length - 2]).toEqual({ gridX: 5, gridY: 2, floor: 0 }); // in through the door
     for (const step of path.slice(1, -1)) expect(isHallway(state, step.gridX, step.gridY, step.floor)).toBe(true);
     // Consecutive steps are adjacent

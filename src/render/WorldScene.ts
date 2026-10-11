@@ -23,8 +23,6 @@ export class WorldScene extends Phaser.Scene {
     this.grid = new GridRenderer(this);
     this.actors = new ActorLayer(this);
 
-    c.onTick((events, state) => this.actors.handleEvents(events, state));
-
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       const tile = this.grid.pointerToGrid(pointer);
       if (tile) c.tileDown(tile);
@@ -44,8 +42,8 @@ export class WorldScene extends Phaser.Scene {
     this.grid.renderRooms(state, floor);
     this.grid.renderFixtures(state, floor);
     this.grid.renderFacilities(state, floor);
-    this.actors.update(state, floor, delta, c.running ? c.speed : 0, c.hourProgress);
-    this.grid.renderGuests(state, floor, this.actors.walkingGuestIds());
+    this.actors.update(state, floor, c.gameTime);
+    this.grid.renderGuests(state, floor, this.actors.awayGuestIds());
     this.grid.renderNoise(state, floor);
     this.grid.renderConstruction(state, floor);
     this.grid.updateDayNight(state.hour);

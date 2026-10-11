@@ -1,12 +1,15 @@
 import type { HotelState, TickResult, GameEvent, Booking } from './types.js';
 import type { PRNG } from './prng.js';
-import { processArrivals, processDepartures, calculateGuestReviewBreakdown } from './GuestManager.js';
+import { processArrivals, processDepartures, calculateGuestReviewBreakdown, isCheckoutDue } from './GuestManager.js';
 import { processRevenue, processDailyCosts, updateReviewScore, checkBankruptcy, degradeRoomConditions, calculateEarlyDepartureSettlement, isLoanPaymentDay, processLoanPayment } from './EconomyManager.js';
 import { processObjectives, recordDailyStat } from './ObjectivesManager.js';
 import { decayDecor, processRenovationTick } from './DecorManager.js';
 import { tickCampaign } from './MarketingManager.js';
 import { formatRoomLabel } from './HotelState.js';
-import { getStaffTravelHours } from './Layout.js';
+import { getStaffPlan, rosterAfter, syncRoster, planStaff } from './StaffManager.js';
+import { planArrivalTrips, departureWalker, tidyMovement } from './GuestMovement.js';
+import { planFacilityVisits, creditFacilityVisits } from './FacilityManager.js';
+import { hourEnd } from './Movement.js';
 import { tickNoiseSources } from './NoiseManager.js';
 import { processCleaningTick, processDailyHousekeeping, degradeCleanliness, startTurnoverCleaning } from './HousekeepingManager.js';
 import { calculateStarRating } from './StarRatingManager.js';
@@ -23,10 +26,16 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   const events: GameEvent[] = [];
   let current = { ...state };
 
-  // 0. Staff work the hour as planned from the state at its start
-  // (planHousekeeping / planMaintenance) -- the same plan the walking-staff
-  // animation shows during the hour. Rooms vacated later in this tick join
-  // the plan for the next hour.
+  // The tick happens at the end of the hour: everything decided now plays
+  // out on screen from this moment (trips starting at T).
+  const T = hourEnd(state);
+
+  // 0. Staff did the hour's work exactly as planned at its start (the plan the
+  // walking staff on screen follow), and end the hour where it left them.
+  // Rooms vacated later in this tick join the plan for the next hour.
+  const staffPlan = getStaffPlan(current);
+  current = { ...current, staffPlan }; // one plan for crediting and for where everyone ends up
+  current = creditFacilityVisits(current, T); // guests who got to a facility this hour used it
   const cleaningResult = processCleaningTick(current);
   current = cleaningResult.state;
   events.push(...cleaningResult.events);
@@ -34,8 +43,10 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   const maintenanceResult = processMaintenanceTick(current);
   current = maintenanceResult.state;
   events.push(...maintenanceResult.events);
+  current = { ...current, staffRoster: rosterAfter(current, staffPlan) };
 
-  // 1. Process guest arrivals
+  // 1. Process guest arrivals: rooms are booked now, and the guests walk in,
+  // check in at a staffed desk, and go up to their rooms over the next hour.
   const arrivals = processArrivals(current, current.hour, prng);
   events.push(...arrivals.events);
 
@@ -57,6 +68,12 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
     returningGuestPool: arrivals.returningGuestPool,
     totalTurnedAway: current.totalTurnedAway + arrivals.turnedAway,
   };
+  const arrivalTrips = planArrivalTrips(current, arrivals.checkedIn, arrivals.walkIns, T);
+  current = {
+    ...current,
+    guests: current.guests.map(g => (arrivalTrips.trips.has(g.id) ? { ...g, trip: arrivalTrips.trips.get(g.id)!, tripKind: 'arrival' as const } : g)),
+    walkers: [...(current.walkers ?? []), ...arrivalTrips.walkers],
+  };
 
   // "A Regular Returns" -- converts this tick's guest_returned arrivals into log entries
   current = recordReturnGuestEntries(current, arrivals.events);
@@ -66,7 +83,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
 
   // 1.6 Advance in-progress incidents (resolve / escalate / room-move), then
   // select a new one if the pacing budget allows.
-  const advance = advanceIncidents(current, prng);
+  const advance = advanceIncidents(current, prng, T);
   current = advance.state;
   events.push(...advance.events);
 
@@ -81,7 +98,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   // the normal path takes priority, the guest is simply excluded here.
   const normalCheckoutGuestIds = new Set(
     current.guests
-      .filter(g => current.day - g.checkInDay >= g.stayLength)
+      .filter(g => isCheckoutDue(g, current))
       .map(g => g.id)
   );
   const earlyDepartureGuestIds = new Set(
@@ -147,11 +164,17 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
 
   const roomsAfterDeparture = current.rooms.map(room => {
     if (room.guestId && departedGuestIds.has(room.guestId)) {
-      const cleaned = startTurnoverCleaning(room, current.housekeeping.turnoverQuality, getStaffTravelHours(current, room));
+      const cleaned = startTurnoverCleaning(room, current.housekeeping.turnoverQuality);
       return { ...cleaned, cleaningHoursRemaining: cleaned.cleaningHoursRemaining + checkoutDelay };
     }
     return room;
   });
+
+  // Departing guests walk out from wherever they are, starting now
+  const leaving = current.guests
+    .filter(g => departedGuestIds.has(g.id))
+    .map(g => departureWalker(current, g, T, earlyDepartureGuestIds.has(g.id) ? 'walked_out' : 'checked_out'))
+    .filter((w): w is NonNullable<typeof w> => w !== null);
 
   const revenueResult = processRevenue(current, departures);
   revenueThisTick += revenueResult.cashDelta + walkoutCashDelta;
@@ -165,6 +188,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
     ...current,
     rooms: roomsAfterDeparture,
     guests: current.guests.filter(g => !departedGuestIds.has(g.id)),
+    walkers: [...(current.walkers ?? []), ...leaving],
     bookings: [...current.bookings, ...newBookings].slice(-REVIEW.reviewWindowBookingCount),
     cash: current.cash + revenueThisTick - turnoverCost,
     totalRevenue: current.totalRevenue + Math.max(0, revenueThisTick),
@@ -296,6 +320,13 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   }
 
   current = { ...current, hour: nextHour, day: nextDay };
+
+  // 11. Plan the coming hour: staff hired or let go join or leave, finished
+  // trips end, guests head out to facilities, and the staff get their hour.
+  current = { ...current, staffRoster: syncRoster(current) };
+  current = tidyMovement(current, T);
+  current = planFacilityVisits(current);
+  current = { ...current, staffPlan: planStaff(current) };
 
   return { state: current, events };
 }
