@@ -70,6 +70,8 @@ What the walk costs:
 - **Staff panel:** shows the average walk, and suggests a closet for any upper floor averaging over 20 minutes.
 - **Walkers:** idle staff wait at a base on their own floor.
 
+**Break rooms** ($3,500, any floor) are where idle staff wait. Housekeepers and maintenance workers with no job this hour walk to a break room on their own floor. If their floor has none, they wait at the nearest staff base there, and only then go to a break room on another floor. Front desk staff without a seat at a desk wait in a break room too. Like a closet, a break room is also a staff base for travel time.
+
 **Bots** build a closet on each upper floor once it has 6 rooms (reserved tile (3,0) upstairs). In a typical two-floor bot hotel, ground-floor rooms average a 17-minute walk; upstairs it's 28 minutes without a closet and 7 with one.
 
 **Measured effect** (balanced bot, 12 runs × 400 days): average review 7.21 → 7.08, with more daily cleans skipped. The effect is modest because turnovers take 4-6 hours, so a 20-minute walk adds only about 6%. The daily round and upper floors without closets feel it most.

@@ -593,6 +593,15 @@ export const CLOSET = {
   buildCost: 2500,
 };
 
+// A staff break room is where off-duty and between-job staff wait: idle
+// housekeepers and maintenance workers head there instead of standing in the
+// hallway, and front desk staff without a seat at a desk wait there too. Like
+// a closet, it's also a staff base, so walks to nearby rooms start from it.
+export const BREAK_ROOM = {
+  buildCost: 3500,
+  seats: 6, // staff drawn inside the tile; more than this still fit, just overlapping
+};
+
 // Guests check in at a desk on the ground floor; each desk seats a limited
 // number of front desk staff. No reachable desk, no check-ins.
 export const DESK = {

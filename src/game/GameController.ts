@@ -1,5 +1,5 @@
 import type {
-  HotelState, RoomType, FacilityType, TileType, StaffConfig, AmenityTier, CleaningQuality, DailyCleaningCadence, GameEvent,
+  HotelState, RoomType, FacilityType, TileType, StaffConfig, AmenityTier, CleaningQuality, DailyCleaningCadence, GameEvent, FixtureType,
 } from '../simulation/types';
 import {
   createStarterHotel, addFixture, demolishFixture, demolishElevator, addRoom, setRoomPrice, repairRoom, demolishRoom,
@@ -17,8 +17,8 @@ import { ToastQueue } from './ToastQueue';
 // action. The renderer (Phaser today, 3D later) and the HTML interface both
 // read from it and call into it; neither owns any game logic.
 
-/** Anything the build panel can place (a room, facility, hallway, desk, closet, or elevator shaft), or the bulldoze tool. */
-export type BuildType = TileType | 'elevator' | 'hallway' | 'desk' | 'closet' | 'bulldoze';
+/** Anything the build panel can place (a room, facility, hallway, desk, closet, break room, or elevator shaft), or the bulldoze tool. */
+export type BuildType = TileType | 'elevator' | FixtureType | 'bulldoze';
 
 /** Tools that place on (or clear) one tile per click and can be dragged across tiles. */
 export const PAINTABLE_TYPES = new Set<BuildType>(['hallway', 'bulldoze']);
@@ -249,14 +249,14 @@ export class GameController {
   /** The state after building `type` at a tile on the current floor, or null if not allowed (also the hover check). */
   tryBuild(type: BuildType, gridX: number, gridY: number): HotelState | null {
     if (type === 'bulldoze') return this.bulldoze(gridX, gridY);
-    if (type === 'hallway' || type === 'desk' || type === 'closet') return addFixture(this.state, type, gridX, gridY, this.currentFloor);
+    if (type === 'hallway' || type === 'desk' || type === 'closet' || type === 'breakroom') return addFixture(this.state, type, gridX, gridY, this.currentFloor);
     if (type === 'elevator') return addElevator(this.state, gridX, gridY);
     if (type in ROOM_CONFIG) return addRoom(this.state, type as RoomType, gridX, gridY, this.currentFloor);
     if (type in FACILITY_CONFIG) return addFacility(this.state, type as FacilityType, gridX, gridY, this.currentFloor);
     return null;
   }
 
-  /** Remove a hallway, desk, staff closet, or elevator shaft. Rooms and facilities are demolished from their inspectors. */
+  /** Remove a hallway, desk, staff closet, break room, or elevator shaft. Rooms and facilities are demolished from their inspectors. */
   private bulldoze(gridX: number, gridY: number): HotelState | null {
     const fixture = this.state.fixtures.find(f => f.floor === this.currentFloor && f.gridX === gridX && f.gridY === gridY);
     if (fixture) return demolishFixture(this.state, fixture.id);

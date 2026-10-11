@@ -1,9 +1,9 @@
 import Phaser from 'phaser';
-import type { HotelState, GameEvent, Room, GuestTrait } from '../simulation/types';
-import { findPath, getEntranceTiles, getAccessibleDesks, getMannedDeskStaff, getStaffBases } from '../simulation/Layout';
+import type { HotelState, GameEvent, Room, GuestTrait, Fixture } from '../simulation/types';
+import { findPath, getEntranceTiles, getAccessibleDesks, getMannedDeskStaff, getStaffBases, getAccessibleBreakRooms } from '../simulation/Layout';
 import { planHousekeeping, currentJob } from '../simulation/HousekeepingManager';
 import { planMaintenance } from '../simulation/MaintenanceManager';
-import { TRAVEL } from '../config/balance';
+import { TRAVEL, BREAK_ROOM } from '../config/balance';
 import { TICK_INTERVAL_MS } from '../game/GameController';
 import type { Pos } from '../simulation/Layout';
 import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE, getGuestDotColor } from './GridRenderer';
@@ -11,7 +11,8 @@ import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE, getGuestDotColor } from './Gri
 // People walking around the building. Purely visual: the simulation still
 // runs hour by hour, and these actors act out what it decided -- guests
 // walking in to check in and up to their rooms, housekeepers and maintenance
-// heading to the rooms they're working on, front desk staff at the desks.
+// heading to the rooms they're working on, front desk staff at the desks,
+// and anyone without work waiting in a staff break room.
 
 // Guests stroll at a readable pace (their walk is decoration only).
 const GUEST_TILES_PER_SEC = 3; // at 1x speed
@@ -22,6 +23,10 @@ const CHECK_IN_MS = 700; // pause at the desk, at 1x speed
 // housekeeper reaches a room when the simulated walk there ends.
 const STAFF_TILES_PER_SEC = 1 / TRAVEL.hoursPerTile / (TICK_INTERVAL_MS / 1000); // at 1x speed
 const STAFF_ELEVATOR_RIDE_MS = TRAVEL.hoursPerFloor * TICK_INTERVAL_MS; // per floor, at 1x speed
+// Where resting staff sit in a break room tile (fractions of the tile), around the table
+const BREAK_ROOM_SEATS: Array<[number, number]> = [
+  [0.22, 0.27], [0.5, 0.18], [0.78, 0.27], [0.22, 0.73], [0.5, 0.82], [0.78, 0.73],
+].slice(0, BREAK_ROOM.seats) as Array<[number, number]>;
 const MAX_GUEST_ACTORS = 40; // beyond this, arrivals skip the walk to keep the grid readable
 
 export const ACTOR_COLORS = {
@@ -45,7 +50,7 @@ interface Actor {
   then?: 'check_in' | 'despawn';
   guestId?: string;
   roomId?: string;
-  // Staff: the room they're heading to or working in (null = idle)
+  // Staff: the room they're heading to or working in, or where they wait when idle
   targetId?: string | null;
   pathed?: boolean; // a path to the current target has been computed
 }
@@ -188,7 +193,8 @@ export class ActorLayer {
    * Keep one actor per housekeeper and maintenance worker, each following the
    * same work plan the simulation applies (planHousekeeping / planMaintenance):
    * housekeeper i works through their own job list over the hour, moving on
-   * when a job's share of the hour is up; idle staff wait at a staff base.
+   * when a job's share of the hour is up. Idle staff wait in a break room
+   * (on their own floor if there is one), or else at a staff base.
    */
   private syncStaff(state: HotelState, hourProgress: number) {
     const counts: Record<StaffRole, number> = {
@@ -196,6 +202,7 @@ export class ActorLayer {
       maintenance: state.staff.maintenanceWorkers,
     };
     const bases = getStaffBases(state);
+    const breakRooms = getAccessibleBreakRooms(state);
     const housekeeping = planHousekeeping(state);
     const maintenance = planMaintenance(state);
 
@@ -218,8 +225,8 @@ export class ActorLayer {
           ? currentJob(housekeeping[i] ?? [], hourProgress)?.roomId ?? null
           : maintenance[i] ?? null;
         const room = roomId ? state.rooms.find(r => r.id === roomId) ?? null : null;
-        // Idle staff head for a base on their own floor if there is one
-        const home = bases.find(b => b.floor === member.floor) ?? bases[0] ?? null;
+        const home: Pos | null = breakRooms.find(b => b.floor === member.floor)
+          ?? bases.find(b => b.floor === member.floor) ?? breakRooms[0] ?? bases[0] ?? null;
         this.sendTo(member, state, room, home);
       });
     }
@@ -227,7 +234,7 @@ export class ActorLayer {
 
   /** Point an actor at a room (or home when null); only re-paths when the target changes. */
   private sendTo(actor: Actor, state: HotelState, room: Room | null, home: Pos | null) {
-    const targetId = room?.id ?? null;
+    const targetId = room?.id ?? (home ? `home:${home.gridX},${home.gridY},${home.floor}` : null);
     if (actor.targetId === targetId && actor.pathed) return;
     actor.targetId = targetId;
     actor.pathed = true;
@@ -252,8 +259,34 @@ export class ActorLayer {
       }
     }
 
+    // Staff resting in break rooms sit around the table; front desk staff
+    // without a seat at a desk wait there too
+    const breakRooms = getAccessibleBreakRooms(state);
+    const seatsTaken = new Map<Fixture, number>();
+    const sitDown = (breakRoom: Fixture, color: number) => {
+      const n = seatsTaken.get(breakRoom) ?? 0;
+      seatsTaken.set(breakRoom, n + 1);
+      if (breakRoom.floor !== currentFloor) return;
+      const [sx, sy] = BREAK_ROOM_SEATS[n % BREAK_ROOM_SEATS.length];
+      const overflow = Math.floor(n / BREAK_ROOM_SEATS.length) * 3; // past the seats, staff squeeze in
+      this.drawStaff(
+        GRID_OFFSET_X + (breakRoom.gridX + sx) * TILE_SIZE + overflow,
+        GRID_OFFSET_Y + (breakRoom.gridY + sy) * TILE_SIZE + overflow, color);
+    };
+    const resting = new Set<Actor>();
+    for (const member of this.staff) {
+      if (member.path.length > 0 || member.waitMs > 0) continue;
+      const breakRoom = breakRooms.find(b => b.floor === member.floor
+        && b.gridX === Math.round(member.x) && b.gridY === Math.round(member.y));
+      if (!breakRoom) continue;
+      resting.add(member);
+      sitDown(breakRoom, member.color);
+    }
+    const spareFrontDesk = breakRooms.length > 0 ? state.staff.frontDesk - getMannedDeskStaff(state) : 0;
+    for (let i = 0; i < spareFrontDesk; i++) sitDown(breakRooms[i % breakRooms.length], ACTOR_COLORS.frontDesk);
+
     // Walkers and working staff, nudged apart when they share a tile
-    const all = [...this.staff, ...this.guests].filter(a => a.floor === currentFloor);
+    const all = [...this.staff, ...this.guests].filter(a => a.floor === currentFloor && !resting.has(a));
     all.forEach((actor, i) => {
       const jitter = ((i % 3) - 1) * TILE_SIZE * 0.15;
       const cx = GRID_OFFSET_X + (actor.x + 0.5) * TILE_SIZE + jitter;

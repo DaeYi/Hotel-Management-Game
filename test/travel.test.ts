@@ -2,10 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   createHotelState, createStarterHotel, starterHallways, addRoom, addFixture, addElevator, buildFloor,
 } from '../src/simulation/HotelState.js';
-import { getStaffTravelHours, getStaffBases } from '../src/simulation/Layout.js';
+import { getStaffTravelHours, getStaffBases, getAccessibleBreakRooms } from '../src/simulation/Layout.js';
 import { startTurnoverCleaning, processCleaningTick, processDailyHousekeeping } from '../src/simulation/HousekeepingManager.js';
 import { processMaintenanceTick } from '../src/simulation/MaintenanceManager.js';
-import { TRAVEL, HOUSEKEEPING, STAFF, CLOSET, STARTER_LAYOUT } from '../src/config/balance.js';
+import { TRAVEL, HOUSEKEEPING, STAFF, CLOSET, BREAK_ROOM, STARTER_LAYOUT } from '../src/config/balance.js';
 import type { HotelState, Room } from '../src/simulation/types.js';
 
 const rich = (s: HotelState): HotelState => ({ ...s, cash: 1_000_000, peakStarRating: 5 });
@@ -53,6 +53,21 @@ describe('Staff travel time', () => {
     const withCloset = addFixture(s, 'closet', 5, 0, 1)!;
     expect(withCloset.cash).toBe(s.cash - CLOSET.buildCost);
     expect(getStaffTravelHours(withCloset, roomAt(withCloset, 6, 2, 1))).toBeCloseTo(2 * TRAVEL.hoursPerTile, 6);
+  });
+
+  it('a break room can go on any floor, and walks start from it like a closet', () => {
+    let s = twoFloors();
+    s = addRoom(s, 'standard', 6, 2, 1)!;
+    const withBreakRoom = addFixture(s, 'breakroom', 5, 0, 1)!;
+    expect(withBreakRoom.cash).toBe(s.cash - BREAK_ROOM.buildCost);
+    expect(getAccessibleBreakRooms(withBreakRoom).map(f => f.id)).toEqual(['breakroom-1-5-0']);
+    expect(getStaffBases(withBreakRoom)).toContainEqual({ gridX: 5, gridY: 1, floor: 1 });
+    expect(getStaffTravelHours(withBreakRoom, roomAt(withBreakRoom, 6, 2, 1))).toBeCloseTo(2 * TRAVEL.hoursPerTile, 6);
+  });
+
+  it('a break room off the hallways is no use to anyone', () => {
+    const s = addFixture(oneHallway(), 'breakroom', 5, 3, 0)!; // touches no hallway
+    expect(getAccessibleBreakRooms(s)).toEqual([]);
   });
 
   it('is Infinity when staff cannot get there', () => {

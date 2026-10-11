@@ -92,6 +92,11 @@ export function getAccessibleDesks(state: HotelState): Fixture[] {
   return state.fixtures.filter(f => f.type === 'desk' && isTileAccessible(state, f.gridX, f.gridY, f.floor));
 }
 
+/** Staff break rooms that staff can walk into. */
+export function getAccessibleBreakRooms(state: HotelState): Fixture[] {
+  return state.fixtures.filter(f => f.type === 'breakroom' && isTileAccessible(state, f.gridX, f.gridY, f.floor));
+}
+
 /** Front desk staff actually working: each accessible desk seats DESK.staffPerDesk. */
 export function getMannedDeskStaff(state: HotelState): number {
   return Math.min(state.staff.frontDesk, getAccessibleDesks(state).length * DESK.staffPerDesk);
@@ -104,14 +109,14 @@ export function getCheckInCapacity(state: HotelState): number {
 
 /**
  * Where housekeeping and maintenance start from: the hallway tile in front of
- * each reachable desk (the lobby) and each reachable staff closet. With
+ * each reachable desk (the lobby), staff closet, and staff break room. With
  * neither, staff come in off the street.
  */
 export function getStaffBases(state: HotelState): Pos[] {
   const reachable = getReachableSet(state);
   const bases: Pos[] = [];
   for (const f of state.fixtures) {
-    if (f.type !== 'desk' && f.type !== 'closet') continue;
+    if (f.type === 'hallway') continue;
     for (const [dx, dy] of NEIGHBORS) {
       const x = f.gridX + dx;
       const y = f.gridY + dy;

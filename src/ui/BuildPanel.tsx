@@ -1,6 +1,6 @@
 import type { RoomType, FacilityType, TileType } from '../simulation/types';
 import type { BuildType } from '../game/GameController';
-import { ROOM_CONFIG, FACILITY_CONFIG, ELEVATOR, HALLWAY, DESK, CLOSET } from '../config/balance';
+import { ROOM_CONFIG, FACILITY_CONFIG, ELEVATOR, HALLWAY, DESK, CLOSET, BREAK_ROOM } from '../config/balance';
 import { getRequiredStars, isUnlocked } from '../simulation/HotelState';
 import { getExpectedPrice } from '../simulation/StarRatingManager';
 import { useController } from './context';
@@ -29,8 +29,9 @@ const OPTIONS: BuildOption[] = [
   { type: 'hallway', label: 'Hallway', cost: HALLWAY.buildCost, subtitle: 'drag to lay', color: '#8e8e9e', category: 'SERVICE' },
   { type: 'desk', label: 'Check-in Desk', cost: DESK.buildCost, subtitle: `ground fl, ${DESK.staffPerDesk} staff`, color: '#a0522d', category: 'SERVICE' },
   { type: 'closet', label: 'Staff Closet', cost: CLOSET.buildCost, subtitle: 'shorter walks', color: '#16a085', category: 'SERVICE' },
+  { type: 'breakroom', label: 'Break Room', cost: BREAK_ROOM.buildCost, subtitle: 'idle staff rest', color: '#8e44ad', category: 'SERVICE' },
   { type: 'elevator', label: 'Elevator', cost: ELEVATOR.buildCost, subtitle: `${ELEVATOR.roomsServed} upper rooms`, color: '#7f8c8d', category: 'SERVICE' },
-  { type: 'bulldoze', label: 'Bulldoze', cost: 0, subtitle: 'hall/desk/closet/lift', color: '#c0392b', category: 'SERVICE' },
+  { type: 'bulldoze', label: 'Bulldoze', cost: 0, subtitle: 'hall/desk/staff/lift', color: '#c0392b', category: 'SERVICE' },
 ];
 
 const isTile = (type: BuildType): type is TileType => type in ROOM_CONFIG || type in FACILITY_CONFIG;

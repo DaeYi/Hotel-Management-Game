@@ -1,5 +1,5 @@
 import type { HotelState, Room, RoomType, Facility, FacilityType, TileType, Elevator, GameEvent, Fixture, FixtureType } from './types.js';
-import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS, FLOORS, ELEVATOR, HALLWAY, DESK, CLOSET, STARTER_LAYOUT } from '../config/balance.js';
+import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS, FLOORS, ELEVATOR, HALLWAY, DESK, CLOSET, BREAK_ROOM, STARTER_LAYOUT } from '../config/balance.js';
 import { isTileAccessible } from './Layout.js';
 import { createConstructionNoise } from './NoiseManager.js';
 import { getExpectedPrice, getPriceMultiplier } from './StarRatingManager.js';
@@ -285,9 +285,10 @@ export const FIXTURE_COST: Record<FixtureType, number> = {
   hallway: HALLWAY.buildCost,
   desk: DESK.buildCost,
   closet: CLOSET.buildCost,
+  breakroom: BREAK_ROOM.buildCost,
 };
 
-/** Build a hallway tile, check-in desk (ground floor only), or staff closet. */
+/** Build a hallway tile, check-in desk (ground floor only), staff closet, or staff break room. */
 export function addFixture(state: HotelState, type: FixtureType, gridX: number, gridY: number, floor: number): HotelState | null {
   if (!isValidTile(state, gridX, gridY, floor)) return null;
   if (isTileOccupied(state, gridX, gridY, floor)) return null;

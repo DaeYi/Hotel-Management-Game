@@ -32,6 +32,7 @@ const ELEVATOR_COLOR = 0x7f8c8d;
 const HALLWAY_COLOR = 0x4b4b63;
 const DESK_COLOR = 0xa0522d;
 const CLOSET_COLOR = 0x16a085;
+const BREAK_ROOM_COLOR = 0x8e44ad;
 
 const ROOM_OCCUPIED_COLORS: Record<RoomType, number> = {
   standard: 0x2e6da4,
@@ -117,7 +118,7 @@ export class GridRenderer {
     // Get color: room types use ROOM_COLORS, facilities use FACILITY_CONFIG
     const color = ROOM_COLORS[type as RoomType]
       ?? FACILITY_CONFIG[type]?.color
-      ?? (type === 'hallway' ? HALLWAY_COLOR : type === 'desk' ? DESK_COLOR : type === 'closet' ? CLOSET_COLOR : type === 'bulldoze' ? 0xc0392b : ELEVATOR_COLOR);
+      ?? (type === 'hallway' ? HALLWAY_COLOR : type === 'desk' ? DESK_COLOR : type === 'closet' ? CLOSET_COLOR : type === 'breakroom' ? BREAK_ROOM_COLOR : type === 'bulldoze' ? 0xc0392b : ELEVATOR_COLOR);
 
     if (canPlace) {
       this.hoverGraphics.fillStyle(color, 0.4);
@@ -211,7 +212,7 @@ export class GridRenderer {
     }
   }
 
-  /** Draw one floor's hallways and check-in desks. Call before rooms, which share the graphics layer. */
+  /** Draw one floor's hallways, check-in desks, closets, and break rooms. Call before rooms, which share the graphics layer. */
   renderFixtures(state: HotelState, floor: number) {
     for (const fixture of state.fixtures) {
       if (fixture.floor !== floor) continue;
@@ -231,6 +232,14 @@ export class GridRenderer {
         for (let shelf = 0; shelf < 3; shelf++) {
           this.roomGraphics.fillRect(x + 10, y + 12 + shelf * 10, TILE_SIZE - 20, 3);
         }
+      } else if (fixture.type === 'breakroom') {
+        // Break room: a table with a coffee cup; resting staff sit around it
+        this.roomGraphics.fillStyle(BREAK_ROOM_COLOR, 0.85);
+        this.roomGraphics.fillRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+        this.roomGraphics.fillStyle(0xd2a679, 0.9);
+        this.roomGraphics.fillCircle(x + TILE_SIZE / 2, y + TILE_SIZE / 2, TILE_SIZE * 0.16);
+        this.roomGraphics.fillStyle(0xffffff, 0.9);
+        this.roomGraphics.fillRect(x + TILE_SIZE / 2 - 2, y + TILE_SIZE / 2 - 3, 4, 5);
       } else {
         // Floor tile with a wooden counter across the top half
         this.roomGraphics.fillStyle(HALLWAY_COLOR, 1);
