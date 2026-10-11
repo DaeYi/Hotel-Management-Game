@@ -1,5 +1,4 @@
 import type { ComponentChildren } from 'preact';
-import { useEffect, useState } from 'preact/hooks';
 import type { Room, Facility, HotelState, Guest, FacilityType } from '../simulation/types';
 import { ROOM_CONFIG, ECONOMY, AMENITIES, DECOR, RENOVATION, GRID, FACILITY_CONFIG, FACILITY_LEVELS } from '../config/balance';
 import {
@@ -13,7 +12,8 @@ import { profileRoom, profileFurnishing, furnishingOf } from '../simulation/Room
 import { getStaffTravelHours } from '../simulation/Layout';
 import { positionAt, legsEnd } from '../simulation/Movement';
 import { facilityCapacity, guestsInFacility, openingHours } from '../simulation/FacilityManager';
-import { useController } from './context';
+import { roomCleaningAt, describeWait, type RoomCleaning } from '../simulation/CleaningStatus';
+import { useController, useLiveClock } from './context';
 import { formatBar, formatMoney, formatWalk, capitalize } from './format';
 
 /** The inspector for whatever's selected on the grid, if anything. */
@@ -27,15 +27,6 @@ export function Inspector() {
   }
   const facility = state.facilities.find(f => f.id === selection.id);
   return facility ? <FacilityInspector facility={facility} state={state} /> : null;
-}
-
-/** Re-render every so often while the clock runs, so what's shown (who's where) keeps up with the game. */
-function useLiveClock(ms = 250) {
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick(n => n + 1), ms);
-    return () => clearInterval(id);
-  }, [ms]);
 }
 
 /** A card beside the selected tile: to its right, or its left on the right half of the floor. */
@@ -74,13 +65,14 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
   const profile = profileRoom(room);
   const guest = state.guests.find(g => g.id === room.guestId);
   const fair = getExpectedPrice(room.type, state.starRating, room.floor);
+  const cleaning = roomCleaningAt(state, c.gameTime).get(room.id);
 
   let status: string;
   if (room.status === 'occupied') {
     const where = guest ? guestWhereabouts(guest, state, c.gameTime) : null;
     status = `Occupied (${guest?.trait ?? 'unknown'})${where ? `, ${where}` : ''}`;
   }
-  else if (room.status === 'cleaning') status = `Cleaning (${Math.ceil(room.cleaningHoursRemaining)}h left)`;
+  else if (room.status === 'cleaning') status = turnoverStatus(cleaning);
   else if (room.status === 'renovating') status = `Renovating (${room.renovationHoursRemaining}h left)`;
   else if (room.condition <= ECONOMY.roomBreakdownThreshold) status = 'OUT OF ORDER';
   else status = isRoomReachable(state, room) ? 'Vacant' : 'Door blocked: no hallway access!';
@@ -88,7 +80,7 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
   const stats = [
     `Status:      ${status}`,
     `Condition:   ${formatBar(room.condition)} ${room.condition.toFixed(0)}%`,
-    `Cleanliness: ${formatBar(room.cleanliness)} ${room.cleanliness.toFixed(0)}%`,
+    `Cleanliness: ${formatBar(room.cleanliness)} ${room.cleanliness.toFixed(0)}%${cleaning?.job === 'daily' ? `, ${dailyStatus(cleaning)}` : ''}`,
     `Decor:       ${formatBar(room.decor)} ${room.decor.toFixed(0)}%${room.decor < DECOR.freshThreshold ? ' stale' : ''}`,
     `Amenities:   ${AMENITIES.tiers[state.amenities[room.type]]?.label ?? 'Basic'}`,
     `Noise:       ${noiseLabel(calculateRoomNoise(room, state))}`,
@@ -145,6 +137,27 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
 }
 
 /** Where a checked-in guest is, when they're not in their room: "arriving", "at the Gym", "moving rooms". */
+/** Housekeeping time left: "40 min", "1.5h". */
+function formatHoursLeft(hours: number): string {
+  return hours < 1 ? `${Math.max(1, Math.round(hours * 60))} min` : `${hours.toFixed(1)}h`;
+}
+
+/** A room between guests: being cleaned, a housekeeper on the way, or waiting (and why). */
+function turnoverStatus(cleaning: RoomCleaning | undefined): string {
+  if (!cleaning) return 'Cleaned: reopens on the hour';
+  const left = formatHoursLeft(cleaning.hoursLeft);
+  if (cleaning.phase === 'cleaning') return `Being cleaned (${left} left)`;
+  if (cleaning.phase === 'on_the_way') return `Dirty: housekeeper on the way (${left} to clean)`;
+  return `Dirty: waiting, ${describeWait(cleaning.wait!)}`;
+}
+
+/** A guest's room with a daily clean queued. */
+function dailyStatus(cleaning: RoomCleaning): string {
+  if (cleaning.phase === 'cleaning') return 'being cleaned';
+  if (cleaning.phase === 'on_the_way') return 'housekeeper on the way';
+  return `daily clean due (${describeWait(cleaning.wait!)})`;
+}
+
 function guestWhereabouts(guest: Guest, state: HotelState, t: number): string | null {
   const trip = guest.trip;
   if (!trip || trip.length === 0 || t >= legsEnd(trip)) return null;

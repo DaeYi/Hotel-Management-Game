@@ -1,11 +1,13 @@
 import Phaser from 'phaser';
-import type { HotelState, RoomType, FacilityType, GuestTrait, Direction, Room } from '../simulation/types';
+import type { HotelState, RoomType, FacilityType, GuestTrait, Direction, Room, StaffPlan } from '../simulation/types';
 import { GRID, ECONOMY, NOISE, FACILITY_CONFIG, DECOR } from '../config/balance';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
 import { formatRoomLabel, isRoomReachable, isFacilityOpen } from '../simulation/HotelState';
 import { profileRoom, rectToWorld, bedSpot, wallBar } from '../simulation/RoomProfile';
 import { FURNITURE, ROOM_CELLS } from '../config/furniture';
 import { isHallway } from '../simulation/Layout';
+import { getStaffPlan } from '../simulation/StaffManager';
+import { roomCleaningAt, GRUBBY_BELOW } from '../simulation/CleaningStatus';
 
 /** Guest dot color by trait, in one place so every trait gets an explicit,
  * distinct color instead of silently falling through to the default. */
@@ -19,6 +21,17 @@ export function getGuestDotColor(trait: GuestTrait): number {
 }
 
 export const TILE_SIZE = 52;
+
+/** The cleaning overlay's colors (the interface's legend uses the same ones). */
+export const CLEANING_COLORS = {
+  housekeeper: 0x1abc9c, // the housekeepers' own color (ACTOR_COLORS.housekeeper): someone's on it
+  dirty: 0x8b5a2b, // waiting for a turnover: can't be sold until it's cleaned
+  hatch: 0x3e2412,
+  blocked: 0xe74c3c, // waiting, and housekeepers can't get to it
+  due: 0xf39c12, // a daily clean is due
+  grubby: 0xa0522d, // getting dirty: under GRUBBY_BELOW it costs review points
+  track: 0x15151f,
+};
 // The canvas is just the floor plan: the HTML interface lives around it.
 export const GRID_OFFSET_X = 0;
 export const GRID_OFFSET_Y = 0;
@@ -53,6 +66,8 @@ export class GridRenderer {
   private feedbackGraphics: Phaser.GameObjects.Graphics;
   private noiseGraphics: Phaser.GameObjects.Graphics;
   private constructionGraphics: Phaser.GameObjects.Graphics;
+  private cleaningGraphics: Phaser.GameObjects.Graphics;
+  private planCache = new WeakMap<HotelState, StaffPlan>();
   private dayNightOverlay: Phaser.GameObjects.Rectangle;
   private feedbackTimer = 0;
   private showNoiseOverlay = false;
@@ -68,6 +83,7 @@ export class GridRenderer {
     this.hoverGraphics = scene.add.graphics().setDepth(6);
     this.feedbackGraphics = scene.add.graphics().setDepth(7);
     this.noiseGraphics = scene.add.graphics().setDepth(3);
+    this.cleaningGraphics = scene.add.graphics().setDepth(3); // over the rooms, under the people
     this.constructionGraphics = scene.add.graphics().setDepth(4);
 
     this.dayNightOverlay = scene.add.rectangle(
@@ -171,6 +187,14 @@ export class GridRenderer {
     }
   }
 
+  /** The condition bar along the bottom of a room, once it's below 80%. */
+  private drawConditionBar(g: Phaser.GameObjects.Graphics, room: Room, x: number, y: number) {
+    if (room.condition >= 80) return;
+    const barWidth = ((TILE_SIZE - 4) * room.condition) / 100;
+    g.fillStyle(room.condition < 30 ? 0xe74c3c : 0xf39c12, 0.8);
+    g.fillRect(x + 2, y + TILE_SIZE - 4, barWidth, 2);
+  }
+
   /** A door: a gap-colored bar on the edge of the tile, on the side it opens. */
   private drawDoor(g: Phaser.GameObjects.Graphics, x: number, y: number, door: Direction, color: number, alpha: number) {
     const long = TILE_SIZE * 0.4;
@@ -235,13 +259,7 @@ export class GridRenderer {
         this.roomGraphics.fillRect(x + 2, y + 2, TILE_SIZE - 4, 2);
       }
 
-      // Condition bar at bottom when below 80%
-      if (room.condition < 80) {
-        const barWidth = ((TILE_SIZE - 4) * room.condition) / 100;
-        const barColor = room.condition < 30 ? 0xe74c3c : 0xf39c12;
-        this.roomGraphics.fillStyle(barColor, 0.8);
-        this.roomGraphics.fillRect(x + 2, y + TILE_SIZE - 4, barWidth, 2);
-      }
+      this.drawConditionBar(this.roomGraphics, room, x, y);
 
       seenRoomIds.add(room.id);
       let label = this.roomLabels.get(room.id);
@@ -460,6 +478,101 @@ export class GridRenderer {
         this.noiseGraphics.fillStyle(0xff4444, intensity * 0.4);
         this.noiseGraphics.fillRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);
       }
+    }
+  }
+
+  /**
+   * The cleaning overlay on one floor's rooms at game time t: rooms waiting
+   * for a turnover are hatched brown (red-edged if housekeepers can't get to
+   * them); a housekeeper in the room tints it teal, with a teal frame, and one
+   * on the way marks its corners; a bar shows how far the clean has got. Rooms
+   * with a daily clean due get an amber dot, and rooms grubby enough to cost
+   * review points (in use, or ready to sell) a brown tint.
+   */
+  renderCleaning(state: HotelState, floor: number, t: number, show: boolean) {
+    const g = this.cleaningGraphics;
+    g.clear();
+    if (!show) return;
+    let plan = this.planCache.get(state);
+    if (!plan) {
+      plan = getStaffPlan(state);
+      this.planCache.set(state, plan);
+    }
+    const status = roomCleaningAt(state, t, plan);
+    const S = TILE_SIZE;
+    const C = CLEANING_COLORS;
+
+    for (const room of state.rooms) {
+      if (room.floor !== floor || room.status === 'renovating') continue;
+      const x = GRID_OFFSET_X + room.gridX * S;
+      const y = GRID_OFFSET_Y + room.gridY * S;
+      const job = status.get(room.id);
+
+      // A room in use (or ready to sell) grubby enough to cost review points. One
+      // between guests is dirty until its turnover's done (and clean once it is).
+      if ((room.status === 'occupied' || room.status === 'vacant') && room.cleanliness < GRUBBY_BELOW) {
+        g.fillStyle(C.grubby, 0.45);
+        g.fillRect(x + 1, y + 1, S - 2, S - 2);
+      }
+      if (!job) continue;
+
+      if (job.phase === 'cleaning') {
+        g.fillStyle(C.housekeeper, 0.3);
+        g.fillRect(x + 1, y + 1, S - 2, S - 2);
+      } else if (job.job === 'turnover') {
+        g.fillStyle(C.dirty, 0.5);
+        g.fillRect(x + 1, y + 1, S - 2, S - 2);
+        this.hatch(g, x, y, job.wait === 'unreachable' ? C.blocked : C.hatch);
+      }
+
+      if (job.phase === 'cleaning') {
+        g.lineStyle(2, C.housekeeper, 1);
+        g.strokeRect(x + 2, y + 2, S - 4, S - 4);
+      } else if (job.phase === 'on_the_way') {
+        this.corners(g, x, y, C.housekeeper);
+      } else if (job.wait === 'unreachable') {
+        g.lineStyle(2, C.blocked, 0.9);
+        g.strokeRect(x + 2, y + 2, S - 4, S - 4);
+      }
+
+      if (job.job === 'daily' && job.phase !== 'cleaning') {
+        g.fillStyle(C.due, 1);
+        g.fillCircle(x + S - 9, y + 9, 5);
+        g.lineStyle(1.5, C.track, 1);
+        g.strokeCircle(x + S - 9, y + 9, 5);
+      }
+
+      // How far the clean has got (a turnover always; a daily clean once it's begun)
+      if (job.job === 'turnover' || job.phase === 'cleaning') {
+        g.fillStyle(C.track, 0.85);
+        g.fillRect(x + 5, y + S - 10, S - 10, 4);
+        g.fillStyle(C.housekeeper, 1);
+        g.fillRect(x + 5, y + S - 10, (S - 10) * job.progress, 4);
+      }
+      // The frame and corners run over the bottom edge: keep the condition bar on top
+      this.drawConditionBar(g, room, x, y);
+    }
+  }
+
+  /** Diagonal hatching across a tile. */
+  private hatch(g: Phaser.GameObjects.Graphics, x: number, y: number, color: number) {
+    const S = TILE_SIZE;
+    g.lineStyle(1.5, color, 0.7);
+    for (let d = -S + 6; d < S; d += 9) {
+      // The line x' - y' = d inside the tile
+      g.lineBetween(x + Math.max(0, d), y + Math.max(0, -d), x + Math.min(S, S + d), y + Math.min(S, S - d));
+    }
+  }
+
+  /** Corner brackets around a tile: someone's on their way to it. */
+  private corners(g: Phaser.GameObjects.Graphics, x: number, y: number, color: number) {
+    const S = TILE_SIZE;
+    const a = 3;
+    const len = 11;
+    g.lineStyle(2.5, color, 1);
+    for (const [cx, cy, dx, dy] of [[x + a, y + a, 1, 1], [x + S - a, y + a, -1, 1], [x + a, y + S - a, 1, -1], [x + S - a, y + S - a, -1, -1]]) {
+      g.lineBetween(cx, cy, cx + dx * len, cy);
+      g.lineBetween(cx, cy, cx, cy + dy * len);
     }
   }
 

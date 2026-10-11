@@ -17,6 +17,7 @@ export function startTurnoverCleaning(room: Room, quality: string): Room {
     status: 'cleaning',
     guestId: undefined,
     cleaningHoursRemaining: duration,
+    cleaningHoursTotal: duration,
     dailyCleanHoursRemaining: 0, // a pending daily clean is moot once the guest leaves
   };
 }
@@ -56,7 +57,7 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
           message: `Room ${formatRoomLabel(room.gridX, room.gridY, room.floor)} cleaned (${quality})`,
           data: { roomId: room.id, quality },
         });
-        return { ...room, status: 'vacant' as const, cleanliness: Math.max(room.cleanliness, targetCleanliness), cleaningHoursRemaining: 0 };
+        return { ...room, status: 'vacant' as const, cleanliness: Math.max(room.cleanliness, targetCleanliness), cleaningHoursRemaining: 0, cleaningHoursTotal: undefined };
       }
       return { ...room, cleaningHoursRemaining: remaining };
     }

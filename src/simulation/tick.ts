@@ -167,7 +167,11 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   const roomsAfterDeparture = current.rooms.map(room => {
     if (room.guestId && departedGuestIds.has(room.guestId)) {
       const cleaned = startTurnoverCleaning(room, current.housekeeping.turnoverQuality);
-      return { ...cleaned, cleaningHoursRemaining: cleaned.cleaningHoursRemaining + checkoutDelay };
+      return {
+        ...cleaned,
+        cleaningHoursRemaining: cleaned.cleaningHoursRemaining + checkoutDelay,
+        cleaningHoursTotal: (cleaned.cleaningHoursTotal ?? cleaned.cleaningHoursRemaining) + checkoutDelay,
+      };
     }
     return room;
   });

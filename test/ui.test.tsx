@@ -151,6 +151,90 @@ describe('Interface', () => {
     expect(screen.queryByRole('region', { name: /FURNISH ROOM/ })).toBeNull();
   });
 
+  it('the cleaning panel puts the cleaning overlay on the map, and folds out of the way to show it', () => {
+    const { controller, flush } = setup();
+    controller.selectTool('standard');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.selectTool(null);
+    const [room] = controller.state.rooms;
+    controller.state = {
+      ...controller.state,
+      staff: { ...controller.state.staff, housekeepers: 0 },
+      rooms: [
+        { ...room, status: 'cleaning', cleaningHoursRemaining: 2 },
+        { ...room, id: 'room-1-5-2', floor: 1, status: 'cleaning', cleaningHoursRemaining: 2 }, // upstairs
+      ],
+      floorCount: 2,
+    };
+    expect(controller.cleaningOverlay).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: /Cleaning$/ }));
+    flush();
+    expect(controller.cleaningOverlay).toBe(true);
+    const panel = () => screen.getByRole('region', { name: 'HOUSEKEEPING' });
+    expect(panel().textContent).toContain('Dirty, waiting: 2');
+    expect(panel().textContent).toContain('no housekeepers hired');
+    expect(screen.getByRole('group', { name: 'Cleaning overlay key' }).textContent).toContain('Being cleaned');
+
+    // Folded to its title bar: the overlay stays, with a summary beside the title
+    fireEvent.click(screen.getByLabelText('Minimize'));
+    flush();
+    expect(controller.cleaningOverlay).toBe(true);
+    expect(panel().textContent).toContain('2 waiting');
+    expect(panel().textContent).not.toContain('Turnover cleaning');
+    expect(controller.storyLogVisible).toBe(false);
+    fireEvent.click(screen.getByLabelText('Expand'));
+    flush();
+    expect(panel().textContent).toContain('Turnover cleaning');
+
+    // The map shows one floor: the panel points at the others
+    fireEvent.click(screen.getByText('Floor 2 (1)'));
+    flush();
+    expect(controller.currentFloor).toBe(1);
+
+    fireEvent.click(screen.getByLabelText('Close'));
+    flush();
+    expect(controller.cleaningOverlay).toBe(false);
+    expect(screen.queryByRole('group', { name: 'Cleaning overlay key' })).toBeNull();
+  });
+
+  it('a folded panel says what the open one would: a grubby room isn\'t "all clean"; a folded story log lets incidents toast', () => {
+    const { controller, flush } = setup();
+    controller.selectTool('standard');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.selectTool(null);
+    controller.state = {
+      ...controller.state,
+      housekeeping: { ...controller.state.housekeeping, dailyCadence: 'none' },
+      rooms: controller.state.rooms.map(r => ({ ...r, status: 'occupied' as const, guestId: 'g', cleanliness: 20 })),
+    };
+    controller.togglePanel('housekeeping');
+    controller.toggleCollapsed();
+    flush();
+    const bar = screen.getByRole('region', { name: 'HOUSEKEEPING' }).textContent!;
+    expect(bar).toContain('1 grubby');
+    expect(bar).not.toContain('all clean');
+
+    controller.togglePanel('story');
+    expect(controller.storyLogVisible).toBe(true);
+    controller.toggleCollapsed();
+    expect(controller.storyLogVisible).toBe(false);
+  });
+
+  it('the room inspector says whether a dirty room is being cleaned or waiting, and why', () => {
+    const { controller, flush } = setup();
+    controller.selectTool('standard');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.selectTool(null);
+    controller.state = {
+      ...controller.state,
+      staff: { ...controller.state.staff, housekeepers: 0 },
+      rooms: controller.state.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: 2 })),
+    };
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    flush();
+    expect(screen.getByRole('dialog', { name: /Standard Queen/ }).textContent).toContain('Dirty: waiting, no housekeepers hired');
+  });
+
   it('floors: building one adds it to the stack and switches to it', () => {
     const { controller, flush } = setup();
     fireEvent.click(screen.getByText(/\+ Floor 2/));

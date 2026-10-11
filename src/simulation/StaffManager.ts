@@ -224,6 +224,8 @@ export function planStaff(
     const queue = queues[m.role];
     const unreachable = new Set<string>();
     let job: Job | undefined = sticky.get(m.id);
+    // Still walking to it all hour (a long way up): it stays theirs into the next hour
+    if (job && t >= end - 1e-9) roomId = job.room.id;
     while (t < end - 1e-9) {
       if (!job) {
         job = queue.find(j => !claimed.has(j.room.id) && !unreachable.has(j.room.id));

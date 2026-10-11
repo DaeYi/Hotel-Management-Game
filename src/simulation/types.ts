@@ -24,6 +24,7 @@ export interface Room {
   status: RoomStatus;
   guestId?: string;
   cleaningHoursRemaining: number; // hours left in turnover cleaning
+  cleaningHoursTotal?: number; // the whole turnover's hours, for showing how far along it is (absent on older saves)
   lastDailyCleanDay: number; // last day daily housekeeping ran
   decor: number; // 0-100, how fresh the furnishings are; fades daily, restored by renovation
   renovationHoursRemaining: number; // hours left while status is 'renovating'

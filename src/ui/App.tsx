@@ -6,6 +6,7 @@ import { getSeasonInfo } from '../simulation/SeasonManager';
 import { getOccupancyRate } from '../simulation/HotelState';
 import { getNextLoanPaymentDay } from '../simulation/EconomyManager';
 import { ACTOR_COLORS } from '../render/ActorLayer';
+import { CleaningLegend } from './CleaningKey';
 import { formatMoney, formatMoneyShort, formatStars, capitalize } from './format';
 import { BuildPanel } from './BuildPanel';
 import { FloorPanel } from './FloorPanel';
@@ -29,7 +30,7 @@ export function App({ controller, worldRef }: { controller: GameController; worl
         </header>
         <Toolbar />
         <div class="main">
-          <section class="world-column">
+          <section class={`world-column${controller.openPanel && controller.panelCollapsed ? ' panel-docked' : ''}`}>
             <div class="world">
               {/* The renderer owns this element's contents; Preact never touches them */}
               <div class="world-canvas" ref={worldRef} />
@@ -147,12 +148,19 @@ function StatusBar() {
 const toCss = (color: number) => `#${color.toString(16).padStart(6, '0')}`;
 
 function Legend() {
+  const c = useController();
   return (
     <div class="legend">
       <span><span class="swatch round" style={{ background: '#ecf0f1' }} />Guest</span>
       <span><span class="swatch" style={{ background: toCss(ACTOR_COLORS.frontDesk) }} />Front desk</span>
       <span><span class="swatch" style={{ background: toCss(ACTOR_COLORS.housekeeper) }} />Housekeeping</span>
       <span><span class="swatch" style={{ background: toCss(ACTOR_COLORS.maintenance) }} />Maintenance</span>
+      {c.cleaningOverlay && (
+        <span class="legend-group" role="group" aria-label="Cleaning overlay key">
+          <span class="legend-title">Cleaning:</span>
+          <CleaningLegend />
+        </span>
+      )}
     </div>
   );
 }

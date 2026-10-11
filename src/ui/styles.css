@@ -258,3 +258,23 @@ input[type='range'] { width: 100%; accent-color: var(--gold); }
 .warn-text { color: #e67e22; }
 button.link { background: none; border: none; color: var(--gold); text-decoration: underline; padding: 0; cursor: pointer; }
 
+
+/* ---------- Panels folded to their title bar ---------- */
+
+.card-buttons { display: inline-flex; gap: 6px; margin-left: 10px; }
+/* Folded, a panel docks just under the floor plan (in room made for it), so it covers none of it */
+.floating-panel.collapsed { top: calc(100% + 6px); left: 0; z-index: 3; /* over an inspector hanging below the plan */ width: auto; max-width: 100%; padding-top: 5px; padding-bottom: 5px; box-shadow: none; }
+.world-column.panel-docked .world { margin-bottom: 42px; }
+.floating-panel.collapsed .card-title { margin-bottom: 0; white-space: nowrap; }
+.floating-panel.collapsed .card-title > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.panel-summary { color: var(--text-body); margin-left: 8px; }
+
+/* ---------- Cleaning overlay key ---------- */
+
+.cleaning-swatch { display: inline-block; width: 12px; height: 12px; box-sizing: border-box; margin-right: 5px; vertical-align: -2px; border-radius: 2px; }
+.cleaning-bar { display: inline-block; width: 16px; height: 4px; margin-right: 5px; vertical-align: 2px; background: #15151f; border-radius: 1px; }
+.cleaning-bar > span { display: block; width: 60%; height: 100%; border-radius: 1px; }
+.cleaning-now { list-style: none; margin: 4px 0 0; padding: 0; line-height: 1.7; }
+.cleaning-floors button.link { margin-right: 8px; }
+.legend-group { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
+.legend-title { color: var(--text-body); }

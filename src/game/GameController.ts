@@ -64,6 +64,8 @@ export class GameController {
   openPanel: PanelId | null = null;
   /** The room the furnishing panel is open for. */
   furnishRoomId: string | null = null;
+  /** The open panel is folded down to its title bar, so the floor plan under it shows. */
+  panelCollapsed = false;
   noiseOverlay = false;
   tutorialOpen: boolean;
   confirmingNewGame = false;
@@ -182,7 +184,7 @@ export class GameController {
     const prevDay = this.state.day;
     const { state, events } = tickSimulation(this.state, this.prng);
     this.state = state;
-    this.toasts.add(events, now, this.openPanel === 'story');
+    this.toasts.add(events, now, this.storyLogVisible);
     for (const listener of this.tickListeners) listener(events, state);
 
     if (state.day !== prevDay) saveGame(state, this.prng);
@@ -208,12 +210,31 @@ export class GameController {
   togglePanel(panel: PanelId) {
     this.openPanel = this.openPanel === panel ? null : panel;
     if (this.openPanel !== 'furnish') this.furnishRoomId = null;
+    this.panelCollapsed = false;
     this.changed();
+  }
+
+  /** Fold the open panel down to its title bar (or open it back up). */
+  toggleCollapsed() {
+    if (!this.openPanel) return;
+    this.panelCollapsed = !this.panelCollapsed;
+    this.changed();
+  }
+
+  /** The story log is open and unfolded: incidents show there, so they don't toast. */
+  get storyLogVisible(): boolean {
+    return this.openPanel === 'story' && !this.panelCollapsed;
+  }
+
+  /** The cleaning overlay is on the floor plan while the housekeeping panel is open. */
+  get cleaningOverlay(): boolean {
+    return this.openPanel === 'housekeeping';
   }
 
   closePanel() {
     this.openPanel = null;
     this.furnishRoomId = null;
+    this.panelCollapsed = false;
     this.changed();
   }
 
@@ -443,6 +464,7 @@ export class GameController {
   openFurnishing(roomId: string) {
     this.furnishRoomId = roomId;
     this.openPanel = 'furnish';
+    this.panelCollapsed = false;
     this.selection = null;
     this.changed();
   }

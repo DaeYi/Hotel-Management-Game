@@ -20,3 +20,12 @@ export function useControllerVersion(controller: GameController): number {
   useEffect(() => controller.subscribe(() => setVersion(controller.getVersion())), [controller]);
   return version;
 }
+
+/** Re-render every so often while the clock runs, so what's shown (who's where) keeps up with the game. */
+export function useLiveClock(ms = 250) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick(n => n + 1), ms);
+    return () => clearInterval(id);
+  }, [ms]);
+}

@@ -45,6 +45,7 @@ export class WorldScene extends Phaser.Scene {
     this.actors.update(state, floor, c.gameTime);
     this.grid.renderGuests(state, floor, this.actors.awayGuestIds());
     this.grid.renderNoise(state, floor);
+    this.grid.renderCleaning(state, floor, c.gameTime, c.cleaningOverlay);
     this.grid.renderConstruction(state, floor);
     this.grid.updateDayNight(state.hour);
 
