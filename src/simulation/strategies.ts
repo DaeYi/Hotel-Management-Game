@@ -1,5 +1,5 @@
-import type { HotelState, RoomType, FacilityType, AmenityTier } from './types.js';
-import { ROOM_CONFIG, FACILITY_CONFIG, GRID, LOAN, ELEVATOR, STARTER_LAYOUT, DESK, HALLWAY, CLOSET } from '../config/balance.js';
+import type { HotelState, RoomType, FacilityType, AmenityTier, Direction } from './types.js';
+import { ROOM_CONFIG, FACILITY_CONFIG, GRID, LOAN, ELEVATOR, STARTER_LAYOUT, DESK, CLOSET } from '../config/balance.js';
 import {
   addRoom, addFacility, demolishRoom, isTileOccupied, isUnlocked, setRoomPrice, renovateRoom, renovateFacility,
   upgradeFacility, getFacilityUpgradeCost, addElevator, buildFloor, getNextFloorCost, getElevatorLoad, addFixture,
@@ -81,11 +81,13 @@ function findFreeTile(state: HotelState): { x: number; y: number; floor: number 
   return null;
 }
 
-/** Lay the template hallways across a floor (each tile is bought separately). */
-function layHallways(state: HotelState, floor: number): HotelState {
-  let s = state;
-  for (const [x, y] of STARTER_LAYOUT.hallwayTiles) s = addFixture(s, 'hallway', x, y, floor) ?? s;
-  return s;
+const isTemplateHallway = (x: number, y: number) => STARTER_LAYOUT.hallwayTiles.some(([hx, hy]) => hx === x && hy === y);
+
+/** The door for a template room tile: onto the template hallway beside it. */
+function templateDoor(x: number, y: number): Direction {
+  if (isTemplateHallway(x, y - 1)) return 'up';
+  if (isTemplateHallway(x, y + 1)) return 'down';
+  return isTemplateHallway(x + 1, y) ? 'right' : 'left';
 }
 
 /** Give each busy upper floor a staff closet, so housekeeping and maintenance don't walk up from the lobby. */
@@ -198,17 +200,16 @@ function managedStrategy(opts: ManagedOptions): Strategy {
         const type = nextRoomType(s);
         const busy = rooms < 10 || demandOccupancy(s, true) >= opts.expandAtOccupancy;
         if (busy && afford(s, ROOM_CONFIG[type].buildCost)) {
-          s = addRoom(s, type, tile.x, tile.y, tile.floor) ?? s;
+          s = addRoom(s, type, tile.x, tile.y, tile.floor, templateDoor(tile.x, tile.y)) ?? s;
         }
       }
     } else if (demandOccupancy(s, true) >= opts.expandAtOccupancy) {
       // Out of room and still busy: build upward (shaft first, so the new floor is reachable)
       if (s.elevators.length === 0) s = addReservedElevator(s, afford);
       const floorCost = getNextFloorCost(s);
-      const hallwayCost = STARTER_LAYOUT.hallwayTiles.length * HALLWAY.buildCost;
-      if (s.elevators.length > 0 && floorCost !== null && afford(s, floorCost + hallwayCost, 2)) {
+      if (s.elevators.length > 0 && floorCost !== null && afford(s, floorCost, 2)) {
         const built = buildFloor(s);
-        if (built) s = layHallways(built.state, built.state.floorCount - 1);
+        if (built) s = built.state;
       }
     }
 
@@ -226,7 +227,7 @@ function managedStrategy(opts: ManagedOptions): Strategy {
     const replaceable = s.rooms.find(r => r.status === 'vacant' && r.type !== best && (r.type === 'standard' || best === 'suite'));
     if (replaceable && s.starRating < 5 && afford(s, ROOM_CONFIG[best].buildCost, 4)) {
       const cleared = demolishRoom(s, replaceable.id);
-      if (cleared) s = addRoom(cleared, best, replaceable.gridX, replaceable.gridY, replaceable.floor) ?? s;
+      if (cleared) s = addRoom(cleared, best, replaceable.gridX, replaceable.gridY, replaceable.floor, replaceable.door) ?? s;
     }
 
     s = reinvest(s, opts, afford);

@@ -51,7 +51,7 @@ export class WorldScene extends Phaser.Scene {
     this.grid.updateDayNight(state.hour);
 
     // Placement preview and the success/failure flash
-    if (c.tool && c.hover) this.grid.showHoverPreview(c.hover.gridX, c.hover.gridY, c.tool, c.hover.canPlace);
+    if (c.tool && c.hover) this.grid.showHoverPreview(c.hover.gridX, c.hover.gridY, c.tool, c.hover.canPlace, c.hover.door, c.hover.doorOpen);
     else this.grid.clearHoverPreview();
     if (c.feedback && c.feedback.id !== this.lastFeedbackId) {
       this.lastFeedbackId = c.feedback.id;

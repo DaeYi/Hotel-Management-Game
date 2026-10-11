@@ -5,7 +5,7 @@ import { formatMoney } from './format';
 const TUTORIAL_STEPS = [
   {
     title: 'Step 1: Build Rooms',
-    text: 'Pick a room in the BUILD panel and click the grid. Every room needs a door onto a hallway. Guests check in at the desk. Out of space? Build up (FLOORS) and add an elevator.',
+    text: 'The whole floor starts as hallway. Pick a room in the BUILD panel and click a tile to build there; press R (or tap Door) to turn its door. Every door must open onto hallway that leads to the street, so leave paths open. Guests check in at the desk. Out of space? Build up (FLOORS) and add an elevator.',
   },
   {
     title: 'Step 2: Guests Arrive',

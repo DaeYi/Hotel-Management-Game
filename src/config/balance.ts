@@ -570,12 +570,10 @@ export const GRID = {
   height: 6,
 };
 
-// Hallways connect rooms to the street entrance (any walkable tile on the ground
-// floor's outer edge) and to elevators. A room needs a door onto a connected
-// hallway to be bookable.
-export const HALLWAY = {
-  buildCost: 300, // per tile
-};
+// Every floor starts as open hallway; building on a tile takes it out of the
+// hallway. Hallways connect rooms to the street entrance (any open tile on the
+// ground floor's outer edge) and to elevators. A room's door must open onto a
+// connected hallway for it to be bookable -- keeping a path open is up to the player.
 
 // Staff walk from their nearest base -- the lobby (in front of a check-in desk)
 // or a staff closet -- to every job, and that walk is part of the job's time.
@@ -609,10 +607,11 @@ export const DESK = {
   staffPerDesk: 2,
 };
 
-// The default floor layout: two full-width hallway rows with rooms above and
-// below each (rooms on rows 0, 2, 3, 5), joined by a short spine at the right
-// end so both rows connect to the elevator on every floor. New games, migrated
-// saves, and the balance bots all use it; players can build any layout they like.
+// The template floor layout the bots (and old-save migration) follow: two
+// full-width hallway rows kept clear, with rooms above and below each (rooms
+// on rows 0, 2, 3, 5, doors facing the hallway), joined by a short spine at
+// the right end so both rows connect to the elevator on every floor. Players
+// can build any layout they like.
 const STARTER_HALLWAY_ROWS = [1, 4];
 export const STARTER_LAYOUT = {
   hallwayTiles: [

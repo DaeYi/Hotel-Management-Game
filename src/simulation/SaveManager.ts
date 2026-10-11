@@ -1,11 +1,11 @@
 import type { HotelState } from './types.js';
 import type { PRNG } from './prng.js';
 import { GUEST_NAMES, LOAN, GRID, STARTER_LAYOUT } from '../config/balance.js';
-import { starterHallways } from './HotelState.js';
+import { DIRECTIONS, doorTile, isReachableHallway, findOpenDoor } from './Layout.js';
 import { calculateStarRating } from './StarRatingManager.js';
 
 const SAVE_KEY = 'hotel-game-save';
-const SAVE_VERSION = 15; // v15: daily cleans are queued housekeeping jobs
+const SAVE_VERSION = 16; // v16: every free tile is hallway; rooms have doors
 
 interface SaveData {
   version: number;
@@ -188,6 +188,12 @@ export function loadGame(): SaveData | null {
       console.log('Migrated save from v14 to v15');
     }
 
+    if (data.version === 15) {
+      openFloorPlan(data.state);
+      data.version = 16;
+      console.log('Migrated save from v15 to v16');
+    }
+
     if (data.version !== SAVE_VERSION) {
       console.warn(`Save version mismatch: expected ${SAVE_VERSION}, got ${data.version}`);
       return null;
@@ -242,10 +248,30 @@ export function packIntoLayout(state: any): void {
 
   const [deskX, deskY] = STARTER_LAYOUT.deskTiles[0];
   state.fixtures = [
-    ...Array.from({ length: state.floorCount }, (_, f) => starterHallways(f)).flat(),
+    ...Array.from({ length: state.floorCount }, (_, floor) => STARTER_LAYOUT.hallwayTiles.map(([x, y]) =>
+      ({ id: `hallway-${floor}-${x}-${y}`, type: 'hallway', gridX: x, gridY: y, floor }))).flat(),
     { id: `desk-0-${deskX}-${deskY}`, type: 'desk', gridX: deskX, gridY: deskY, floor: 0 },
   ];
   state.noiseSources = []; // positions no longer line up; construction noise is short-lived anyway
+}
+
+/**
+ * v15 -> v16: hallways stop being something you build -- every tile with
+ * nothing on it is hallway -- and rooms get a door. The old hallway tiles go
+ * (every empty tile becomes hallway), and each room's door faces a side that
+ * was hallway before if one connects to the street, else any side that does.
+ */
+export function openFloorPlan(state: any): void {
+  const wasHallway = new Set(state.fixtures.filter((f: any) => f.type === 'hallway').map((f: any) => `${f.floor},${f.gridX},${f.gridY}`));
+  state.fixtures = state.fixtures.filter((f: any) => f.type !== 'hallway');
+  const open = state as HotelState;
+  state.rooms = state.rooms.map((room: any) => {
+    const door = DIRECTIONS.find(d => {
+      const t = doorTile(room, d);
+      return wasHallway.has(`${t.floor},${t.gridX},${t.gridY}`) && isReachableHallway(open, t);
+    }) ?? findOpenDoor(open, room) ?? 'down';
+    return { ...room, door };
+  });
 }
 
 export function hasSavedGame(): boolean {

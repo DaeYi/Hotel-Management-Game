@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
-  createHotelState, createStarterHotel, starterHallways, addRoom, addFixture, addElevator, buildFloor,
+  createHotelState, createStarterHotel, addRoom, addFixture, addElevator, buildFloor,
 } from '../src/simulation/HotelState.js';
-import { getStaffTravelHours, getStaffBases, getAccessibleBreakRooms } from '../src/simulation/Layout.js';
+import { getStaffTravelHours, getStaffBases, getAccessibleBreakRooms, getEntranceTiles } from '../src/simulation/Layout.js';
 import { startTurnoverCleaning, processCleaningTick, processDailyHousekeeping } from '../src/simulation/HousekeepingManager.js';
 import { processMaintenanceTick } from '../src/simulation/MaintenanceManager.js';
 import { TRAVEL, HOUSEKEEPING, STAFF, CLOSET, BREAK_ROOM, STARTER_LAYOUT } from '../src/config/balance.js';
@@ -10,18 +10,17 @@ import type { HotelState, Room } from '../src/simulation/types.js';
 
 const rich = (s: HotelState): HotelState => ({ ...s, cash: 1_000_000, peakStarRating: 5 });
 
-/** Starter lobby plus a second floor with hallways and an elevator. */
+/** Starter lobby plus a second floor and an elevator. */
 function twoFloors(): HotelState {
-  let s = buildFloor(rich(createStarterHotel()))!.state;
-  s = { ...s, fixtures: [...s.fixtures, ...starterHallways(1)] };
+  const s = buildFloor(rich(createStarterHotel()))!.state;
   return addElevator(s, 0, 0)!;
 }
 
-/** A lobby with only the top hallway row, so rows 3+ have no hallway access. */
-function oneHallway(): HotelState {
-  let s = rich(createHotelState());
-  for (let x = 0; x < 10; x++) s = addFixture(s, 'hallway', x, 1, 0)!;
-  return addFixture(s, 'desk', 3, 0, 0)!;
+/** The starter lobby with a room at (5,3) whose door is blocked by the room at (5,2). */
+function blockedRoom(): HotelState {
+  let s = addRoom(rich(createStarterHotel()), 'standard', 5, 3, 0, 'up')!;
+  s = addRoom(s, 'standard', 5, 2, 0, 'up')!;
+  return { ...s, rooms: [roomAt(s, 5, 3), roomAt(s, 5, 2)] };
 }
 
 const roomAt = (s: HotelState, x: number, y: number, floor = 0): Room =>
@@ -35,8 +34,8 @@ describe('Staff travel time', () => {
 
   it('is the hallway walk from the nearest base to the door', () => {
     let s = rich(createStarterHotel());
-    s = addRoom(s, 'standard', 4, 0)!; // right beside the desk
-    s = addRoom(s, 'standard', 8, 2)!; // further down the hall
+    s = addRoom(s, 'standard', 4, 0, 0, 'down')!; // right beside the desk
+    s = addRoom(s, 'standard', 8, 2, 0, 'up')!; // further down the hall
     const near = getStaffTravelHours(s, roomAt(s, 4, 0));
     const far = getStaffTravelHours(s, roomAt(s, 8, 2));
     // Base is (3,1): (4,0) is one step along the hall plus the step in
@@ -66,19 +65,19 @@ describe('Staff travel time', () => {
   });
 
   it('a break room off the hallways is no use to anyone', () => {
-    const s = addFixture(oneHallway(), 'breakroom', 5, 3, 0)!; // touches no hallway
+    let s = addFixture(rich(createStarterHotel()), 'breakroom', 5, 5, 0)!;
+    for (const [x, y] of [[4, 5], [6, 5], [5, 4]]) s = addRoom(s, 'standard', x, y, 0, 'up')!; // hemmed in
     expect(getAccessibleBreakRooms(s)).toEqual([]);
   });
 
   it('is Infinity when staff cannot get there', () => {
-    const s = addRoom(oneHallway(), 'standard', 5, 3)!; // touches no hallway
+    const s = blockedRoom();
     expect(getStaffTravelHours(s, roomAt(s, 5, 3))).toBe(Infinity);
   });
 
   it('falls back to the street entrance when there is no desk or closet', () => {
-    let s = rich(createHotelState());
-    for (let x = 0; x < 10; x++) s = addFixture(s, 'hallway', x, 1, 0)!;
-    expect(getStaffBases(s)).toEqual([{ gridX: 0, gridY: 1, floor: 0 }, { gridX: 9, gridY: 1, floor: 0 }]);
+    const s = rich(createHotelState());
+    expect(getStaffBases(s)).toEqual(getEntranceTiles(s));
   });
 });
 
@@ -107,7 +106,7 @@ describe('Travel in housekeeping', () => {
   });
 
   it('rooms staff cannot reach make no cleaning progress', () => {
-    let s = addRoom(oneHallway(), 'standard', 5, 3)!;
+    let s = blockedRoom();
     s = { ...s, hour: 12, rooms: s.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: 2 })) };
     expect(processCleaningTick(s).state.rooms[0].cleaningHoursRemaining).toBe(2);
   });
@@ -151,7 +150,7 @@ describe('Travel in maintenance', () => {
   });
 
   it('rooms staff cannot reach are not repaired', () => {
-    let s = addRoom(oneHallway(), 'standard', 5, 3)!;
+    let s = blockedRoom();
     s = { ...s, hour: 12, staff: { ...s.staff, maintenanceWorkers: 1 }, rooms: s.rooms.map(r => ({ ...r, condition: 30 })) };
     expect(processMaintenanceTick(s).state.rooms[0].condition).toBe(30);
   });

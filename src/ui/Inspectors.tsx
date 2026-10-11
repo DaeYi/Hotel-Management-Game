@@ -6,6 +6,7 @@ import {
 } from '../simulation/HotelState';
 import { getExpectedPrice, getUpkeepMultiplier } from '../simulation/StarRatingManager';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
+import { DOOR_ARROWS } from './BuildPanel';
 import { getStaffTravelHours } from '../simulation/Layout';
 import { useController } from './context';
 import { formatBar, formatMoney, formatWalk, capitalize } from './format';
@@ -63,7 +64,7 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
   else if (room.status === 'cleaning') status = `Cleaning (${Math.ceil(room.cleaningHoursRemaining)}h left)`;
   else if (room.status === 'renovating') status = `Renovating (${room.renovationHoursRemaining}h left)`;
   else if (room.condition <= ECONOMY.roomBreakdownThreshold) status = 'OUT OF ORDER';
-  else status = isRoomReachable(state, room) ? 'Vacant' : 'No hallway access!';
+  else status = isRoomReachable(state, room) ? 'Vacant' : 'Door blocked: no hallway access!';
 
   const stats = [
     `Status:      ${status}`,
@@ -93,6 +94,9 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
         onInput={e => c.setRoomPrice(room.id, Number((e.target as HTMLInputElement).value))}
       />
       <div class="actions">
+        <button onClick={() => c.turnRoomDoor(room.id)} aria-label="Turn door">
+          Door {DOOR_ARROWS[room.door]} Turn
+        </button>
         {canRepair && (
           <button class="good" disabled={state.cash < ECONOMY.roomRepairCost} onClick={() => c.repairRoom(room.id)}>
             Repair ({formatMoney(ECONOMY.roomRepairCost)})

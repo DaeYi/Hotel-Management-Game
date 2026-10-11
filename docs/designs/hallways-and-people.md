@@ -1,7 +1,7 @@
 # Design: Hallways, Check-in Desks, and People
 
 Date: 2026-10-10
-Status: SHIPPED
+Status: SHIPPED (hallway building superseded by open-floor-plan.md)
 Repo: DaeYi/Hotel-Management-Game
 Follows: floors.md
 

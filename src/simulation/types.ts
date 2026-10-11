@@ -7,12 +7,16 @@ export type CleaningQuality = 'quick' | 'standard' | 'thorough';
 export type DailyCleaningCadence = 'daily' | 'every_other_day' | 'none';
 export type AmenityTier = 'basic' | 'premium' | 'luxury';
 
+/** Which side of its tile a room's door is on. */
+export type Direction = 'up' | 'right' | 'down' | 'left';
+
 export interface Room {
   id: string;
   type: RoomType;
   gridX: number;
   gridY: number;
   floor: number; // 0 = ground floor
+  door: Direction; // must open onto a hallway connected to the street for the room to be usable
   pricePerNight: number;
   condition: number; // 0-100, physical wear
   cleanliness: number; // 0-100, how clean the room is
@@ -100,9 +104,9 @@ export interface Facility {
   level: number; // 1-3, raised by upgradeFacility
 }
 
-export type FixtureType = 'hallway' | 'desk' | 'closet' | 'breakroom';
+export type FixtureType = 'desk' | 'closet' | 'breakroom';
 
-/** Single-tile building infrastructure: walkable hallways, check-in desks (ground floor only), staff closets, and staff break rooms. */
+/** Single-tile staff and service fixtures: check-in desks (ground floor only), staff closets, and staff break rooms. */
 export interface Fixture {
   id: string;
   type: FixtureType;
@@ -154,7 +158,7 @@ export interface HotelState {
   activeCampaign: ActiveCampaign | null; // at most one marketing campaign runs at a time
   floorCount: number; // built floors, including the ground floor (>= 1)
   elevators: Elevator[];
-  fixtures: Fixture[]; // hallways and check-in desks
+  fixtures: Fixture[]; // desks, closets, break rooms (every tile with nothing built on it is hallway)
   daysAtFiveStars: number; // consecutive end-of-day snapshots at 5 stars (legacy goals)
 }
 

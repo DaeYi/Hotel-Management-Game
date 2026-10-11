@@ -1,75 +1,88 @@
 import { describe, it, expect } from 'vitest';
 import { PRNG } from '../src/simulation/prng.js';
 import {
-  createHotelState, createStarterHotel, starterHallways, addRoom, addFixture, demolishFixture, addElevator, buildFloor,
-  isRoomReachable, getAvailableRooms, getDemolishRefund,
+  createHotelState, createStarterHotel, addRoom, addFixture, addElevator, buildFloor, demolishRoom, setRoomDoor,
+  isRoomReachable, getAvailableRooms,
 } from '../src/simulation/HotelState.js';
-import { getCheckInCapacity, getMannedDeskStaff, getAccessibleDesks, getEntranceTiles, findPath } from '../src/simulation/Layout.js';
+import {
+  getCheckInCapacity, getMannedDeskStaff, getAccessibleDesks, getEntranceTiles, findPath, isHallway, findOpenDoor,
+} from '../src/simulation/Layout.js';
 import { processArrivals } from '../src/simulation/GuestManager.js';
 import { calculateRoomNoise } from '../src/simulation/NoiseManager.js';
 import { tickSimulation } from '../src/simulation/tick.js';
-import { HALLWAY, DESK, STAFF, GRID, ECONOMY } from '../src/config/balance.js';
+import { DESK, STAFF, GRID, ECONOMY } from '../src/config/balance.js';
 import type { HotelState } from '../src/simulation/types.js';
 
 const rich = (s: HotelState): HotelState => ({ ...s, cash: 1_000_000, peakStarRating: 5 });
 
-/** Hallway tiles from (x0, y) to (x1, y) on a floor. */
-function hallway(state: HotelState, y: number, x0: number, x1: number, floor = 0): HotelState {
-  let s = state;
-  for (let x = x0; x <= x1; x++) s = addFixture(s, 'hallway', x, y, floor)!;
-  return s;
-}
-
-describe('Hallways and access', () => {
-  it('a room with no hallway is not bookable', () => {
-    const state = addRoom(rich(createHotelState()), 'standard', 4, 2)!;
-    expect(isRoomReachable(state, state.rooms[0])).toBe(false);
+describe('Open floor plan and doors', () => {
+  it('every tile starts as hallway, on new floors too; the ground floor edge is the street', () => {
+    const state = buildFloor(rich(createHotelState()))!.state;
+    for (const floor of [0, 1]) {
+      for (let y = 0; y < GRID.height; y++) for (let x = 0; x < GRID.width; x++) expect(isHallway(state, x, y, floor)).toBe(true);
+    }
+    expect(getEntranceTiles(state)).toHaveLength(2 * GRID.width + 2 * (GRID.height - 2));
   });
 
-  it('a room is bookable once its door opens onto a hallway connected to the street', () => {
-    let state = addRoom(rich(createHotelState()), 'standard', 4, 2)!;
-    state = hallway(state, 3, 4, 9); // reaches the right edge: an entrance
-    expect(getEntranceTiles(state)).toEqual([{ gridX: 9, gridY: 3, floor: 0 }]);
+  it('a room takes its tile out of the hallway; demolishing it gives the tile back', () => {
+    let state = addRoom(rich(createHotelState()), 'standard', 4, 2, 0, 'up')!;
+    expect(isHallway(state, 4, 2, 0)).toBe(false);
+    expect(addRoom(state, 'standard', 4, 2)).toBeNull();
+    state = demolishRoom(state, state.rooms[0].id)!;
+    expect(isHallway(state, 4, 2, 0)).toBe(true);
+  });
+
+  it('a room is usable only when its door opens onto hallway connected to the street', () => {
+    let state = addRoom(rich(createHotelState()), 'standard', 4, 2, 0, 'up')!;
     expect(isRoomReachable(state, state.rooms[0])).toBe(true);
+    // Another room built right outside the door blocks it
+    state = addRoom(state, 'standard', 4, 1, 0, 'up')!;
+    expect(isRoomReachable(state, state.rooms[0])).toBe(false);
+    expect(getAvailableRooms(state).map(r => r.id)).toEqual([state.rooms[1].id]);
+    // Turning the door to an open side fixes it, for free
+    const cash = state.cash;
+    state = setRoomDoor(state, state.rooms[0].id, 'down')!;
+    expect(isRoomReachable(state, state.rooms[0])).toBe(true);
+    expect(state.cash).toBe(cash);
   });
 
-  it('a hallway that never reaches the edge of the ground floor leads nowhere', () => {
-    let state = addRoom(rich(createHotelState()), 'standard', 4, 2)!;
-    state = hallway(state, 3, 3, 5); // interior stub
-    expect(getEntranceTiles(state)).toEqual([]);
+  it('a door facing the outside wall goes nowhere', () => {
+    const state = addRoom(rich(createHotelState()), 'standard', 4, 0, 0, 'up')!;
     expect(isRoomReachable(state, state.rooms[0])).toBe(false);
   });
 
-  it('diagonal contact is not a door', () => {
-    let state = addRoom(rich(createHotelState()), 'standard', 4, 2)!;
-    state = hallway(state, 3, 5, 9); // touches (4,2) only at the corner
+  it('a pocket of hallway walled in by rooms is cut off from the street', () => {
+    let state = rich(createHotelState());
+    // Wall in the tile (4,2) on all four sides; the room at (4,1) has its door into the pocket
+    state = addRoom(state, 'standard', 4, 1, 0, 'down')!;
+    state = addRoom(state, 'standard', 3, 2, 0, 'left')!;
+    state = addRoom(state, 'standard', 5, 2, 0, 'right')!;
+    state = addRoom(state, 'standard', 4, 3, 0, 'down')!;
+    expect(isHallway(state, 4, 2, 0)).toBe(true);
     expect(isRoomReachable(state, state.rooms[0])).toBe(false);
+    expect(state.rooms.slice(1).every(r => isRoomReachable(state, r))).toBe(true);
   });
 
-  it('hallways cost money, take a tile, and refund a share when removed', () => {
-    const state = rich(createHotelState());
-    const built = addFixture(state, 'hallway', 0, 0, 0)!;
-    expect(built.cash).toBe(state.cash - HALLWAY.buildCost);
-    expect(addFixture(built, 'hallway', 0, 0, 0)).toBeNull();
-    expect(addRoom(built, 'standard', 0, 0)).toBeNull();
-    const removed = demolishFixture(built, built.fixtures[0].id)!;
-    expect(removed.fixtures).toHaveLength(0);
-    expect(removed.cash).toBe(built.cash + getDemolishRefund(HALLWAY.buildCost));
+  it('without a door given, a room faces the first open side', () => {
+    let state = addRoom(rich(createHotelState()), 'standard', 4, 0)!; // up is the outside wall
+    expect(state.rooms[0].door).toBe('down');
+    state = addRoom(state, 'standard', 4, 1)!; // right outside it: up is that room
+    expect(state.rooms[1].door).toBe('down');
+    expect(findOpenDoor(state, { gridX: 4, gridY: 0, floor: 0 })).toBe('right');
   });
 
-  it('upper floors connect through an elevator that opens onto hallways on both floors', () => {
+  it('upper floors connect through an elevator', () => {
     let state = buildFloor(rich(createStarterHotel()))!.state;
-    state = addRoom(state, 'standard', 5, 2, 1)!;
-    state = addElevator(state, 0, 0)!; // opens onto the ground-floor row-1 hallway
-    expect(isRoomReachable(state, state.rooms[0])).toBe(false); // no hallway upstairs yet
-    state = { ...state, fixtures: [...state.fixtures, ...starterHallways(1)] };
+    state = addRoom(state, 'standard', 5, 2, 1, 'up')!;
+    expect(isRoomReachable(state, state.rooms[0])).toBe(false); // no way up yet
+    state = addElevator(state, 0, 0)!;
     expect(isRoomReachable(state, state.rooms[0])).toBe(true);
   });
 
   it('hallways buffer noise: rooms across a corridor do not hear each other', () => {
     let state = rich(createStarterHotel());
-    state = addRoom(state, 'standard', 5, 0)!; // above the row-1 hallway
-    state = addRoom(state, 'standard', 5, 2)!; // below it
+    state = addRoom(state, 'standard', 5, 0, 0, 'down')!; // above the row-1 hallway
+    state = addRoom(state, 'standard', 5, 2, 0, 'up')!; // below it
     state = {
       ...state,
       noiseSources: [],
@@ -83,7 +96,6 @@ describe('Hallways and access', () => {
 describe('Check-in desks', () => {
   it('without a desk, nobody can check in', () => {
     let state = rich(createHotelState());
-    state = hallway(state, 1, 0, 9);
     state = addRoom(state, 'standard', 5, 2)!;
     expect(getCheckInCapacity(state)).toBe(0);
     const result = processArrivals({ ...state, day: 6 }, 16, new PRNG(1));
@@ -95,9 +107,10 @@ describe('Check-in desks', () => {
     expect(addFixture(state, 'desk', 5, 5, 1)).toBeNull();
     state = addFixture(state, 'desk', 5, 5, 0)!;
     expect(state.cash).toBe(1_000_000 - 15000 - DESK.buildCost);
-    expect(getAccessibleDesks(state)).toHaveLength(0);
-    state = hallway(state, 4, 0, 9);
     expect(getAccessibleDesks(state)).toHaveLength(1);
+    // Hemmed in by rooms (the bottom edge is the outside wall)
+    for (const [x, y] of [[4, 5], [6, 5], [5, 4]]) state = addRoom(state, 'standard', x, y, 0, 'up')!;
+    expect(getAccessibleDesks(state)).toHaveLength(0);
   });
 
   it('each desk seats a limited number of front desk staff', () => {
@@ -125,14 +138,13 @@ describe('Check-in desks', () => {
 describe('Pathfinding', () => {
   it('walks from the street to a room along hallways only', () => {
     let state = createStarterHotel();
-    state = addRoom(state, 'standard', 6, 2)!;
+    state = addRoom(state, 'standard', 6, 2, 0, 'left')!;
     const [entrance] = getEntranceTiles(state);
-    const path = findPath(state, entrance, { gridX: 6, gridY: 2, floor: 0 })!;
+    const path = findPath(state, entrance, state.rooms[0])!;
     expect(path[0]).toEqual(entrance);
     expect(path[path.length - 1]).toEqual({ gridX: 6, gridY: 2, floor: 0 });
-    for (const step of path.slice(1, -1)) {
-      expect(state.fixtures.some(f => f.type === 'hallway' && f.gridX === step.gridX && f.gridY === step.gridY && f.floor === step.floor)).toBe(true);
-    }
+    expect(path[path.length - 2]).toEqual({ gridX: 5, gridY: 2, floor: 0 }); // in through the door
+    for (const step of path.slice(1, -1)) expect(isHallway(state, step.gridX, step.gridY, step.floor)).toBe(true);
     // Consecutive steps are adjacent
     for (let i = 1; i < path.length; i++) {
       const a = path[i - 1], b = path[i];
@@ -142,9 +154,8 @@ describe('Pathfinding', () => {
 
   it('rides the elevator to reach an upper floor, and starts from a non-walkable tile like the desk', () => {
     let state = buildFloor(rich(createStarterHotel()))!.state;
-    state = { ...state, fixtures: [...state.fixtures, ...starterHallways(1)] };
     state = addElevator(state, 0, 0)!;
-    state = addRoom(state, 'standard', 7, 3, 1)!; // off the second hallway row, reached via the right-hand spine
+    state = addRoom(state, 'standard', 7, 3, 1, 'down')!;
     const desk = state.fixtures.find(f => f.type === 'desk')!;
     const path = findPath(state, desk, { gridX: 7, gridY: 3, floor: 1 })!;
     expect(path[0]).toEqual({ gridX: desk.gridX, gridY: desk.gridY, floor: 0 });
@@ -153,9 +164,10 @@ describe('Pathfinding', () => {
   });
 
   it('returns null when there is no route', () => {
-    // Two rooms with no hallways anywhere
-    let state = addRoom(rich(createHotelState()), 'standard', 6, 2)!;
-    state = addRoom(state, 'standard', 2, 5)!;
-    expect(findPath(state, { gridX: 6, gridY: 2, floor: 0 }, { gridX: 2, gridY: 5, floor: 0 })).toBeNull();
+    // A room whose door faces another room
+    let state = addRoom(rich(createHotelState()), 'standard', 6, 2, 0, 'left')!;
+    state = addRoom(state, 'standard', 5, 2, 0, 'up')!;
+    expect(findPath(state, { gridX: 0, gridY: 0, floor: 0 }, state.rooms[0])).toBeNull();
+    expect(findPath(state, { gridX: 0, gridY: 0, floor: 0 }, state.rooms[1])).not.toBeNull();
   });
 });

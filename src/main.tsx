@@ -28,6 +28,9 @@ window.addEventListener('keydown', event => {
   if (event.key === 'PageUp' || event.key === 'PageDown') {
     event.preventDefault(); // switch floors, don't scroll the page
     controller.setFloor(controller.currentFloor + (event.key === 'PageUp' ? 1 : -1));
+  } else if ((event.key === 'r' || event.key === 'R') && !event.ctrlKey && !event.metaKey
+    && !(event.target instanceof HTMLInputElement && event.target.type === 'text')) {
+    controller.rotateDoor(); // turn the door of the next room
   } else if (event.key === 'Escape') {
     if (controller.tool) controller.selectTool(null);
     else if (controller.selection) controller.clearSelection();

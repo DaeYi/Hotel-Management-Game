@@ -146,7 +146,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(15);
+    expect(loaded!.version).toBe(16);
     expect(loaded!.state.noiseSources).toEqual([]);
     expect(loaded!.state.facilities).toEqual([]); // added by the v8->v9 step
     expect(loaded!.state.activeIncidents).toEqual([]);
@@ -179,7 +179,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(15);
+    expect(loaded!.version).toBe(16);
     expect(loaded!.state.reviewScore).toBeCloseTo(7.2, 5); // 72 / 10
     expect((loaded!.state as any).reputationScore).toBeUndefined();
     expect(loaded!.state.bookings[0].reviewScore).toBe(8); // rating 4 * 2
@@ -310,7 +310,7 @@ describe('GuestManager', () => {
     const prng = new PRNG(42);
     const room: Room = {
       id: 'test', type: 'standard', gridX: 0, gridY: 0,
-      pricePerNight: 80, condition: 50, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0, dailyCleanHoursRemaining: 0,
+      pricePerNight: 80, condition: 50, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0, door: 'down' as const, dailyCleanHoursRemaining: 0,
     };
     const guest: Guest = {
       id: 'g1', budget: 100, stayLength: 1, trait: 'normal',
@@ -331,7 +331,7 @@ describe('GuestManager', () => {
     const prng = new PRNG(42);
     const room: Room = {
       id: 'test', type: 'standard', gridX: 0, gridY: 0,
-      pricePerNight: 80, condition: 100, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0, dailyCleanHoursRemaining: 0,
+      pricePerNight: 80, condition: 100, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0, door: 'down' as const, dailyCleanHoursRemaining: 0,
     };
     const guest: Guest = {
       id: 'g1', budget: 200, stayLength: 1, trait: 'normal',
@@ -357,7 +357,7 @@ describe('GuestManager', () => {
 
     const lowRoom: Room = {
       id: 'test', type: 'standard', gridX: 0, gridY: 0,
-      pricePerNight: 80, condition: 10, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0, dailyCleanHoursRemaining: 0,
+      pricePerNight: 80, condition: 10, status: 'occupied' as const, guestId: 'g1', cleanliness: 100, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0, door: 'down' as const, dailyCleanHoursRemaining: 0,
     };
     const highRoom: Room = { ...lowRoom, condition: 90 };
 
@@ -418,7 +418,7 @@ describe('HousekeepingManager', () => {
     const baseRoom: Room = {
       id: 'r', type: 'standard', gridX: 0, gridY: 0, pricePerNight: 80,
       condition: 100, cleanliness: 0, status: 'occupied', guestId: 'g1',
-      cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0, dailyCleanHoursRemaining: 0,
+      cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0, door: 'down' as const, dailyCleanHoursRemaining: 0,
     };
 
     const quick = startTurnoverCleaning(baseRoom, 'quick');
@@ -842,7 +842,7 @@ describe('SeasonManager', () => {
 describe('EconomyManager', () => {
   it('applies debt interest when cash is negative', () => {
     const state = { ...createHotelState(), cash: -1000, rooms: [
-      { id: 'r1', type: 'standard' as const, gridX: 0, gridY: 0, pricePerNight: 80, condition: 100, cleanliness: 100, status: 'vacant' as const, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0, dailyCleanHoursRemaining: 0 },
+      { id: 'r1', type: 'standard' as const, gridX: 0, gridY: 0, pricePerNight: 80, condition: 100, cleanliness: 100, status: 'vacant' as const, cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0, door: 'down' as const, dailyCleanHoursRemaining: 0 },
     ] };
     const costs = processDailyCosts(state);
     // Interest on $1000 debt = $50, plus operating cost of 1 room = $10
@@ -975,7 +975,7 @@ describe('StoryGenerator', () => {
     return {
       id: 'r1', type: 'standard', gridX: 1, gridY: 1, pricePerNight: 80,
       condition: 100, cleanliness: 100, status: 'occupied', guestId: 'g1',
-      cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0, dailyCleanHoursRemaining: 0,
+      cleaningHoursRemaining: 0, lastDailyCleanDay: 0, decor: 100, renovationHoursRemaining: 0, floor: 0, door: 'down' as const, dailyCleanHoursRemaining: 0,
       ...overrides,
     };
   }
@@ -1333,11 +1333,11 @@ describe('simulate (headless)', () => {
     expect(result.finalCash).not.toBeNaN();
   });
 
-  it('40 rooms: handles a full floor', () => {
+  it('32 rooms: fills every room row on the ground floor', () => {
     const result = simulate(30, 42, (state, prng) => {
       let s = state;
       for (let x = 0; x < 8; x++) {
-        for (let y = 0; y < 5; y++) {
+        for (const y of [0, 2, 3, 5]) { // leaving the template corridors (rows 1 and 4) open
           const r = addRoom(s, 'standard', x, y);
           if (r) s = r;
         }

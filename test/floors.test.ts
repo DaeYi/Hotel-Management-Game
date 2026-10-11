@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { PRNG } from '../src/simulation/prng.js';
 import {
-  createHotelState, createStarterHotel, starterHallways, addRoom, addFacility, buildFloor, getNextFloorCost, getFloorsBuildCost, addElevator, demolishElevator,
+  createHotelState, createStarterHotel, addRoom, addFacility, buildFloor, getNextFloorCost, getFloorsBuildCost, addElevator, demolishElevator,
   isTileOccupied, getAvailableRooms, getElevatorLoad, isRoomReachable, getElevatorWaitPenalty, formatRoomLabel, getAdjacentFacilities,
 } from '../src/simulation/HotelState.js';
 import { calculateRoomNoise } from '../src/simulation/NoiseManager.js';
@@ -9,7 +9,7 @@ import { calculateGuestReviewBreakdown } from '../src/simulation/GuestManager.js
 import { processDailyCosts } from '../src/simulation/EconomyManager.js';
 import { getExpectedPrice } from '../src/simulation/StarRatingManager.js';
 import { calculateValuation } from '../src/simulation/ObjectivesManager.js';
-import { packIntoLayout } from '../src/simulation/SaveManager.js';
+import { packIntoLayout, openFloorPlan } from '../src/simulation/SaveManager.js';
 import { simulate } from '../src/simulation/simulate.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
 import { FLOORS, ELEVATOR, GRID, NOISE, ROOM_CONFIG, STARTER_LAYOUT } from '../src/config/balance.js';
@@ -113,13 +113,11 @@ describe('Elevators', () => {
   });
 
   it('upper-floor rooms cannot be booked without an elevator', () => {
-    // Starter lobby on the ground floor, hallways on floor 2 too
     let state = withFloors({ ...createStarterHotel(), cash: 1_000_000 }, 2);
-    state = { ...state, fixtures: [...state.fixtures, ...starterHallways(1)] };
     state = addRoom(state, 'standard', 5, 2, 0)!;
     state = addRoom(state, 'standard', 5, 2, 1)!;
     expect(getAvailableRooms(state).map(r => r.floor)).toEqual([0]);
-    state = addElevator(state, 0, 0)!; // shaft opens onto the row-1 hallway on both floors
+    state = addElevator(state, 0, 0)!; // the shaft connects the floors
     expect(getAvailableRooms(state)).toHaveLength(2);
   });
 
@@ -187,7 +185,25 @@ describe('Noise across floors', () => {
   });
 });
 
-describe('Save migration into the hallway layout', () => {
+describe('Save migration into the open floor plan', () => {
+  it('drops the old hallway tiles and points each door at a side that was hallway', () => {
+    const state: any = { ...createHotelState(), cash: 0 };
+    state.rooms = [
+      { id: 'a', type: 'standard', gridX: 4, gridY: 2, floor: 0 },
+      { id: 'b', type: 'standard', gridX: 4, gridY: 0, floor: 0 },
+    ];
+    state.fixtures = [
+      ...Array.from({ length: 10 }, (_, x) => ({ id: `hallway-0-${x}-1`, type: 'hallway', gridX: x, gridY: 1, floor: 0 })),
+      { id: 'desk-0-3-0', type: 'desk', gridX: 3, gridY: 0, floor: 0 },
+    ];
+    openFloorPlan(state);
+    expect(state.fixtures.map((f: any) => f.id)).toEqual(['desk-0-3-0']);
+    // Room a (row 2) had the hallway above it, room b (row 0) below it -- even
+    // though the old empty tiles beside them are hallway now too
+    expect(state.rooms.map((r: any) => r.door)).toEqual(['up', 'down']);
+    expect(state.rooms.every((r: any) => isRoomReachable(state, r))).toBe(true);
+  });
+
   it('re-packs an old layout into STARTER_LAYOUT room tiles across floors, with hallways, a desk, and an elevator', () => {
     const state: any = { ...createHotelState(), cash: 0 };
     state.rooms = Array.from({ length: 50 }, (_, i) => ({ id: `room-${i}`, type: 'standard', gridX: i % 20, gridY: Math.floor(i / 20) }));
@@ -197,11 +213,15 @@ describe('Save migration into the hallway layout', () => {
     delete state.fixtures;
 
     packIntoLayout(state);
+    openFloorPlan(state); // the next migration step
 
     expect(state.floorCount).toBe(2); // 51 items; 33 ground-floor slots + 35 upper
     expect(state.elevators).toEqual([{ id: 'elevator-0-0', gridX: 0, gridY: 0 }]);
     expect(state.fixtures.filter((f: any) => f.type === 'desk')).toHaveLength(1);
-    expect(state.fixtures.filter((f: any) => f.type === 'hallway')).toHaveLength(2 * STARTER_LAYOUT.hallwayTiles.length);
+    expect(state.fixtures.filter((f: any) => f.type === 'hallway')).toHaveLength(0);
+    for (let floor = 0; floor < 2; floor++) {
+      expect(STARTER_LAYOUT.hallwayTiles.every(([x, y]) => !isTileOccupied(state, x, y, floor))).toBe(true);
+    }
 
     const items = [...state.rooms, ...state.facilities];
     expect(items.map((r: any) => r.id)).toContain('room-0'); // ids kept
@@ -216,6 +236,7 @@ describe('Save migration into the hallway layout', () => {
     state.rooms = Array.from({ length: 6 }, (_, i) => ({ id: `room-${i}`, type: 'standard', gridX: i * 3, gridY: 7 }));
     state.facilities = [];
     packIntoLayout(state);
+    openFloorPlan(state);
     expect(state.floorCount).toBe(1);
     expect(state.elevators).toEqual([]);
     expect(state.rooms.every((r: any) => r.floor === 0)).toBe(true);

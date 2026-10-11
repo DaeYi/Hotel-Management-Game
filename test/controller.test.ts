@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { GameController, TICK_INTERVAL_MS } from '../src/game/GameController.js';
-import { HALLWAY, ROOM_CONFIG, ECONOMY } from '../src/config/balance.js';
+import { ROOM_CONFIG, ECONOMY } from '../src/config/balance.js';
 import { loadGame } from '../src/simulation/SaveManager.js';
 
 /** A controller on a fresh game with the tutorial already dismissed. */
@@ -91,32 +91,37 @@ describe('GameController: building', () => {
     const c = freshController();
     c.selectTool('standard');
     c.tileMove({ gridX: 5, gridY: 2 }, false);
-    expect(c.hover).toEqual({ gridX: 5, gridY: 2, canPlace: true });
-    c.tileMove({ gridX: 5, gridY: 1 }, false); // the lobby hallway
+    expect(c.hover).toEqual({ gridX: 5, gridY: 2, canPlace: true, door: 'down', doorOpen: true });
+    c.tileMove({ gridX: 3, gridY: 0 }, false); // the lobby desk
     expect(c.hover?.canPlace).toBe(false);
+    c.tileMove({ gridX: 5, gridY: 5 }, false); // bottom row: a door facing down opens onto the outside wall
+    expect(c.hover).toMatchObject({ canPlace: true, doorOpen: false });
     c.tileMove(null, false);
     expect(c.hover).toBeNull();
   });
 
-  it('drag-paints hallways across every tile, even when the pointer skips some', () => {
+  it('new rooms get the chosen door; R turns it, and the inspector turns an existing door', () => {
     const c = freshController();
-    c.selectTool('hallway');
-    c.tileDown({ gridX: 0, gridY: 3 });
-    c.tileMove({ gridX: 6, gridY: 3 }, true); // one big jump
-    c.pointerUp();
-    // (9, 3) is the starter layout's hallway spine; everything from 0 to 6 is new
-    const row3 = c.state.fixtures.filter(f => f.type === 'hallway' && f.gridY === 3 && f.gridX <= 6);
-    expect(row3.map(f => f.gridX).sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6]);
-    expect(c.state.cash).toBe(ECONOMY.startingCash - 7 * HALLWAY.buildCost);
+    c.selectTool('standard');
+    c.rotateDoor(); // down -> left
+    c.tileDown({ gridX: 5, gridY: 2 });
+    expect(c.state.rooms[0].door).toBe('left');
+    c.selectTool(null);
+    c.turnRoomDoor(c.state.rooms[0].id);
+    expect(c.state.rooms[0].door).toBe('up');
   });
 
-  it('bulldozes hallways but leaves rooms to their inspector', () => {
+  it('drag-bulldozes desks and the like back to hallway, and leaves rooms to their inspector', () => {
     const c = freshController();
     c.selectTool('standard');
     c.tileDown({ gridX: 5, gridY: 2 });
+    c.selectTool('closet');
+    c.tileDown({ gridX: 6, gridY: 4 });
     c.selectTool('bulldoze');
-    c.tileDown({ gridX: 5, gridY: 1 });
-    expect(c.state.fixtures.some(f => f.gridX === 5 && f.gridY === 1)).toBe(false);
+    c.tileDown({ gridX: 4, gridY: 4 });
+    c.tileMove({ gridX: 7, gridY: 4 }, true);
+    c.pointerUp();
+    expect(c.state.fixtures.some(f => f.type === 'closet')).toBe(false);
     c.tileDown({ gridX: 5, gridY: 2 });
     expect(c.state.rooms).toHaveLength(1);
   });

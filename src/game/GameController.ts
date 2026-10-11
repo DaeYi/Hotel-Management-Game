@@ -1,10 +1,11 @@
 import type {
-  HotelState, RoomType, FacilityType, TileType, StaffConfig, AmenityTier, CleaningQuality, DailyCleaningCadence, GameEvent, FixtureType,
+  HotelState, RoomType, FacilityType, TileType, StaffConfig, AmenityTier, CleaningQuality, DailyCleaningCadence, GameEvent, FixtureType, Direction,
 } from '../simulation/types';
 import {
   createStarterHotel, addFixture, demolishFixture, demolishElevator, addRoom, setRoomPrice, repairRoom, demolishRoom,
-  addFacility, demolishFacility, renovateRoom, renovateFacility, upgradeFacility, addElevator, buildFloor,
+  addFacility, demolishFacility, renovateRoom, renovateFacility, upgradeFacility, addElevator, buildFloor, setRoomDoor,
 } from '../simulation/HotelState';
+import { rotateDirection, doorTile, isReachableHallway } from '../simulation/Layout';
 import { startCampaign } from '../simulation/MarketingManager';
 import { tickSimulation } from '../simulation/tick';
 import { checkBankruptcy, repayLoan } from '../simulation/EconomyManager';
@@ -17,11 +18,11 @@ import { ToastQueue } from './ToastQueue';
 // action. The renderer (Phaser today, 3D later) and the HTML interface both
 // read from it and call into it; neither owns any game logic.
 
-/** Anything the build panel can place (a room, facility, hallway, desk, closet, break room, or elevator shaft), or the bulldoze tool. */
+/** Anything the build panel can place (a room, facility, desk, closet, break room, or elevator shaft), or the bulldoze tool. */
 export type BuildType = TileType | 'elevator' | FixtureType | 'bulldoze';
 
 /** Tools that place on (or clear) one tile per click and can be dragged across tiles. */
-export const PAINTABLE_TYPES = new Set<BuildType>(['hallway', 'bulldoze']);
+export const PAINTABLE_TYPES = new Set<BuildType>(['bulldoze']);
 
 export type PanelId = 'staff' | 'housekeeping' | 'amenities' | 'marketing' | 'finance' | 'story' | 'goals';
 
@@ -60,7 +61,10 @@ export class GameController {
   tutorialOpen: boolean;
   confirmingNewGame = false;
   gameOver = false;
-  hover: (Tile & { canPlace: boolean }) | null = null;
+  /** Which side new rooms get their door on (R rotates it). */
+  doorDirection: Direction = 'down';
+  /** The placement preview: for rooms, also where the door goes and whether it opens onto a connected hallway. */
+  hover: (Tile & { canPlace: boolean; door?: Direction; doorOpen?: boolean }) | null = null;
   feedback: PlacementFeedback | null = null;
   readonly toasts = new ToastQueue();
 
@@ -249,14 +253,14 @@ export class GameController {
   /** The state after building `type` at a tile on the current floor, or null if not allowed (also the hover check). */
   tryBuild(type: BuildType, gridX: number, gridY: number): HotelState | null {
     if (type === 'bulldoze') return this.bulldoze(gridX, gridY);
-    if (type === 'hallway' || type === 'desk' || type === 'closet' || type === 'breakroom') return addFixture(this.state, type, gridX, gridY, this.currentFloor);
+    if (type === 'desk' || type === 'closet' || type === 'breakroom') return addFixture(this.state, type, gridX, gridY, this.currentFloor);
     if (type === 'elevator') return addElevator(this.state, gridX, gridY);
-    if (type in ROOM_CONFIG) return addRoom(this.state, type as RoomType, gridX, gridY, this.currentFloor);
+    if (type in ROOM_CONFIG) return addRoom(this.state, type as RoomType, gridX, gridY, this.currentFloor, this.doorDirection);
     if (type in FACILITY_CONFIG) return addFacility(this.state, type as FacilityType, gridX, gridY, this.currentFloor);
     return null;
   }
 
-  /** Remove a hallway, desk, staff closet, break room, or elevator shaft. Rooms and facilities are demolished from their inspectors. */
+  /** Remove a desk, staff closet, break room, or elevator shaft (the tile goes back to hallway). Rooms and facilities are demolished from their inspectors. */
   private bulldoze(gridX: number, gridY: number): HotelState | null {
     const fixture = this.state.fixtures.find(f => f.floor === this.currentFloor && f.gridX === gridX && f.gridY === gridY);
     if (fixture) return demolishFixture(this.state, fixture.id);
@@ -286,9 +290,8 @@ export class GameController {
 
   /**
    * Pointer moved over the grid (tile null = off the grid). Updates the
-   * placement preview, and while the button is down, drag-paints hallways
-   * or bulldozes -- filling every tile between pointer events, since a fast
-   * drag skips tiles.
+   * placement preview, and while the button is down, drag-bulldozes --
+   * filling every tile between pointer events, since a fast drag skips tiles.
    */
   tileMove(tile: Tile | null, pointerDown: boolean) {
     const before = this.state;
@@ -318,7 +321,29 @@ export class GameController {
   }
 
   private refreshHover(tile: Tile | null) {
-    this.hover = this.tool && tile ? { ...tile, canPlace: this.tryBuild(this.tool, tile.gridX, tile.gridY) !== null } : null;
+    if (!this.tool || !tile) {
+      this.hover = null;
+      return;
+    }
+    this.hover = { ...tile, canPlace: this.tryBuild(this.tool, tile.gridX, tile.gridY) !== null };
+    if (this.tool in ROOM_CONFIG) {
+      const door = this.doorDirection;
+      this.hover.door = door;
+      this.hover.doorOpen = isReachableHallway(this.state, doorTile({ ...tile, floor: this.currentFloor }, door));
+    }
+  }
+
+  /** Turn the door of the next room to be built a quarter turn clockwise. */
+  rotateDoor() {
+    this.doorDirection = rotateDirection(this.doorDirection);
+    if (this.hover) this.refreshHover(this.hover);
+    this.changed();
+  }
+
+  /** Turn an existing room's door a quarter turn clockwise (free). */
+  turnRoomDoor(roomId: string) {
+    const room = this.state.rooms.find(r => r.id === roomId);
+    if (room) this.apply(setRoomDoor(this.state, roomId, rotateDirection(room.door)));
   }
 
   clearSelection() {

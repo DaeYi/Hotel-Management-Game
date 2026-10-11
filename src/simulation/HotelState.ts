@@ -1,6 +1,6 @@
-import type { HotelState, Room, RoomType, Facility, FacilityType, TileType, Elevator, GameEvent, Fixture, FixtureType } from './types.js';
-import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS, FLOORS, ELEVATOR, HALLWAY, DESK, CLOSET, BREAK_ROOM, STARTER_LAYOUT } from '../config/balance.js';
-import { isTileAccessible } from './Layout.js';
+import type { HotelState, Room, RoomType, Facility, FacilityType, TileType, Elevator, GameEvent, Fixture, FixtureType, Direction } from './types.js';
+import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS, FLOORS, ELEVATOR, DESK, CLOSET, BREAK_ROOM, STARTER_LAYOUT } from '../config/balance.js';
+import { isTileAccessible, findOpenDoor } from './Layout.js';
 import { createConstructionNoise } from './NoiseManager.js';
 import { getExpectedPrice, getPriceMultiplier } from './StarRatingManager.js';
 
@@ -52,16 +52,11 @@ export function createHotelState(): HotelState {
   };
 }
 
-/** The STARTER_LAYOUT hallways on one floor (positions only, no cost). */
-export function starterHallways(floor: number): Fixture[] {
-  return STARTER_LAYOUT.hallwayTiles.map(([x, y]): Fixture => ({ id: `hallway-${floor}-${x}-${y}`, type: 'hallway', gridX: x, gridY: y, floor }));
-}
-
-/** A new game: the empty hotel plus a free lobby -- ground-floor hallways and one check-in desk. */
+/** A new game: the empty hotel (all open hallway) plus a free check-in desk. */
 export function createStarterHotel(): HotelState {
   const [deskX, deskY] = STARTER_LAYOUT.deskTiles[0];
   const desk: Fixture = { id: `desk-0-${deskX}-${deskY}`, type: 'desk', gridX: deskX, gridY: deskY, floor: 0 };
-  return { ...createHotelState(), fixtures: [...starterHallways(0), desk] };
+  return { ...createHotelState(), fixtures: [desk] };
 }
 
 /** Star rating a room or facility type unlocks at. */
@@ -82,12 +77,19 @@ export function isValidTile(state: HotelState, gridX: number, gridY: number, flo
     && floor >= 0 && floor < state.floorCount;
 }
 
+/**
+ * Build a room on an open hallway tile. `door` is the side its door is on;
+ * left out, it faces the first side that opens onto a connected hallway.
+ * A room whose door faces a wall still gets built -- it just can't be used
+ * until the player opens a path to it.
+ */
 export function addRoom(
   state: HotelState,
   type: RoomType,
   gridX: number,
   gridY: number,
-  floor = 0
+  floor = 0,
+  door?: Direction,
 ): HotelState | null {
   const config = ROOM_CONFIG[type];
 
@@ -115,6 +117,7 @@ export function addRoom(
     gridX,
     gridY,
     floor,
+    door: door ?? findOpenDoor(state, { gridX, gridY, floor }) ?? 'down',
     pricePerNight: startingPrice,
     condition: 100,
     cleanliness: HOUSEKEEPING.initialCleanliness,
@@ -156,6 +159,12 @@ export function setRoomPrice(
 /** Refund amount when demolishing a room or facility: a fixed fraction of build cost. */
 export function getDemolishRefund(buildCost: number): number {
   return Math.floor(buildCost * ECONOMY.demolishRefundRate);
+}
+
+/** Move a room's door to another side (free). */
+export function setRoomDoor(state: HotelState, roomId: string, door: Direction): HotelState | null {
+  if (!state.rooms.some(r => r.id === roomId)) return null;
+  return { ...state, rooms: state.rooms.map(r => r.id === roomId ? { ...r, door } : r) };
 }
 
 export function demolishRoom(state: HotelState, roomId: string): HotelState | null {
@@ -264,7 +273,7 @@ export function getOccupancyRate(state: HotelState): number {
  * street -- for upper floors, through an elevator (see Layout.ts).
  */
 export function isRoomReachable(state: HotelState, room: Room): boolean {
-  return isTileAccessible(state, room.gridX, room.gridY, room.floor);
+  return isTileAccessible(state, room.gridX, room.gridY, room.floor, room.door);
 }
 
 export function getAvailableRooms(state: HotelState): Room[] {
@@ -273,7 +282,7 @@ export function getAvailableRooms(state: HotelState): Room[] {
     .sort((a, b) => a.pricePerNight - b.pricePerNight); // ascending price
 }
 
-/** Check if a tile on a floor is taken by a room, facility, hallway, desk, or an elevator shaft (which spans every floor). */
+/** Check if a tile on a floor has something built on it: a room, facility, fixture, or an elevator shaft (which spans every floor). Free tiles are hallway. */
 export function isTileOccupied(state: HotelState, gridX: number, gridY: number, floor: number): boolean {
   return state.rooms.some(r => r.floor === floor && r.gridX === gridX && r.gridY === gridY)
     || state.facilities.some(f => f.floor === floor && f.gridX === gridX && f.gridY === gridY)
@@ -282,13 +291,12 @@ export function isTileOccupied(state: HotelState, gridX: number, gridY: number, 
 }
 
 export const FIXTURE_COST: Record<FixtureType, number> = {
-  hallway: HALLWAY.buildCost,
   desk: DESK.buildCost,
   closet: CLOSET.buildCost,
   breakroom: BREAK_ROOM.buildCost,
 };
 
-/** Build a hallway tile, check-in desk (ground floor only), staff closet, or staff break room. */
+/** Build a check-in desk (ground floor only), staff closet, or staff break room on an open hallway tile. */
 export function addFixture(state: HotelState, type: FixtureType, gridX: number, gridY: number, floor: number): HotelState | null {
   if (!isValidTile(state, gridX, gridY, floor)) return null;
   if (isTileOccupied(state, gridX, gridY, floor)) return null;

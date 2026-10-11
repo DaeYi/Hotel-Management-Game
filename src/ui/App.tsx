@@ -179,7 +179,7 @@ function ZeroRoomsPrompt() {
   return (
     <div class="card zero-rooms">
       <div class="lead">Select a room type to build {'→'}</div>
-      <div class="dim small">then click a tile next to a hallway</div>
+      <div class="dim small">then click a tile; keep its door (R to turn) on an open hallway</div>
     </div>
   );
 }

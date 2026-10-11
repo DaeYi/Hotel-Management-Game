@@ -1,8 +1,9 @@
 import Phaser from 'phaser';
-import type { HotelState, RoomType, FacilityType, GuestTrait } from '../simulation/types';
+import type { HotelState, RoomType, FacilityType, GuestTrait, Direction } from '../simulation/types';
 import { GRID, ECONOMY, NOISE, FACILITY_CONFIG, DECOR } from '../config/balance';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
 import { formatRoomLabel, isRoomReachable } from '../simulation/HotelState';
+import { isHallway } from '../simulation/Layout';
 
 /** Guest dot color by trait, in one place so every trait gets an explicit,
  * distinct color instead of silently falling through to the default. */
@@ -109,8 +110,8 @@ export class GridRenderer {
     return { gridX, gridY };
   }
 
-  /** Show a ghost preview of where the tile will be placed */
-  showHoverPreview(gridX: number, gridY: number, type: string, canPlace: boolean) {
+  /** Show a ghost preview of where the tile will be placed (rooms: with their door, red if it opens onto no connected hallway) */
+  showHoverPreview(gridX: number, gridY: number, type: string, canPlace: boolean, door?: Direction, doorOpen?: boolean) {
     this.hoverGraphics.clear();
     const x = GRID_OFFSET_X + gridX * TILE_SIZE;
     const y = GRID_OFFSET_Y + gridY * TILE_SIZE;
@@ -118,13 +119,14 @@ export class GridRenderer {
     // Get color: room types use ROOM_COLORS, facilities use FACILITY_CONFIG
     const color = ROOM_COLORS[type as RoomType]
       ?? FACILITY_CONFIG[type]?.color
-      ?? (type === 'hallway' ? HALLWAY_COLOR : type === 'desk' ? DESK_COLOR : type === 'closet' ? CLOSET_COLOR : type === 'breakroom' ? BREAK_ROOM_COLOR : type === 'bulldoze' ? 0xc0392b : ELEVATOR_COLOR);
+      ?? (type === 'desk' ? DESK_COLOR : type === 'closet' ? CLOSET_COLOR : type === 'breakroom' ? BREAK_ROOM_COLOR : type === 'bulldoze' ? 0xc0392b : ELEVATOR_COLOR);
 
     if (canPlace) {
       this.hoverGraphics.fillStyle(color, 0.4);
       this.hoverGraphics.fillRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);
       this.hoverGraphics.lineStyle(2, color, 0.8);
       this.hoverGraphics.strokeRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+      if (door) this.drawDoor(this.hoverGraphics, x, y, door, doorOpen ? 0xffffff : 0xe74c3c, 1);
     } else {
       // Red X for invalid placement
       this.hoverGraphics.fillStyle(0xe74c3c, 0.2);
@@ -133,6 +135,18 @@ export class GridRenderer {
       this.hoverGraphics.lineBetween(x + 6, y + 6, x + TILE_SIZE - 6, y + TILE_SIZE - 6);
       this.hoverGraphics.lineBetween(x + TILE_SIZE - 6, y + 6, x + 6, y + TILE_SIZE - 6);
     }
+  }
+
+  /** A door: a gap-colored bar on the edge of the tile, on the side it opens. */
+  private drawDoor(g: Phaser.GameObjects.Graphics, x: number, y: number, door: Direction, color: number, alpha: number) {
+    const long = TILE_SIZE * 0.4;
+    const thick = 4;
+    const mid = (TILE_SIZE - long) / 2;
+    g.fillStyle(color, alpha);
+    if (door === 'up') g.fillRect(x + mid, y, long, thick);
+    else if (door === 'down') g.fillRect(x + mid, y + TILE_SIZE - thick, long, thick);
+    else if (door === 'left') g.fillRect(x, y + mid, thick, long);
+    else g.fillRect(x + TILE_SIZE - thick, y + mid, thick, long);
   }
 
   clearHoverPreview() {
@@ -176,6 +190,8 @@ export class GridRenderer {
 
       this.roomGraphics.fillStyle(color, alpha);
       this.roomGraphics.fillRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+      // The door: hallway-colored where it opens onto a connected hallway, red where it's blocked
+      this.drawDoor(this.roomGraphics, x, y, room.door, isRoomReachable(state, room) ? 0xd8d8e8 : 0xe74c3c, 0.95);
 
       // Brown strip along the top once decor goes stale (renovate to clear it)
       if (room.decor < DECOR.freshThreshold && room.status !== 'renovating') {
@@ -212,19 +228,25 @@ export class GridRenderer {
     }
   }
 
-  /** Draw one floor's hallways, check-in desks, closets, and break rooms. Call before rooms, which share the graphics layer. */
+  /** Draw one floor's open hallway (every free tile), check-in desks, closets, and break rooms. Shares the rooms' graphics layer. */
   renderFixtures(state: HotelState, floor: number) {
-    for (const fixture of state.fixtures) {
-      if (fixture.floor !== floor) continue;
-      const x = GRID_OFFSET_X + fixture.gridX * TILE_SIZE;
-      const y = GRID_OFFSET_Y + fixture.gridY * TILE_SIZE;
-      if (fixture.type === 'hallway') {
-        // Carpet runner: a flat strip with a faint centre line
+    // Carpet on every tile nothing has been built on
+    for (let gy = 0; gy < GRID.height; gy++) {
+      for (let gx = 0; gx < GRID.width; gx++) {
+        if (!isHallway(state, gx, gy, floor) || state.elevators.some(e => e.gridX === gx && e.gridY === gy)) continue;
+        const x = GRID_OFFSET_X + gx * TILE_SIZE;
+        const y = GRID_OFFSET_Y + gy * TILE_SIZE;
         this.roomGraphics.fillStyle(HALLWAY_COLOR, 1);
         this.roomGraphics.fillRect(x, y, TILE_SIZE, TILE_SIZE);
         this.roomGraphics.fillStyle(0x6b6b85, 0.6);
         this.roomGraphics.fillRect(x + TILE_SIZE / 2 - 1, y + TILE_SIZE / 2 - 1, 2, 2);
-      } else if (fixture.type === 'closet') {
+      }
+    }
+    for (const fixture of state.fixtures) {
+      if (fixture.floor !== floor) continue;
+      const x = GRID_OFFSET_X + fixture.gridX * TILE_SIZE;
+      const y = GRID_OFFSET_Y + fixture.gridY * TILE_SIZE;
+      if (fixture.type === 'closet') {
         // Staff closet: a door with shelves behind it
         this.roomGraphics.fillStyle(CLOSET_COLOR, 0.85);
         this.roomGraphics.fillRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);

@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { HotelState, GameEvent, Room, GuestTrait, Fixture } from '../simulation/types';
-import { findPath, getEntranceTiles, getAccessibleDesks, getMannedDeskStaff, getStaffBases, getAccessibleBreakRooms } from '../simulation/Layout';
+import { findPath, getFrontDoor, getAccessibleDesks, getMannedDeskStaff, getStaffBases, getAccessibleBreakRooms } from '../simulation/Layout';
 import { planHousekeeping, currentJob } from '../simulation/HousekeepingManager';
 import { planMaintenance } from '../simulation/MaintenanceManager';
 import { TRAVEL, BREAK_ROOM } from '../config/balance';
@@ -88,12 +88,11 @@ export class ActorLayer {
   }
 
   private spawnArrival(state: HotelState, room: Room, guestId: string, trait: GuestTrait | undefined) {
-    const entrances = getEntranceTiles(state);
+    const entrance = getFrontDoor(state);
     const desks = getAccessibleDesks(state);
-    if (entrances.length === 0 || desks.length === 0) return;
+    if (!entrance || desks.length === 0) return;
 
     const desk = desks[this.nextDesk++ % desks.length];
-    const entrance = entrances[guestId.length % entrances.length];
     const toDesk = findPath(state, entrance, desk);
     if (!toDesk) return;
     toDesk.pop(); // stop at the counter, not on it
@@ -112,9 +111,9 @@ export class ActorLayer {
   }
 
   private spawnDeparture(state: HotelState, room: Room) {
-    const entrances = getEntranceTiles(state);
-    if (entrances.length === 0) return;
-    const path = findPath(state, room, entrances[0]);
+    const entrance = getFrontDoor(state);
+    if (!entrance) return;
+    const path = findPath(state, room, entrance);
     if (!path) return;
     this.guests.push({
       id: `leave-${room.id}-${Math.random()}`,

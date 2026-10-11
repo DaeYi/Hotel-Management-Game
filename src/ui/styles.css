@@ -154,6 +154,11 @@ pre.stats { font-family: inherit; color: var(--text-body); font-size: 12px; line
 }
 .build-option .details { display: flex; justify-content: space-between; gap: 4px; font-size: 10px; color: var(--text-body); }
 .build-option .details .sub { color: var(--text-dim); font-size: 9px; }
+.door-picker {
+  display: block; width: 100%; text-align: left; margin: -2px 0 6px; padding: 3px 6px;
+  border: 1px dashed var(--text-dim); border-radius: 6px; background: transparent;
+  color: #fff; font-size: 10px;
+}
 .build-option .details .unaffordable { color: var(--bad); }
 
 /* ---------- Floor stack ---------- */
