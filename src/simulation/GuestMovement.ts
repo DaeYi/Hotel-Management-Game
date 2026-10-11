@@ -209,6 +209,7 @@ function stayStillValid(state: HotelState, stay: StayLeg): boolean {
     return checkInLanes(state).some(l => l.desk.id === stay.placeId && sameTile(l.front, stay.at));
   }
   if (stay.activity === 'visit') return getOpenFacilities(state).some(f => f.id === stay.placeId && f.door === stay.at.door);
+  if (stay.activity === 'away') return isEntranceTile(state, stay.at); // out through a street entrance
   return true;
 }
 
@@ -264,8 +265,22 @@ function continueTrip(state: HotelState, legs: Leg[], t: number, destination: Ti
     return true;
   };
 
-  for (const leg of legs) {
+  for (const original of legs) {
+    let leg = original;
+    // Out in town and their entrance is gone: they come back in by another
+    if (leg.kind === 'stay' && leg.activity === 'away' && leg.end > t && !isEntranceTile(state, leg.at)) {
+      const exit = pos ? routeToStreet(state, pos, PACE) : null;
+      if (!exit) continue;
+      leg = { ...leg, at: exit.path[exit.path.length - 1] };
+    }
     if (leg.kind !== 'stay' || leg.end <= t || !stayStillValid(state, leg)) continue;
+    if (leg.activity === 'away' && !notStarted && leg.start < t) {
+      // Already out in town: they come back in by this entrance at the same time
+      pos = leg.at;
+      out.push({ ...leg, start: time, end: leg.end });
+      time = leg.end;
+      continue;
+    }
     const ongoing = !notStarted && leg.start < t && pos !== null && sameTile(pos, leg.at);
     if (!goTo(leg.at)) continue;
     const length = ongoing ? leg.end - t : leg.end - leg.start;

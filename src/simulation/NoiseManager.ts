@@ -1,11 +1,18 @@
 import type { HotelState, Room, Guest, NoiseSource } from './types.js';
 import { NOISE, FACILITY_CONFIG } from '../config/balance.js';
+import { isGuestAway } from './GuestMovement.js';
+import { hourStart } from './Movement.js';
+
+/** The moment noise is judged at: the middle of the hour being played out. */
+const midHour = (state: HotelState) => hourStart(state) + 0.5;
 
 /**
- * Calculate the noise level experienced by a specific room.
+ * Calculate the noise level experienced by a specific room at time t (by
+ * default the middle of the current hour).
  * Checks all 8 adjacent cells on the same floor, plus the cells directly above
  * and below (at NOISE.verticalAttenuation strength), for noise sources:
- * - Occupied rooms generate base noise
+ * - Occupied rooms generate base noise -- while their guest is in (someone
+ *   out for the day or at the pool makes no noise in their room)
  * - Guest traits modify noise output (party-prone guests are louder)
  * - Construction zones generate temporary noise
  * - Empty/nonexistent neighbors generate zero noise
@@ -14,7 +21,8 @@ import { NOISE, FACILITY_CONFIG } from '../config/balance.js';
  */
 export function calculateRoomNoise(
   room: Room,
-  state: HotelState
+  state: HotelState,
+  t = midHour(state),
 ): number {
   let totalNoise = 0;
 
@@ -23,12 +31,13 @@ export function calculateRoomNoise(
     const neighborRoom = state.rooms.find(r => r.floor === nf && r.gridX === nx && r.gridY === ny);
 
     if (neighborRoom && neighborRoom.status === 'occupied' && neighborRoom.guestId) {
-      // Base noise from an occupied neighbor
+      // Base noise from an occupied neighbor, if they're in
       let neighborNoise = NOISE.baseOccupiedNoise;
 
       // Guest trait modifies noise OUTPUT
       const guest = state.guests.find(g => g.id === neighborRoom.guestId);
-      if (guest) {
+      if (guest && isGuestAway(guest, t)) neighborNoise = 0;
+      else if (guest) {
         const outputMult = NOISE.traitNoiseOutput[guest.trait] ?? 1;
         neighborNoise *= outputMult;
       }
@@ -71,7 +80,7 @@ export function calculateRoomNoise(
  * neighbor contributes noise, or when the top two neighbors tie -- an
  * ambiguous or arbitrary culprit is worse than no complaint firing that tick.
  */
-export function getLoudestNeighborGuestId(room: Room, state: HotelState): string | null {
+export function getLoudestNeighborGuestId(room: Room, state: HotelState, t = midHour(state)): string | null {
   let topGuestId: string | null = null;
   let topNoise = 0;
   let tied = false;
@@ -81,7 +90,7 @@ export function getLoudestNeighborGuestId(room: Room, state: HotelState): string
     if (!neighborRoom || neighborRoom.status !== 'occupied' || !neighborRoom.guestId) continue;
 
     const guest = state.guests.find(g => g.id === neighborRoom.guestId);
-    if (!guest) continue;
+    if (!guest || isGuestAway(guest, t)) continue; // not there: can't be the culprit
 
     const outputMult = NOISE.traitNoiseOutput[guest.trait] ?? 1;
     const neighborNoise = NOISE.baseOccupiedNoise * outputMult * weight;

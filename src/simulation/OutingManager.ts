@@ -1,0 +1,61 @@
+import type { HotelState, Guest, Leg } from './types.js';
+import { GUEST_OUTINGS, TRAVEL } from '../config/balance.js';
+import { findRoute, routeToStreet } from './Layout.js';
+import { hourStart, makeWalk, makeStay, isUnderway, hash01 } from './Movement.js';
+import { roomTile } from './GuestMovement.js';
+import { isCheckoutDay } from './GuestManager.js';
+
+// Guests leave the building during the day -- sightseeing, meetings, the
+// beach -- and come back later. Like facility visits, it's decided at each
+// hour boundary for guests in their rooms, by a deterministic hash (never the
+// shared PRNG), and it's a trip on the guest: down to the nearest street
+// entrance, out of the building for a few hours (not drawn: they're in town),
+// then back in and up to their room. While they're out their room is empty
+// (no dot, and housekeeping does the daily clean first in empty rooms).
+
+const PACE = TRAVEL.guestHoursPerTile;
+const LEAVE_SPREAD = 0.5; // guests set out over the first half of the hour
+
+/** The chance a guest in their room heads out for the day during an hour of the day. */
+export function outingChance(guest: Pick<Guest, 'trait'>, hour: number): number {
+  const window = GUEST_OUTINGS.leaveChance.find(([from, to]) => hour >= from && hour < to);
+  return window ? window[2] * (GUEST_OUTINGS.traitMult[guest.trait] ?? 1) : 0;
+}
+
+/**
+ * Send guests out for the day, for the hour starting now (call at the hour
+ * boundary, with the state for the new hour, after facility visits are
+ * planned so a guest isn't both).
+ */
+export function planOutings(state: HotelState): HotelState {
+  if (state.guests.length === 0) return state;
+  const T = hourStart(state);
+  const dayEnd = (state.day - 1) * 24 + GUEST_OUTINGS.latestReturnHour;
+  let changed = false;
+  const guests = state.guests.map(guest => {
+    if (isUnderway(guest.trip, T)) return guest; // arriving, or already out
+    if (isCheckoutDay(guest, state.day)) return guest; // packing to leave
+    const p = outingChance(guest, state.hour);
+    if (p <= 0 || hash01(`${guest.id}|${state.day}|${state.hour}|out`) >= p) return guest;
+    const room = state.rooms.find(r => r.guestId === guest.id && r.status === 'occupied');
+    if (!room) return guest;
+    const out = routeToStreet(state, roomTile(room), PACE);
+    if (!out || out.path.length < 2) return guest;
+    const leave = T + hash01(`${guest.id}|${state.day}|${state.hour}|leave`) * LEAVE_SPREAD;
+    const outside = leave + out.hours;
+    const length = GUEST_OUTINGS.minHours + hash01(`${guest.id}|${state.day}|${state.hour}|length`) * (GUEST_OUTINGS.maxHours - GUEST_OUTINGS.minHours);
+    const entrance = out.path[out.path.length - 1];
+    const back = findRoute(state, entrance, roomTile(room), PACE);
+    if (!back) return guest;
+    const returnAt = Math.min(outside + length, dayEnd - back.hours);
+    if (returnAt - outside < 1) return guest; // too late in the day to bother
+    const trip: Leg[] = [
+      makeWalk(out.path, leave, PACE),
+      makeStay(entrance, outside, returnAt, 'away'),
+      makeWalk(back.path, returnAt, PACE),
+    ];
+    changed = true;
+    return { ...guest, trip, tripKind: 'outing' as const };
+  });
+  return changed ? { ...state, guests } : state;
+}

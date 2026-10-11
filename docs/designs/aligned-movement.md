@@ -101,9 +101,46 @@ The free desk is now `STARTER_LAYOUT.deskTiles[0]` = (1,3), just inside the free
 - **Saved games:** they keep their desk.
 - **Toasts:** they moved to the bottom right so they don't cover the lobby.
 
-### Checkout time
+### Checkout at 11:00, day trips, and noise from people who are there
 
-`ECONOMY.checkOutHour` exists but stays 0: guests still leave at midnight, as before. A realistic 11:00 checkout was measured. It costs the balanced bot about 20% of its valuation (longer stays lower satisfaction, and the bots build less), so it was left for a separate balancing pass.
+Added on 2026-10-11 (follow-up request: "Switch checkout to 11:00 and rebalance", and "the option for guests to leave the building during the day").
+
+- **Checkout at 11:00.** `ECONOMY.checkOutHour = 11`, and `isCheckoutDue` is true once the current hour ends at or after 11:00. Guests whose last night is over leave at the 11:00 tick and walk out from wherever they are.
+- **Day trips** (`OutingManager.ts`, `GUEST_OUTINGS`):
+  - **When guests go:** each hour, guests in their rooms may head out: 14% an hour from 8 to 12, and 5% from 12 to 16. The trait scales this, for example party guests ×1.3 and big spenders ×0.7.
+  - **The trip:** they walk to the nearest street entrance, stay out for 2-7 hours (an `away` stay that isn't drawn, since they're in town), and walk back to their room by 21:00.
+  - **Last morning:** nobody goes out, because they're packing to leave at 11:00.
+  - **Determinism:** choices use `hash01`, not the shared PRNG.
+  - **Interactions:** a guest who is out isn't sent to a facility. If their entrance is demolished while they're out, they come back in by another, at the same time.
+  - **Inspector:** shows "out for the day".
+- **Daily cleans while guests are out.** The housekeeping queue does rooms whose guest is out first.
+- **Noise from people who are there** (`NoiseManager.ts`):
+  - **Making noise:** a guest who is out, at a facility or on a day trip, makes no noise in their room.
+  - **Hearing noise:** an absent guest doesn't hear noise and can't complain. Their mood doesn't drift down from noise while they're away.
+  - **Complaints:** the culprit named in a complaint must be in their room.
+- **Edge cases fixed along the way:**
+  - **Room moves on checkout day:** a guest checking out this tick is no longer moved to another room after a breakdown. They used to be moved into a just-cleaned room, which then needed another turnover.
+  - **Clashing guest ids:** ids come from a random draw, so two live guests could share one, and then share a trip. A clash now gets a suffix, without an extra draw.
+
+**Rebalance.** With checkout at 11:00, every turnover starts on the 11:00 tick, three hours before check-in. The old 4-hour standard and 6-hour thorough turnovers kept about 30% of rooms out of the check-in window, and growth stalled. A parallel sweep found the fix (12 seeds × 400 days, medians):
+
+| Change | Before | After | Why |
+|---|---|---|---|
+| Turnover time (quick/standard/thorough) | 2 / 4 / 6 h | 1 / 2 / 3 h | A standard turnover now fits between 11:00 and 14:00. |
+| Turnover supplies | $8 / $15 / $25 | $12 / $22 / $36 | Keeps the late-game money sinks working. |
+| Housekeeping shift | 6-22 | 7-21 | Nothing checks out before 11:00. |
+| Staffing estimate | daily clean for every occupied room | stayovers only | Guests leaving today get a turnover instead. This was a bug: the estimate over-hired. |
+
+| Strategy | Final value | Notes |
+|---|---|---|
+| Balanced | $4.15M | 5 stars, 0 bankrupt |
+| Overstaffed | $2.25M | |
+| Understaffed | $1.65M | |
+| Hoarder | $1.32M | |
+
+- **Ranking:** staffing to the workload beats under- and over-staffing by a wide margin. Understaffed hotels build a turnover backlog that never clears.
+- **Money sinks:** the balanced hotel ends with less cash than the hoarder, because it keeps reinvesting.
+- **Late check-in tried:** check-in from 15:00 was tried and works, but the over-staffing margin was thinner, so check-in stays at 14:00.
 
 ## Saves
 

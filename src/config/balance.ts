@@ -45,7 +45,7 @@ export const ECONOMY = {
   arrivalsPerSqrtRoom: 1.65,
   checkInStartHour: 14,
   checkInEndHour: 22,
-  checkOutHour: 0, // guests whose stay is up leave at the end of this hour (midnight)
+  checkOutHour: 11, // guests whose last night is over check out at 11:00
   guestMinBudget: 60,
   guestMaxBudget: 300,
   // Each arriving guest will pay up to (fair price x tolerance), with tolerance drawn
@@ -152,11 +152,12 @@ export const REVIEW = {
 };
 
 export const HOUSEKEEPING = {
-  // Turnover cleaning: happens after guest checks out
+  // Turnover cleaning: happens after guest checks out. Checkouts all land at
+  // 11:00 and check-in opens at 14:00, so a standard turnover fits in between.
   turnoverDuration: {
-    quick: 2,      // 2 game-hours
-    standard: 4,   // 4 game-hours
-    thorough: 6,   // 6 game-hours
+    quick: 1,      // game-hours of a housekeeper's time in the room
+    standard: 2,
+    thorough: 3,
   } as Record<string, number>,
 
   turnoverCleanlinessResult: {
@@ -166,9 +167,9 @@ export const HOUSEKEEPING = {
   } as Record<string, number>,
 
   turnoverCost: {
-    quick: 8,      // cost per room cleaning
-    standard: 15,
-    thorough: 25,
+    quick: 12,     // supplies and laundry per room turnover
+    standard: 22,
+    thorough: 36,
   } as Record<string, number>,
 
   // Daily cleaning: happens during guest stay
@@ -249,8 +250,8 @@ export const STAFF = {
   housekeeping: {
     dailyWage: 60, // per housekeeper per day
     dailyCleanRoomsPerHour: 2, // rooms a housekeeper can daily-clean per hour
-    workStartHour: 6,
-    workEndHour: 22,
+    workStartHour: 7, // nothing checks out before 11:00, so the day starts a little later...
+    workEndHour: 21, // ...and ends before the night
   },
   frontDesk: {
     dailyWage: 70, // per front desk worker per day
@@ -576,6 +577,19 @@ export const FACILITY_LEVELS = [
 // hour (FACILITY_CONFIG[type].visitChance), if one is a short enough walk away
 // and has room. A guest uses each type at most once a day; the types they used
 // add to their review (visitReviewBonus), and shop visits are sales.
+// Guests go out for the day: sightseeing, meetings, the beach. Each hour a
+// guest in their room may head out by these chances (per hour of day, scaled
+// by trait), for a few hours, coming back by the evening -- through the street
+// entrance and up to their room, like everyone else. Not on their last
+// morning: they're packing to leave at checkout.
+export const GUEST_OUTINGS = {
+  leaveChance: [[8, 12, 0.14], [12, 16, 0.05]] as Array<[number, number, number]>, // [fromHour, toHour (exclusive), chance per hour]
+  minHours: 2, // time out of the building
+  maxHours: 7,
+  latestReturnHour: 21, // back by 21:00
+  traitMult: { normal: 1.0, light_sleeper: 1.0, big_spender: 0.7, party_guest: 1.3 } as Record<string, number>,
+};
+
 export const FACILITY_VISITS = {
   maxWalkHours: 0.75, // one way: guests won't walk further than this to a facility
   seasonalBonusMult: 1.5, // a facility's review bonus in its season (the pool in summer)

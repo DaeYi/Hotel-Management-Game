@@ -134,7 +134,13 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
       }
       // I: nobody (guest or walker) is in a room while staff turn it over or repair it
       const nextStays: Array<{ room: string; a: number; b: number; job: string }> = [];
-      for (const it of getStaffPlan(after).itineraries) for (const l of it.legs) if (l.kind === 'stay' && (l.job === 'turnover' || l.job === 'repair')) nextStays.push({ room: l.placeId!, a: l.start, b: l.end, job: l.job });
+      // (a housekeeper already in the room when the hour began -- doing the daily clean of a guest who then walked out -- was there with the guest's say-so)
+      const T1 = hourStart(after);
+      for (const it of getStaffPlan(after).itineraries) for (const l of it.legs) {
+        if (l.kind !== 'stay' || (l.job !== 'turnover' && l.job !== 'repair')) continue;
+        const wasInside = l.start <= T1 + 1e-9 && after.staffRoster?.find(m => m.id === it.staffId)?.at?.door !== undefined;
+        if (!wasInside) nextStays.push({ room: l.placeId!, a: l.start, b: l.end, job: l.job });
+      }
       for (const st of nextStays) {
         const room = after.rooms.find(x => x.id === st.room);
         if (!room) continue;

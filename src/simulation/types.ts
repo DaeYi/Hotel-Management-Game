@@ -54,7 +54,7 @@ export interface Guest {
   // back, to a new room): absolute game-hour legs. Once the last leg ends -- or
   // with no trip -- the guest is in their room. See Movement.ts.
   trip?: Leg[] | null;
-  tripKind?: 'arrival' | 'visit' | 'move'; // what the trip is for (an arriving guest isn't in the building before it starts)
+  tripKind?: 'arrival' | 'visit' | 'move' | 'outing'; // what the trip is for (an arriving guest isn't in the building before it starts)
   // Facilities this guest actually used this stay (best level used, and the
   // day of the last visit): the facility part of their review. See FacilityManager.ts.
   facilitiesUsed?: Partial<Record<FacilityType, { level: number; day: number }>>;
@@ -82,7 +82,7 @@ export interface WalkLeg {
   hoursPerTile: number; // walking pace (a ride costs TRAVEL.hoursPerFloor per floor)
 }
 
-export type StayActivity = 'clean' | 'repair' | 'rest' | 'wait' | 'check_in' | 'inquire' | 'visit' | 'in_room';
+export type StayActivity = 'clean' | 'repair' | 'rest' | 'wait' | 'check_in' | 'inquire' | 'visit' | 'in_room' | 'away'; // away: out of the building
 
 export interface StayLeg {
   kind: 'stay';

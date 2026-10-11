@@ -140,6 +140,11 @@ function guestWhereabouts(guest: Guest, state: HotelState, t: number): string | 
   if (guest.tripKind === 'arrival') return t < trip[0].start ? 'arriving soon' : 'arriving';
   if (t < trip[0].start) return null; // not set out yet
   if (guest.tripKind === 'move') return 'moving rooms';
+  if (guest.tripKind === 'outing') {
+    const leg = positionAt(trip, t)?.leg;
+    if (leg?.kind === 'stay' && leg.activity === 'away') return 'out for the day';
+    return t < (trip.find(l => l.kind === 'stay')?.start ?? 0) ? 'heading out' : 'back from town';
+  }
   const visit = trip.find(l => l.kind === 'stay' && l.activity === 'visit');
   if (!visit || visit.kind !== 'stay') return 'on the way back';
   const facility = state.facilities.find(f => f.id === visit.placeId);

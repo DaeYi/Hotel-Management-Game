@@ -6,7 +6,9 @@ import { planArrivalTrips, checkInLanes, CHECK_IN_HOURS, departureWalker, isGues
 import { planFacilityVisits, creditFacilityVisits, facilityCapacity, facilityReviewBonus, guestsInFacility, visitChance } from '../src/simulation/FacilityManager.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import { PRNG } from '../src/simulation/prng.js';
-import { TRAVEL, FACILITY_CONFIG, FACILITY_LEVELS, FACILITY_VISITS, STARTER_LAYOUT } from '../src/config/balance.js';
+import { TRAVEL, FACILITY_CONFIG, FACILITY_LEVELS, FACILITY_VISITS, GUEST_OUTINGS, STARTER_LAYOUT } from '../src/config/balance.js';
+import { planOutings } from '../src/simulation/OutingManager.js';
+import { getStaffPlan } from '../src/simulation/StaffManager.js';
 import type { HotelState, Guest, Leg } from '../src/simulation/types.js';
 
 const rich = (s: HotelState): HotelState => ({ ...s, cash: 1_000_000, peakStarRating: 5 });
@@ -409,5 +411,87 @@ describe('Upper floors', () => {
     expect(rides.length).toBeGreaterThan(0);
     const tiles = route.path.filter((p, i) => i > 0 && p.floor === route.path[i - 1].floor).length;
     expect(route.hours).toBeCloseTo(tiles * TRAVEL.guestHoursPerTile + 2 * TRAVEL.hoursPerFloor, 9);
+  });
+});
+
+describe('Guests go out for the day', () => {
+  /** Guests mid-stay (not leaving today), at an hour of the morning. */
+  const midStay = (n: number, extra: Partial<HotelState>) => {
+    const s = withGuests(n, extra);
+    return { ...s, guests: s.guests.map(g => ({ ...g, checkInDay: s.day - 1, stayLength: 3 })) };
+  };
+
+  /** Plan with a higher chance of heading out, so tests don't hang on a few dice. */
+  function withOutingChance<T>(chance: number, fn: () => T): T {
+    const original = GUEST_OUTINGS.leaveChance;
+    GUEST_OUTINGS.leaveChance = [[0, 24, chance]];
+    try { return fn(); } finally { GUEST_OUTINGS.leaveChance = original; }
+  }
+
+  it('some guests head out in the morning: down to the street, out for a few hours, back up to their room', () => {
+    const s = withOutingChance(0.6, () => planOutings(midStay(6, { hour: 9 })));
+    const out = s.guests.filter(g => g.tripKind === 'outing');
+    expect(out.length).toBeGreaterThan(0);
+    for (const g of out) {
+      const [walkOut, away, walkBack] = g.trip! as any[];
+      expect([walkOut.kind, away.activity, walkBack.kind]).toEqual(['walk', 'away', 'walk']);
+      expect(isEntranceTile(s, away.at)).toBe(true);
+      expect(away.end - away.start).toBeGreaterThanOrEqual(1);
+      expect(away.end - away.start).toBeLessThanOrEqual(GUEST_OUTINGS.maxHours + 1e-9);
+      expect(legsEnd(g.trip!)).toBeLessThanOrEqual((s.day - 1) * 24 + GUEST_OUTINGS.latestReturnHour + 1e-9);
+      const room = s.rooms.find(r => r.guestId === g.id)!;
+      const end = positionAt(g.trip!, legsEnd(g.trip!))!;
+      expect([end.x, end.y, end.floor]).toEqual([room.gridX, room.gridY, room.floor]);
+      // Out of the building in between: away from the room, and not anywhere on the floor plan
+      const mid = (away.start + away.end) / 2;
+      expect(isGuestAway(g, mid)).toBe(true);
+      expect((positionAt(g.trip!, mid)!.leg as any).activity).toBe('away');
+    }
+    expect(withOutingChance(0.6, () => planOutings(midStay(6, { hour: 9 }))).guests.map(g => g.trip)).toEqual(s.guests.map(g => g.trip)); // deterministic
+  });
+
+  it('nobody heads out on their last morning (they check out at 11:00), or while already out', () => {
+    let s = midStay(4, { hour: 9 });
+    s = { ...s, guests: s.guests.map((g, i) => (i < 2 ? { ...g, checkInDay: s.day - g.stayLength } : g)) };
+    const planned = withOutingChance(1, () => planOutings(s));
+    expect(planned.guests.slice(0, 2).every(g => !g.trip)).toBe(true);
+    expect(planned.guests.slice(2).every(g => g.tripKind === 'outing')).toBe(true);
+    expect(withOutingChance(1, () => planOutings({ ...planned, hour: 10 })).guests.map(g => g.trip)).toEqual(planned.guests.map(g => g.trip));
+  });
+
+  it('a guest whose street entrance is bulldozed while they are out comes back in by another', () => {
+    let s: HotelState = midStay(1, { hour: 9 });
+    s = addFixture(s, 'entrance', 9, 1, 0)!;
+    s = withOutingChance(1, () => planOutings(s));
+    const away = s.guests[0].trip![1] as any;
+    const gone = demolishFixture(s, s.fixtures.find(f => f.type === 'entrance' && f.gridX === away.at.gridX && f.gridY === away.at.gridY)!.id)!;
+    const t = (away.start + away.end) / 2;
+    const trip = rerouteTrips(gone, t).guests[0].trip!;
+    const stillAway = trip.find(l => l.kind === 'stay' && l.activity === 'away' && l.end > t) as any;
+    expect(stillAway).toBeTruthy();
+    expect(isEntranceTile(gone, stillAway.at)).toBe(true);
+    expect(stillAway.end).toBeCloseTo(away.end, 9); // same time back
+  });
+
+  it('housekeeping does the daily clean in rooms whose guest is out first', () => {
+    let s = withGuests(3, { hour: 12 });
+    s = { ...s, staff: { ...s.staff, housekeepers: 1 }, rooms: s.rooms.map(r => ({ ...r, dailyCleanHoursRemaining: 0.5, cleanliness: r.gridX === 3 ? 10 : 60 })) };
+    // The guest in the cleanest room is out; the others are in
+    const outRoom = s.rooms.find(r => r.cleanliness === 60)!;
+    const T = hourStart(s);
+    s = { ...s, guests: s.guests.map(g => (g.id === outRoom.guestId ? { ...g, tripKind: 'outing' as const, trip: [makeStay({ gridX: 0, gridY: 4, floor: 0 }, T - 1, T + 4, 'away')] } : g)) };
+    const plan = getStaffPlan(s);
+    const firstClean = plan.itineraries[0].legs.find(l => l.kind === 'stay' && l.job === 'daily') as any;
+    expect(firstClean.placeId).toBe(outRoom.id);
+  });
+
+  it('guests check out at 11:00: the tick at the end of hour 10', () => {
+    let s = withGuests(1);
+    s = { ...s, guests: [{ ...s.guests[0], checkInDay: s.day - 2, stayLength: 2 }] };
+    expect(tickSimulation({ ...s, hour: 9 }, new PRNG(1)).state.guests).toHaveLength(1);
+    const after = tickSimulation({ ...s, hour: 10 }, new PRNG(1)).state;
+    expect(after.guests).toHaveLength(0);
+    expect(after.hour).toBe(11);
+    expect(after.walkers!.find(w => w.reason === 'checked_out')!.trip[0].start).toBe(hourStart(after));
   });
 });

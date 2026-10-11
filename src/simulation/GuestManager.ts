@@ -149,6 +149,10 @@ export function processArrivals(
   let availableIdx = 0;
   let checkedInThisHour = 0;
   let pool = [...state.returningGuestPool];
+  // Guest ids come from a random draw, so two can clash: give a clash a suffix
+  // (no extra draw, so the random stream stays the same) -- everything that
+  // follows a guest around (their trip, their room) is keyed by id
+  const taken = new Set(state.guests.map(g => g.id));
 
   for (let i = 0; i < totalArrivals; i++) {
     let guest: Guest;
@@ -160,6 +164,12 @@ export function processArrivals(
     } else {
       guest = generateFreshGuest(prng, state.day, state.starRating);
     }
+    if (taken.has(guest.id)) {
+      let n = 2;
+      while (taken.has(`${guest.id}-${n}`)) n++;
+      guest = { ...guest, id: `${guest.id}-${n}` };
+    }
+    taken.add(guest.id);
 
     // Front desk at capacity: guest leaves impatiently
     if (checkedInThisHour >= checkInCapacity) {
@@ -209,9 +219,13 @@ export function processArrivals(
   return result;
 }
 
-/** Whether a guest's stay is up: the last night is over and it's checkout time (ECONOMY.checkOutHour). */
+/**
+ * Whether a guest's stay is up by the end of the current hour: their last
+ * night is over and it's checkout time (ECONOMY.checkOutHour). The tick at
+ * the end of hour 10 happens at 11:00, so that's when 11:00 checkouts leave.
+ */
 export function isCheckoutDue(guest: Guest, state: Pick<HotelState, 'day' | 'hour'>): boolean {
-  return state.day - guest.checkInDay >= guest.stayLength && state.hour >= ECONOMY.checkOutHour;
+  return state.day - guest.checkInDay >= guest.stayLength && state.hour + 1 >= ECONOMY.checkOutHour;
 }
 
 /** Whether a guest leaves today (their checkout time may not have come yet). */

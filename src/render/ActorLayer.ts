@@ -111,10 +111,10 @@ export class ActorLayer {
     return plan;
   }
 
-  /** A figure where its legs put it at time t. */
+  /** A figure where its legs put it at time t (null while they're out of the building). */
   private place(legs: Leg[], t: number, id: string, kind: Figure['kind'], color: number): Figure | null {
     const at = positionAt(legs, t);
-    if (!at) return null;
+    if (!at || (at.leg.kind === 'stay' && at.leg.activity === 'away')) return null;
     return { id, kind, color, x: at.x, y: at.y, floor: at.floor, settled: !at.moving };
   }
 

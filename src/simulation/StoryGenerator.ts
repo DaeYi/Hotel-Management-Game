@@ -4,8 +4,9 @@ import type { GuestReviewBreakdown } from './GuestManager.js';
 import { SATISFACTION, STORY, NOISE, ECONOMY, REVIEW, HOUSEKEEPING } from '../config/balance.js';
 import { calculateRoomNoise, noiseToRatingPenalty, getLoudestNeighborGuestId } from './NoiseManager.js';
 import { formatRoomLabel, isRoomReachable } from './HotelState.js';
-import { roomMoveTrip } from './GuestMovement.js';
-import { hourEnd } from './Movement.js';
+import { roomMoveTrip, isGuestAway } from './GuestMovement.js';
+import { isCheckoutDue } from './GuestManager.js';
+import { hourEnd, hourStart } from './Movement.js';
 
 // ============================================================================
 // Story log: append + chain-aware cap/eviction (design-review D11).
@@ -79,8 +80,8 @@ function appendStoryLogEntry(state: HotelState, input: NewEntryInput): { state: 
 // ============================================================================
 
 function deriveSatisfactionTarget(room: Room, state: HotelState, guest: Guest): number {
-  const roomNoise = calculateRoomNoise(room, state);
-  const noisePenalty = noiseToRatingPenalty(roomNoise, guest);
+  // Noise only bothers a guest who's in to hear it
+  const noisePenalty = isGuestAway(guest, hourStart(state) + 0.5) ? 0 : noiseToRatingPenalty(calculateRoomNoise(room, state), guest);
   const conditionBonus = (room.condition - REVIEW.conditionMidpoint) / REVIEW.conditionScale * REVIEW.conditionWeight;
   const cleanlinessBonus = (room.cleanliness - HOUSEKEEPING.cleanlinessMidpoint) / HOUSEKEEPING.cleanlinessScale * HOUSEKEEPING.cleanlinessWeight;
   const raw = conditionBonus + cleanlinessBonus - noisePenalty;
@@ -186,8 +187,9 @@ export function advanceIncidents(state: HotelState, prng: PRNG, T = hourEnd(stat
     }
 
     // mid_stay_breakdown
-    if (room.condition > ECONOMY.roomBreakdownThreshold) {
-      // Repaired before we had to act -- drop quietly, no log spam.
+    if (room.condition > ECONOMY.roomBreakdownThreshold || isCheckoutDue(guest, current)) {
+      // Repaired before we had to act, or the guest is checking out now
+      // anyway (no point moving them) -- drop quietly, no log spam.
       continue;
     }
 
@@ -287,7 +289,7 @@ function collectCandidates(state: HotelState): Candidate[] {
     const room = state.rooms.find(r => r.status === 'occupied' && r.guestId === guest.id);
     if (!room) continue;
 
-    if (!guest.hadNoiseComplaint && guest.satisfaction < SATISFACTION.incidentFuelThreshold) {
+    if (!guest.hadNoiseComplaint && guest.satisfaction < SATISFACTION.incidentFuelThreshold && !isGuestAway(guest, hourStart(state) + 0.5)) {
       const roomNoise = calculateRoomNoise(room, state);
       if (roomNoise > NOISE.penaltyThreshold) {
         const culpritGuestId = getLoudestNeighborGuestId(room, state);

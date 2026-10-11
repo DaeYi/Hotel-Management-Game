@@ -946,7 +946,7 @@ describe('tickSimulation', () => {
 
     state = {
       ...state,
-      day: 2, hour: 0, // day 2, guest checked in day 1, stayLength 1 -> normal checkout fires this tick
+      day: 2, hour: 10, // day 2 at 10:00, guest checked in day 1, stayLength 1 -> the 11:00 checkout fires this tick
       guests: [guest],
       rooms: state.rooms.map(r => r.id === room.id ? { ...r, status: 'occupied' as const, guestId: 'g1' } : r),
       activeIncidents: [incident], // hoursRemaining 1 -> decrements to 0 -> would escalate this same tick

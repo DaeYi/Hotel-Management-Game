@@ -148,7 +148,8 @@ export function estimateHousekeepingHours(state: HotelState, occupancy: number):
   const checkouts = occupied / AVERAGE_STAY_NIGHTS;
   const turnover = HOUSEKEEPING.turnoverDuration[state.housekeeping.turnoverQuality] ?? HOUSEKEEPING.turnoverDuration.standard;
   const cadence = state.housekeeping.dailyCadence === 'daily' ? 1 : state.housekeeping.dailyCadence === 'every_other_day' ? 0.5 : 0;
-  const dailyRound = occupied * cadence * (1 / STAFF.housekeeping.dailyCleanRoomsPerHour + avgWalk);
+  const stayovers = occupied - checkouts; // guests leaving today get the turnover, not a daily clean (processDailyHousekeeping skips them)
+  const dailyRound = stayovers * cadence * (1 / STAFF.housekeeping.dailyCleanRoomsPerHour + avgWalk);
   return checkouts * (turnover + avgWalk) + dailyRound;
 }
 

@@ -92,7 +92,8 @@ describe('Housekeeping workload', () => {
   });
 
   it('the staff panel status warns when a busy day would outrun the team', () => {
-    const s = hotel(9, 1);
+    let s = hotel(9, 1);
+    s = { ...s, housekeeping: { ...s.housekeeping, turnoverQuality: 'thorough' } }; // a heavy day: deep cleans
     const status = getHousekeepingStatus(s);
     expect(status.hoursNeeded).toBeGreaterThan(status.hoursAvailable);
     expect(status.recommendation).toContain(`${housekeepersNeeded(s, PLANNING_OCCUPANCY)} housekeepers`);

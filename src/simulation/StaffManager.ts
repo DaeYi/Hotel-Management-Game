@@ -2,6 +2,7 @@ import type { HotelState, Room, StaffMember, StaffPlan, StaffItinerary, StaffRol
 import { STAFF, TRAVEL } from '../config/balance.js';
 import { findRoute, routeFromStreet, routeToStreet, getStaffBases, getAccessibleBreakRooms, isEntranceTile } from './Layout.js';
 import { isRoomReachable } from './HotelState.js';
+import { isGuestAway } from './GuestMovement.js';
 import { hourStart, makeWalk, makeStay, truncateLegs, sameTile, finalTile, positionAt, walkProgress, stepStillOpen } from './Movement.js';
 
 // Housekeepers and maintenance workers are people with a place in the
@@ -104,6 +105,8 @@ interface Job {
  */
 function jobQueues(state: HotelState, done: { turnover: Map<string, number>; daily: Map<string, number> } = { turnover: new Map(), daily: new Map() }): Record<StaffRole, Job[]> {
   const reachable = (r: Room) => isRoomReachable(state, r);
+  const T = hourStart(state);
+  const guestOut = (r: Room) => state.guests.some(g => g.id === r.guestId && isGuestAway(g, T));
   const left = (r: Room, kind: 'turnover' | 'daily') =>
     (kind === 'turnover' ? r.cleaningHoursRemaining : r.dailyCleanHoursRemaining) - (done[kind].get(r.id) ?? 0);
   const housekeeping: Job[] = [
@@ -111,9 +114,10 @@ function jobQueues(state: HotelState, done: { turnover: Map<string, number>; dai
     ...state.rooms.filter(r => r.status === 'cleaning' && left(r, 'turnover') > 1e-9 && reachable(r))
       .sort((a, b) => left(a, 'turnover') - left(b, 'turnover'))
       .map(room => ({ room, kind: 'turnover' as const, hours: left(room, 'turnover') })),
-    // Then the daily cleans queued at HOUSEKEEPING.dailyCleaningHour, dirtiest first
+    // Then the daily cleans queued at HOUSEKEEPING.dailyCleaningHour: rooms
+    // whose guest is out first (nobody to disturb), then dirtiest first
     ...state.rooms.filter(r => r.status === 'occupied' && left(r, 'daily') > 1e-9 && reachable(r))
-      .sort((a, b) => a.cleanliness - b.cleanliness)
+      .sort((a, b) => Number(!guestOut(a)) - Number(!guestOut(b)) || a.cleanliness - b.cleanliness)
       .map(room => ({ room, kind: 'daily' as const, hours: left(room, 'daily') })),
   ];
   const maintenance: Job[] = state.rooms
