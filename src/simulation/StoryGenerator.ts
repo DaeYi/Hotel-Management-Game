@@ -1,4 +1,6 @@
 import type { HotelState, Room, Guest, ActiveIncident, StoryLogEntry, GameEvent, Booking } from './types.js';
+import { partyOf, partyLabel, PartyLabel } from './Party.js';
+import { profileRoom, fitsParty } from './RoomProfile.js';
 import type { PRNG } from './prng.js';
 import type { GuestReviewBreakdown } from './GuestManager.js';
 import { SATISFACTION, STORY, NOISE, ECONOMY, REVIEW, HOUSEKEEPING } from '../config/balance.js';
@@ -110,14 +112,23 @@ export interface AdvanceResult {
   earlyDepartureGuestIds: Set<string>;
 }
 
-function findHealthySameTypeRoom(state: HotelState, exclude: Room): Room | null {
-  return state.rooms.find(r =>
+/**
+ * A room to move a guest to: the same kind of room as theirs, empty, working,
+ * reachable, and big enough for their party. `rooms` is the rooms as they
+ * stand after any moves made earlier this hour (so two guests are never moved
+ * into the same one).
+ */
+function findHealthySameTypeRoom(state: HotelState, rooms: Room[], exclude: Room, guest: Guest): Room | null {
+  const party = partyOf(guest);
+  // The smallest that fits, then the cheapest: a couple doesn't take the family room a family needs
+  return rooms.filter(r =>
     r.id !== exclude.id
     && r.type === exclude.type
     && r.status === 'vacant'
     && r.condition > ECONOMY.roomBreakdownThreshold
     && isRoomReachable(state, r)
-  ) ?? null;
+    && fitsParty(profileRoom(r), party)
+  ).sort((a, b) => profileRoom(a).sleeps - profileRoom(b).sleeps || profileRoom(a).beds - profileRoom(b).beds || a.pricePerNight - b.pricePerNight)[0] ?? null;
 }
 
 /**
@@ -151,9 +162,9 @@ export function advanceIncidents(state: HotelState, prng: PRNG, T = hourEnd(stat
         const roomLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
         const appended = appendStoryLogEntry(current, {
           type: 'noise_complaint_resolved',
-          guestName: guest.name,
+          guestName: partyLabel(guest),
           roomId: room.id,
-          message: `The noise around Room ${roomLabel} died down -- ${guest.name}'s complaint resolved.`,
+          message: `The noise around Room ${roomLabel} died down -- ${partyLabel(guest)}'s complaint resolved.`,
           chainId: incident.chainId,
         });
         current = appended.state;
@@ -166,15 +177,15 @@ export function advanceIncidents(state: HotelState, prng: PRNG, T = hourEnd(stat
         const roomLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
         const appended = appendStoryLogEntry(current, {
           type: 'noise_complaint_escalated',
-          guestName: guest.name,
+          guestName: partyLabel(guest),
           roomId: room.id,
-          message: `Complaint unresolved -- ${guest.name} is checking out early from Room ${roomLabel}.`,
+          message: `Complaint unresolved -- ${partyLabel(guest)} is checking out early from Room ${roomLabel}.`,
           chainId: incident.chainId,
         });
         current = appended.state;
         events.push({
           type: 'noise_complaint_escalated',
-          message: `${guest.name}'s noise complaint escalated -- checking out early`,
+          message: `${PartyLabel(guest)}'s noise complaint escalated -- checking out early`,
           data: { guestId: guest.id, roomId: room.id },
         });
         // Dropped: escalated incidents don't persist in activeIncidents; the
@@ -193,7 +204,7 @@ export function advanceIncidents(state: HotelState, prng: PRNG, T = hourEnd(stat
       continue;
     }
 
-    const target = findHealthySameTypeRoom(current, room);
+    const target = findHealthySameTypeRoom(current, rooms, room, guest);
     if (target) {
       const oldRoomId = room.id;
       const oldLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
@@ -209,15 +220,15 @@ export function advanceIncidents(state: HotelState, prng: PRNG, T = hourEnd(stat
         : g);
       const appended = appendStoryLogEntry(current, {
         type: 'mid_stay_breakdown_resolved',
-        guestName: guest.name,
+        guestName: partyLabel(guest),
         roomId: target.id,
-        message: `${guest.name} was moved to Room ${newLabel} after Room ${oldLabel} broke down.`,
+        message: `${PartyLabel(guest)} was moved to Room ${newLabel} after Room ${oldLabel} broke down.`,
         chainId: incident.chainId,
       });
       current = appended.state;
       events.push({
         type: 'mid_stay_breakdown_resolved',
-        message: `${guest.name} moved to Room ${newLabel} after a breakdown`,
+        message: `${PartyLabel(guest)} moved to Room ${newLabel} after a breakdown`,
         data: { guestId: guest.id, fromRoomId: oldRoomId, toRoomId: target.id },
       });
       continue;
@@ -229,15 +240,15 @@ export function advanceIncidents(state: HotelState, prng: PRNG, T = hourEnd(stat
       const roomLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
       const appended = appendStoryLogEntry(current, {
         type: 'mid_stay_breakdown_escalated',
-        guestName: guest.name,
+        guestName: partyLabel(guest),
         roomId: room.id,
-        message: `No rooms available -- ${guest.name} had to leave Room ${roomLabel} early.`,
+        message: `No rooms available -- ${partyLabel(guest)} had to leave Room ${roomLabel} early.`,
         chainId: incident.chainId,
       });
       current = appended.state;
       events.push({
         type: 'noise_complaint_escalated', // reuses the "incident escalated" toast styling
-        message: `${guest.name} is leaving early -- no room to move to after a breakdown`,
+        message: `${PartyLabel(guest)} is leaving early -- no room to move to after a breakdown`,
         data: { guestId: guest.id, roomId: room.id },
       });
       continue;
@@ -338,9 +349,9 @@ export function selectNewIncident(state: HotelState, prng: PRNG): { state: Hotel
     const roomLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
     const appended = appendStoryLogEntry(current, {
       type: 'noise_complaint',
-      guestName: guest.name,
+      guestName: partyLabel(guest),
       roomId: room.id,
-      message: `${guest.name} filed a noise complaint about Room ${roomLabel}.`,
+      message: `${PartyLabel(guest)} filed a noise complaint about Room ${roomLabel}.`,
     });
     current = appended.state;
 
@@ -363,7 +374,7 @@ export function selectNewIncident(state: HotelState, prng: PRNG): { state: Hotel
     };
     events.push({
       type: 'noise_complaint_filed',
-      message: `${guest.name} filed a noise complaint (Room ${roomLabel})`,
+      message: `${PartyLabel(guest)} filed a noise complaint (Room ${roomLabel})`,
       data: { guestId: guest.id, culpritGuestId, roomId: room.id },
     });
   } else {
@@ -371,9 +382,9 @@ export function selectNewIncident(state: HotelState, prng: PRNG): { state: Hotel
     const roomLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
     const appended = appendStoryLogEntry(current, {
       type: 'mid_stay_breakdown',
-      guestName: guest.name,
+      guestName: partyLabel(guest),
       roomId: room.id,
-      message: `Room ${roomLabel} broke down while ${guest.name} was staying.`,
+      message: `Room ${roomLabel} broke down while ${partyLabel(guest)} was staying.`,
     });
     current = appended.state;
 
@@ -407,7 +418,7 @@ export function recordReturnGuestEntries(state: HotelState, events: GameEvent[])
 
     const appended = appendStoryLogEntry(current, {
       type: 'regular_returns',
-      guestName: guest.name,
+      guestName: partyLabel(guest),
       roomId,
       message: event.message,
     });
@@ -417,6 +428,34 @@ export function recordReturnGuestEntries(state: HotelState, events: GameEvent[])
         ? { ...g, satisfaction: Math.min(100, g.satisfaction + SATISFACTION.regularReturnBonus) }
         : g),
     };
+  }
+  return current;
+}
+
+/**
+ * Story beats for parties turned away because no room was free that would
+ * take them ('party_turned_away' events): the first each day makes a story,
+ * so the log isn't flooded and never crowds out the incidents. Not an
+ * incident origin: it uses none of the day's incident budget.
+ */
+export function recordPartyTurnAways(state: HotelState, events: GameEvent[]): HotelState {
+  let current = state;
+  for (const event of events) {
+    if (event.type !== 'party_turned_away') continue;
+    const chainId = `turnaway-${current.day}`;
+    if (current.storyLog.some(e => e.chainId === chainId)) continue;
+    const size = (event.data?.size as number) ?? 0;
+    const kind = event.data?.partyKind as string | undefined;
+    const advice = kind === 'family' ? 'Families need a room that sleeps them all: a family room.'
+      : size === 2 ? 'Friends need a bed each: a twin room.'
+      : size === 3 ? 'Friends need a bed each: a family room (a queen and bunk beds) takes three.'
+      : `Friends need a bed each: ${size} beds of their own (two sets of bunk beds, say).`;
+    const appended = appendStoryLogEntry(current, {
+      type: 'party_turned_away',
+      message: `${event.message}. ${advice}`,
+      chainId,
+    });
+    current = appended.state;
   }
   return current;
 }

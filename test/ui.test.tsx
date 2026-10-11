@@ -176,6 +176,28 @@ describe('Interface', () => {
     expect(panel().textContent).not.toContain('After');
   });
 
+  it('the editor: Esc while putting a piece down cancels that, not the panel; a new bathroom keeps its length', async () => {
+    const { controller, flush } = setup();
+    controller.selectTool('standard');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.selectTool(null);
+    controller.state = { ...controller.state, peakStarRating: 2 };
+    controller.openFurnishing(controller.state.rooms[0].id);
+    flush();
+    const panel = () => screen.queryByRole('region', { name: /FURNISH ROOM/ });
+    fireEvent.click(screen.getByText('Single bed', { selector: '.palette button' }));
+    await act(async () => { await new Promise(r => setTimeout(r, 20)); }); // effects run (the Esc handler is installed)
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    flush();
+    expect(panel()).not.toBeNull();
+    expect(panel()!.textContent).toContain('Tap a piece to change it');
+    // The long shower room swapped for a bathroom with a tub: still 2x3
+    pickPiece('Shower room');
+    fireEvent.change(screen.getByLabelText('Bathroom'), { target: { value: 'bath_tub' } });
+    flush();
+    expect(panel()!.textContent).toContain('2×3');
+  });
+
   it('twin and family rooms can be built from the start', () => {
     const { controller, flush } = setup();
     fireEvent.click(screen.getByText('Standard Twin'));

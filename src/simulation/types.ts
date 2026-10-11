@@ -3,6 +3,14 @@ export type RoomType = 'standard' | 'deluxe' | 'suite';
 export type FacilityType = 'gym' | 'restaurant' | 'pool' | 'shop';
 export type TileType = RoomType | FacilityType;
 export type GuestTrait = 'normal' | 'light_sleeper' | 'big_spender' | 'party_guest';
+
+/** Who a booking is for: one person (on holiday or on business), a couple, friends, or a family. */
+export type PartyKind = 'solo' | 'business' | 'couple' | 'friends' | 'family';
+/** The people in one booking. A family's members beyond the first two are children. */
+export interface Party {
+  kind: PartyKind;
+  size: number;
+}
 export type RoomStatus = 'vacant' | 'occupied' | 'cleaning' | 'renovating';
 export type CleaningQuality = 'quick' | 'standard' | 'thorough';
 export type DailyCleaningCadence = 'daily' | 'every_other_day' | 'none';
@@ -82,6 +90,9 @@ export interface Guest {
   checkInDay: number;
   isReturning: boolean; // true if this arrival was pulled from returningGuestPool
   hadNoiseComplaint: boolean; // cooldown: one Noise Complaint arc per guest per stay
+  // Who the booking is for (see Party.ts; absent on older saves: one person).
+  // One Guest is one booking: one room, one trip, one review, the whole party together.
+  party?: Party;
   // Where the guest is going (walking in from the street, out to a facility and
   // back, to a new room): absolute game-hour legs. Once the last leg ends -- or
   // with no trip -- the guest is in their room. See Movement.ts.
@@ -136,6 +147,7 @@ export interface Walker {
   isReturning: boolean;
   reason: 'checked_out' | 'walked_out' | 'turned_away' | 'impatient';
   trip: Leg[];
+  party?: Party; // the whole party walks it (absent: one person)
 }
 
 export type StaffRole = 'housekeeper' | 'maintenance';
@@ -327,6 +339,11 @@ export interface SimulationSummary {
   loanBalance: number;
   finalValuation: number;
   bankruptDay: number | null;
+  // Who booked, by the party they were (a family that took a double counts as a family)
+  partyArrivals: Record<PartyKind, number>;
+  partyTurnedAway: Record<PartyKind, number>; // turned away for any reason
+  partiesBookedSmaller: number; // booked as one or two because nothing free fit them
+  familyTurnAwayRate: number; // families not given a room for the family: turned away, or booked smaller
 }
 
 export interface TickResult {
@@ -335,7 +352,7 @@ export interface TickResult {
 }
 
 export interface GameEvent {
-  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked' | 'renovation_complete' | 'campaign_ended' | 'floor_built';
+  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'party_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked' | 'renovation_complete' | 'campaign_ended' | 'floor_built';
   message: string;
   data?: Record<string, unknown>;
 }

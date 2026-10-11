@@ -1,4 +1,5 @@
 import type { SimulationSummary } from './types.js';
+import type { PartyKind } from './types.js';
 import { settleChanges } from './Settle.js';
 import { hourStart } from './Movement.js';
 import { PRNG } from './prng.js';
@@ -36,13 +37,31 @@ export function simulate(
 
   const reviewScoreHistory: number[] = [];
   let wentBankrupt = false;
+  const kinds = (): Record<PartyKind, number> => ({ solo: 0, business: 0, couple: 0, friends: 0, family: 0 });
+  const partyArrivals = kinds();
+  const partyTurnedAway = kinds();
+  let partiesBookedSmaller = 0;
+  let familiesSmaller = 0;
   const totalHours = days * 24;
 
   for (let tick = 0; tick < totalHours; tick++) {
     // The strategy acts at the start of the hour; anyone it affects re-plans (as in the game)
     state = settleChanges(state, strategy(state), hourStart(state));
-    const { state: newState } = tickSimulation(state, prng);
+    const { state: newState, events } = tickSimulation(state, prng);
     state = newState;
+    for (const e of events) {
+      const kind = (e.data?.wanted ?? e.data?.partyKind) as PartyKind | undefined;
+      if (!kind || !(kind in partyArrivals)) continue;
+      if (e.type === 'guest_arrived') {
+        partyArrivals[kind]++;
+        if (e.data?.wanted) {
+          partiesBookedSmaller++;
+          if (kind === 'family') familiesSmaller++;
+        }
+      } else if (e.type === 'guest_turned_away' || e.type === 'party_turned_away' || e.type === 'guest_impatient') {
+        partyTurnedAway[kind]++;
+      }
+    }
 
     if (state.hour === 0) {
       reviewScoreHistory.push(state.reviewScore);
@@ -78,6 +97,10 @@ export function simulate(
     loanBalance: state.loan.balance,
     bankruptDay: wentBankrupt ? state.day : null,
     finalValuation: calculateValuation(state),
+    partyArrivals,
+    partyTurnedAway,
+    partiesBookedSmaller,
+    familyTurnAwayRate: (partyTurnedAway.family + familiesSmaller) / Math.max(1, partyArrivals.family + partyTurnedAway.family),
   };
 }
 
@@ -129,6 +152,7 @@ if (isMainModule) {
     console.log(`  Goals done:      ${avg(results.map(r => r.objectivesCompleted)).toFixed(1)} avg, ${avg(results.map(r => r.objectivesFailed)).toFixed(1)} missed`);
     console.log(`  Valuation:       p10 ${money(quantile(results.map(r => r.finalValuation), 0.1))} / median ${money(quantile(results.map(r => r.finalValuation), 0.5))} / p90 ${money(quantile(results.map(r => r.finalValuation), 0.9))}`);
     console.log(`  Loan left:       ${money(avg(results.map(r => r.loanBalance)))} avg, paid off in ${pct(results.filter(r => r.loanBalance <= 0).length)}`);
+    console.log(`  Families:        ${Math.round(avg(results.map(r => r.familyTurnAwayRate)) * 100)}% not given a family room (turned away or booked smaller); ${Math.round(avg(results.map(r => r.partiesBookedSmaller)))} parties booked smaller`);
     console.log();
   }
 }

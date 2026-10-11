@@ -1,13 +1,16 @@
 import type { Guest, GuestTrait, Room, HotelState, Booking, GameEvent, ReturningGuestProfile } from './types.js';
 import type { PRNG } from './prng.js';
-import { ECONOMY, GUEST_TRAITS, REVIEW, HOUSEKEEPING, STAFF, AMENITIES, GUEST_NAMES, SATISFACTION, STORY } from '../config/balance.js';
+import { ECONOMY, GUEST_TRAITS, REVIEW, HOUSEKEEPING, STAFF, AMENITIES, GUEST_NAMES, SATISFACTION, STORY, PARTIES } from '../config/balance.js';
 import { getDecorReviewPenalty } from './DecorManager.js';
 import { getCampaignDemandMultiplier } from './MarketingManager.js';
 import { getCheckInCapacity } from './Layout.js';
 import { getAvailableRooms, getElevatorWaitPenalty } from './HotelState.js';
 import { facilityReviewBonus } from './FacilityManager.js';
 import { calculateRoomNoise, noiseToRatingPenalty } from './NoiseManager.js';
-import { getExpectationMultiplier, getRoomExpectedPrice, getPriceMultiplier, getStarDemandMultiplier } from './StarRatingManager.js';
+import { getExpectationMultiplier, getPartyFairPrice, getPriceMultiplier, getStarDemandMultiplier } from './StarRatingManager.js';
+import { profileRoom, fitsParty } from './RoomProfile.js';
+import { partyOf, rollParty, withParty, smallerParty, partyLabel, PartyLabel, describeParty, numberWord, sharesBeds } from './Party.js';
+import { hash01 } from './Movement.js';
 import { getTotalDemandMultiplier } from './SeasonManager.js';
 import { getReputationPenaltyMultiplier } from './StoryGenerator.js';
 
@@ -102,18 +105,27 @@ export function getExpectedArrivalsPerDay(state: HotelState): number {
 }
 
 /**
- * Cheapest available room the guest can afford and considers worth the price:
- * within their budget, and no more than `priceTolerance` x the fair price for
- * that room at the hotel's current star level.
+ * Cheapest available room that fits the guest's party (fitsParty), that they
+ * can afford, and that they consider worth the price: no more than
+ * `priceTolerance` x what the room is worth to them at the hotel's current
+ * star level (getPartyFairPrice -- a family room is only a double to a couple).
  */
-function matchGuestToRoom(guest: Guest, availableRooms: Room[], priceTolerance: number, starRating: number): Room | null {
+export function matchGuestToRoom(guest: Guest, availableRooms: Room[], priceTolerance: number, starRating: number): Room | null {
+  const party = partyOf(guest);
   for (const room of availableRooms) {
-    const fairPrice = getRoomExpectedPrice(room, starRating);
+    if (!fitsParty(profileRoom(room), party)) continue;
+    const fairPrice = getPartyFairPrice(room, party, starRating);
     if (room.pricePerNight <= guest.budget && room.pricePerNight <= fairPrice * priceTolerance) {
       return room;
     }
   }
   return null;
+}
+
+/** Whether any of these rooms would take this party at all (whatever it costs). */
+function anyFits(rooms: Room[], guest: Guest): boolean {
+  const party = partyOf(guest);
+  return rooms.some(room => fitsParty(profileRoom(room), party));
 }
 
 export interface ArrivalResult {
@@ -146,7 +158,8 @@ export function processArrivals(
   const checkInCapacity = getCheckInCapacity(state);
 
   const available = getAvailableRooms(state);
-  let availableIdx = 0;
+  // Rooms booked this hour (any free room is open to the next guest, cheaper or not)
+  const booked = new Set<string>();
   let checkedInThisHour = 0;
   let pool = [...state.returningGuestPool];
   // Guest ids come from a random draw, so two can clash: give a clash a suffix
@@ -170,6 +183,8 @@ export function processArrivals(
       guest = { ...guest, id: `${guest.id}-${n}` };
     }
     taken.add(guest.id);
+    // Who the booking's for, from its id (so nothing else's randomness moves)
+    guest = withParty(guest, rollParty(guest.id, state.day));
 
     // Front desk at capacity: guest leaves impatiently
     if (checkedInThisHour >= checkInCapacity) {
@@ -177,30 +192,56 @@ export function processArrivals(
       result.walkIns.push({ guest, outcome: 'impatient' });
       result.events.push({
         type: 'guest_impatient',
-        message: checkInCapacity === 0 ? 'Guest left (no staffed check-in desk)' : 'Guest left (front desk too busy)',
-        data: { reason: checkInCapacity === 0 ? 'no_desk' : 'front_desk_capacity', guestId: guest.id },
+        message: `${partyOf(guest).size > 2 ? PartyLabel(guest) : 'Guest'} left (${checkInCapacity === 0 ? 'no staffed check-in desk' : 'front desk too busy'})`,
+        data: { reason: checkInCapacity === 0 ? 'no_desk' : 'front_desk_capacity', guestId: guest.id, partyKind: partyOf(guest).kind, size: partyOf(guest).size },
       });
       continue;
     }
 
-    const remainingRooms = available.slice(availableIdx);
+    const remainingRooms = available.filter(r => !booked.has(r.id));
     const priceTolerance = 1 + prng.next() * ECONOMY.priceToleranceSpread;
-    const room = matchGuestToRoom(guest, remainingRooms, priceTolerance, state.starRating);
 
+    // No free room takes a party this big, but one would take one or two of
+    // them: most book smaller, the rest go elsewhere
+    const party = partyOf(guest);
+    let wanted: string | undefined; // the party they were, if they book smaller
+    if (!anyFits(remainingRooms, guest)) {
+      const smaller = withParty(guest, smallerParty(party, guest.id));
+      const fallback = anyFits(remainingRooms, smaller) ? smaller
+        : smaller.party!.size > 1 ? withParty(guest, { kind: 'solo', size: 1 }) : smaller;
+      if (fallback.party!.size < party.size && anyFits(remainingRooms, fallback)) {
+        if (hash01(`${guest.id}#party-reroll`) < PARTIES.rerollChance) {
+          guest = fallback;
+          wanted = party.kind;
+        } else {
+          result.turnedAway++;
+          result.walkIns.push({ guest, outcome: 'turned_away' });
+          const need = sharesBeds(party) ? `no room for ${numberWord(party.size)}` : `no room with ${numberWord(party.size)} beds`;
+          result.events.push({
+            type: 'party_turned_away',
+            message: `${PartyLabel(guest)} was turned away: ${need}`,
+            data: { guestId: guest.id, partyKind: party.kind, size: party.size, reason: 'no_fit' },
+          });
+          continue;
+        }
+      }
+    }
+
+    const room = matchGuestToRoom(guest, remainingRooms, priceTolerance, state.starRating);
+    const who = partyOf(guest);
     if (room) {
-      const roomIdx = available.indexOf(room);
-      availableIdx = roomIdx + 1;
+      booked.add(room.id);
       checkedInThisHour++;
       result.checkedIn.push({ guest, roomId: room.id });
       result.events.push({
         type: 'guest_arrived',
-        message: `Guest arriving for a ${room.type} room`,
-        data: { guestId: guest.id, roomId: room.id, trait: guest.trait },
+        message: who.size > 2 ? `${PartyLabel(guest)} arriving for a ${profileRoom(room).label}` : `Guest arriving for a ${room.type} room`,
+        data: { guestId: guest.id, roomId: room.id, trait: guest.trait, partyKind: who.kind, size: who.size, ...(wanted ? { wanted } : {}) },
       });
       if (guest.isReturning) {
         result.events.push({
           type: 'guest_returned',
-          message: `${guest.name} is back for another stay!`,
+          message: `${PartyLabel(guest)} is back for another stay!`,
           data: { guestId: guest.id, roomId: room.id },
         });
       }
@@ -209,8 +250,8 @@ export function processArrivals(
       result.walkIns.push({ guest, outcome: 'turned_away' });
       result.events.push({
         type: 'guest_turned_away',
-        message: 'Guest turned away (no room at a price they would pay)',
-        data: { guestId: guest.id },
+        message: who.size > 2 ? `${PartyLabel(guest)} turned away (no room at a price they would pay)` : 'Guest turned away (no room at a price they would pay)',
+        data: { guestId: guest.id, partyKind: who.kind, size: who.size, reason: 'price', ...(wanted ? { wanted } : {}) },
       });
     }
   }
@@ -267,8 +308,8 @@ export function processDepartures(
       result.departed.push({ guest, roomId: room.id, booking, breakdown });
       result.events.push({
         type: 'guest_departed',
-        message: `Guest checked out (${score.toFixed(1)}/10, $${totalPaid})`,
-        data: { guestId: guest.id, roomId: room.id, reviewScore: score, totalPaid },
+        message: `${partyOf(guest).size > 2 ? PartyLabel(guest) : 'Guest'} checked out (${score.toFixed(1)}/10, $${totalPaid})`,
+        data: { guestId: guest.id, roomId: room.id, reviewScore: score, totalPaid, partyKind: partyOf(guest).kind, size: partyOf(guest).size },
       });
 
       // Satisfied guests become eligible to return later (Satisfaction System Design, point 3)
@@ -310,7 +351,7 @@ export function calculateGuestReviewBreakdown(
   guest: Guest,
   prng: PRNG
 ): GuestReviewBreakdown {
-  const expectedPrice = getRoomExpectedPrice(room, state.starRating);
+  const expectedPrice = getPartyFairPrice(room, partyOf(guest), state.starRating);
   const priceFairness = 1 - Math.abs(room.pricePerNight - expectedPrice) / expectedPrice;
 
   // Proximity-based noise

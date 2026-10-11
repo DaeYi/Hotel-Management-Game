@@ -4,6 +4,7 @@ import { GameContext, useController, useControllerVersion } from './context';
 import { calculateValuation } from '../simulation/ObjectivesManager';
 import { getSeasonInfo } from '../simulation/SeasonManager';
 import { getOccupancyRate } from '../simulation/HotelState';
+import { partySize } from '../simulation/Party';
 import { getNextLoanPaymentDay } from '../simulation/EconomyManager';
 import { ACTOR_COLORS } from '../render/ActorLayer';
 import { CleaningLegend } from './CleaningKey';
@@ -134,8 +135,8 @@ function StatusBar() {
   const parts = [
     `Occupancy: ${Math.round(getOccupancyRate(state) * 100)}%`,
     `Rooms: ${state.rooms.length}`,
-    `Guests: ${state.guests.length}`,
-    `Turned away: ${state.totalTurnedAway}`,
+    `Guests: ${state.guests.reduce((sum, g) => sum + partySize(g), 0)}`,
+    `Bookings turned away: ${state.totalTurnedAway}`,
   ];
   if (cleaning > 0) parts.push(`Cleaning: ${cleaning}`);
   if (renovating > 0) parts.push(`Renovating: ${renovating}`);

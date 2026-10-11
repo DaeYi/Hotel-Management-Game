@@ -1,11 +1,11 @@
 import Phaser from 'phaser';
-import type { HotelState, Leg, GuestTrait, StaffPlan } from '../simulation/types';
+import type { HotelState, Leg, StaffPlan } from '../simulation/types';
 import { getAccessibleDesks, getMannedDeskStaff, getAccessibleBreakRooms, getStaffBases, getFixtureFront } from '../simulation/Layout';
-import { isGuestAway } from '../simulation/GuestMovement';
 import { getStaffPlan } from '../simulation/StaffManager';
 import { positionAt, legsEnd, hash01 } from '../simulation/Movement';
+import { guestFigures, type Figure } from './figures';
 import { BREAK_ROOM } from '../config/balance';
-import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE, getGuestDotColor } from './GridRenderer';
+import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE } from './GridRenderer';
 
 // People in the building, drawn exactly where the simulation has them. Nothing
 // here moves anyone: guests' trips (arriving, out at a facility, moving rooms),
@@ -26,17 +26,6 @@ const SEATS: Array<[number, number]> = [
   [0.22, 0.27], [0.5, 0.18], [0.78, 0.27], [0.22, 0.73], [0.5, 0.82], [0.78, 0.73],
 ].slice(0, Math.max(6, BREAK_ROOM.seats)) as Array<[number, number]>;
 
-interface Figure {
-  id: string;
-  kind: 'guest' | 'staff';
-  color: number;
-  x: number; // continuous tile coordinates
-  y: number;
-  floor: number;
-  settled: boolean; // standing or sitting at a place (seated with others) rather than walking
-  ring?: boolean; // returning guest
-}
-
 export class ActorLayer {
   private graphics: Phaser.GameObjects.Graphics;
   private planCache = new WeakMap<HotelState, StaffPlan>();
@@ -53,25 +42,11 @@ export class ActorLayer {
 
   /** Draw everyone on the floor being viewed, where they are at game time t (absolute hours). */
   update(state: HotelState, currentFloor: number, t: number) {
-    const figures: Figure[] = [];
-    this.away = new Set();
-
-    // Guests on a trip: walking in, checking in, at a facility, moving rooms
-    for (const guest of state.guests) {
-      const trip = guest.trip;
-      if (!trip || trip.length === 0 || t >= legsEnd(trip)) continue;
-      if (isGuestAway(guest, t)) this.away.add(guest.id); // arriving, or out: no dot in the room
-      if (t < trip[0].start) continue; // not set out yet (or not here yet)
-      const figure = this.place(trip, t, guest.id, 'guest', getGuestDotColor(guest.trait));
-      if (figure) figures.push({ ...figure, ring: guest.isReturning });
-    }
-
-    // People walking out (checked out, walked out, turned away)
-    for (const walker of state.walkers ?? []) {
-      if (walker.trip.length === 0 || t < walker.trip[0].start || t >= legsEnd(walker.trip)) continue;
-      const figure = this.place(walker.trip, t, walker.id, 'guest', getGuestDotColor(walker.trait as GuestTrait));
-      if (figure) figures.push({ ...figure, ring: walker.isReturning });
-    }
+    // Guests on a trip (walking in, checking in, at a facility, moving rooms)
+    // and people walking out: every member of every party
+    const guests = guestFigures(state, t);
+    const figures: Figure[] = guests.figures;
+    this.away = guests.away;
 
     // Housekeepers and maintenance: this hour's plan
     const plan = this.staffPlan(state);
@@ -115,7 +90,7 @@ export class ActorLayer {
   private place(legs: Leg[], t: number, id: string, kind: Figure['kind'], color: number): Figure | null {
     const at = positionAt(legs, t);
     if (!at || (at.leg.kind === 'stay' && at.leg.activity === 'away')) return null;
-    return { id, kind, color, x: at.x, y: at.y, floor: at.floor, settled: !at.moving };
+    return { id, kind, color, x: at.x, y: at.y, floor: at.floor, settled: !at.moving, ...(at.leg.kind === 'stay' ? { since: at.leg.start } : {}) };
   }
 
   private draw(state: HotelState, currentFloor: number, figures: Figure[]) {
@@ -153,40 +128,45 @@ export class ActorLayer {
       ...getAccessibleDesks(state).map(d => getFixtureFront(state, d)).filter(p => p && p.floor === currentFloor).map(p => `${p!.gridX},${p!.gridY}`),
     ]);
     for (const [key, group] of byTile) {
-      group.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      // First come, first seated: whoever's been there longest picks first, so nobody already seated moves
+      group.sort((a, b) => (a.since ?? -Infinity) - (b.since ?? -Infinity) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       if (group.length === 1 && !gatheringTiles.has(key)) {
         const f = group[0];
-        this.drawFigure(GRID_OFFSET_X + (Math.round(f.x) + 0.5) * TILE_SIZE, GRID_OFFSET_Y + (Math.round(f.y) + 0.5) * TILE_SIZE, f.kind, f.color, f.ring);
+        this.drawFigure(GRID_OFFSET_X + (Math.round(f.x) + 0.5) * TILE_SIZE, GRID_OFFSET_Y + (Math.round(f.y) + 0.5) * TILE_SIZE, f.kind, f.color, f.ring, f.small);
         continue;
       }
       const taken = new Map<number, number>(); // seat -> people in it
       for (const f of group) {
-        let seat = Math.floor(hash01(`${f.id}seat`) * SEATS.length);
+        // A party sits together: its members in the seats after its first one's
+        let seat = f.group !== undefined
+          ? (Math.floor(hash01(`${f.group}seat`) * SEATS.length) + (f.member ?? 0)) % SEATS.length
+          : Math.floor(hash01(`${f.id}seat`) * SEATS.length);
         for (let tries = 0; tries < SEATS.length && taken.has(seat); tries++) seat = (seat + 1) % SEATS.length;
         const squeeze = (taken.get(seat) ?? 0) * 3; // more people than seats: squeeze in
         taken.set(seat, (taken.get(seat) ?? 0) + 1);
         const [sx, sy] = SEATS[seat];
         this.drawFigure(
           GRID_OFFSET_X + (Math.round(f.x) + sx) * TILE_SIZE + squeeze,
-          GRID_OFFSET_Y + (Math.round(f.y) + sy) * TILE_SIZE + squeeze, f.kind, f.color, f.ring);
+          GRID_OFFSET_Y + (Math.round(f.y) + sy) * TILE_SIZE + squeeze, f.kind, f.color, f.ring, f.small);
       }
     }
     for (const f of onFloor) {
       if (f.settled) continue;
       const ox = (hash01(f.id) - 0.5) * TILE_SIZE * 0.3;
       const oy = (hash01(`${f.id}y`) - 0.5) * TILE_SIZE * 0.3;
-      this.drawFigure(GRID_OFFSET_X + (f.x + 0.5) * TILE_SIZE + ox, GRID_OFFSET_Y + (f.y + 0.5) * TILE_SIZE + oy, f.kind, f.color, f.ring);
+      this.drawFigure(GRID_OFFSET_X + (f.x + 0.5) * TILE_SIZE + ox, GRID_OFFSET_Y + (f.y + 0.5) * TILE_SIZE + oy, f.kind, f.color, f.ring, f.small);
     }
   }
 
-  /** Guests are dots and staff are squares, both outlined in white. */
-  private drawFigure(cx: number, cy: number, kind: Figure['kind'], color: number, ring = false) {
+  /** Guests are dots (children smaller) and staff are squares, both outlined in white. */
+  private drawFigure(cx: number, cy: number, kind: Figure['kind'], color: number, ring = false, small = false) {
     const g = this.graphics;
     g.fillStyle(color, 1);
     g.lineStyle(1.5, 0xffffff, 0.9);
     if (kind === 'guest') {
-      g.fillCircle(cx, cy, 5);
-      g.strokeCircle(cx, cy, 5);
+      const r = small ? 3.5 : 5;
+      g.fillCircle(cx, cy, r);
+      g.strokeCircle(cx, cy, r);
       if (ring) g.strokeCircle(cx, cy, 8);
     } else {
       g.fillRect(cx - 5, cy - 5, 10, 10);

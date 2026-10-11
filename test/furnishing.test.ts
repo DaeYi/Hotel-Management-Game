@@ -99,9 +99,9 @@ describe('A room is what it is furnished with', () => {
 
   it('piling in extras doesn\'t buy a grade: only the best of each kind of thing counts', () => {
     const f = defaultFurnishing('classic_queen');
-    // Every wall in the room hung with premium art, and a premium TV
+    // The bedroom walls hung with premium art, and a premium TV
     const art: FurnitureItem[] = [];
-    for (let x = 0; x < ROOM_CELLS; x++) art.push({ id: `art-${x}`, kind: 'art', tier: 2, x, y: 0, rot: 0 });
+    for (const [x, y, rot] of [[0, 0, 0], [1, 0, 0], [0, 0, 3], [0, 1, 3]] as const) art.push({ id: `art-${x}-${y}-${rot}`, kind: 'art', tier: 2, x, y, rot });
     const piled = { ...f, custom: true, items: [...f.items, ...art] };
     const before = profileFurnishing(f).quality;
     const after = profileFurnishing(piled);
@@ -344,6 +344,112 @@ describe('Refit quotes', () => {
     };
     expect(cheapest('classic_queen', 'deluxe')).toBeGreaterThan(ROOM_CONFIG.deluxe.buildCost * 0.9);
     expect(cheapest('exec_studio', 'suite')).toBeGreaterThan(ROOM_CONFIG.suite.buildCost * 0.85);
+  });
+});
+
+describe('Loopholes the free editor opened, closed', () => {
+  const at = (f: Furnishing, id: string, change: Partial<FurnitureItem>) => withItems(f, i => (i.id === id ? { ...i, ...change } : i));
+  const without = (f: Furnishing, ...ids: string[]) => ({ ...f, custom: true, items: f.items.filter(i => !ids.includes(i.id)) });
+  const add = (f: Furnishing, ...items: FurnitureItem[]) => ({ ...f, custom: true, items: [...f.items, ...items] });
+
+  it('a sofa bed is somewhere to sleep, not a lounge: no 2-star junior suites', () => {
+    // A premium sofa bed where the armchair was: with a real sofa it would be a junior suite
+    const f = add(without(setArrangement(deluxeQueen(), 'bath_back'), 'seat'), { id: 'living', kind: 'sofa_bed', tier: 2, x: 0, y: 2, rot: 1 });
+    const sofa = { ...f, items: f.items.map(i => (i.id === 'living' ? { ...i, kind: 'sofa' as const } : i)) };
+    expect(profileFurnishing(sofa).type).toBe('suite');
+    const p = profileFurnishing(f);
+    expect(p.issues).toEqual([]);
+    expect(p).toMatchObject({ type: 'deluxe', hasLounge: false, sleeps: 3 });
+  });
+
+  it('a room needs a real bed: a sofa bed alone won\'t do', () => {
+    const f = add(without(defaultFurnishing('classic_queen', 'bath_back'), 'bed'), { id: 'living', kind: 'sofa_bed', tier: 2, x: 0, y: 0, rot: 0 });
+    expect(profileFurnishing(f).issues.map(i => i.code)).toContain('no_bed');
+  });
+
+  it('leaving things out doesn\'t raise the grade: a premium bed and bath alone are still standard', () => {
+    const f = without(withItems(defaultFurnishing('classic_queen'), i => (['bed', 'bath'].includes(i.id) ? { ...i, tier: 2 as const } : i)), 'storage', 'seat', 'tv');
+    expect(profileFurnishing(f)).toMatchObject({ type: 'standard', issues: [] });
+  });
+
+  it('more beds add room, not quality: three premium singles and a basic shower are a standard family room', () => {
+    const f: Furnishing = {
+      preset: 'twin', arrangement: 'bath_back', mirrored: false, custom: true,
+      items: [
+        { id: 'bed', kind: 'bed_single', tier: 2, x: 0, y: 0, rot: 0 }, { id: 'bed-2', kind: 'bed_single', tier: 2, x: 1, y: 0, rot: 0 },
+        { id: 'bed-3', kind: 'bed_single', tier: 2, x: 3, y: 2, rot: 0 }, { id: 'bath', kind: 'bath_shower', tier: 1, x: 2, y: 0, rot: 0 },
+        // premium storage and TV too: with the beds counted once, only a premium bathroom makes it deluxe
+        { id: 'storage', kind: 'wardrobe', tier: 2, x: 0, y: 3, rot: 0 }, { id: 'tv', kind: 'tv', tier: 2, x: 0, y: 2, rot: 3 },
+      ],
+    };
+    expect(profileFurnishing(f)).toMatchObject({ type: 'standard', layoutClass: 'family', issues: [] });
+    expect(profileFurnishing(f).quality).toBeCloseTo(profileFurnishing(without(f, 'bed-2', 'bed-3')).quality, 9);
+    const premiumBath = { ...f, items: f.items.map(i => (i.id === 'bath' ? { ...i, tier: 2 as const } : i)) };
+    expect(profileFurnishing(premiumBath).type).toBe('deluxe');
+  });
+
+  it('a junior suite takes a suite\'s grade, not just a sofa and a TV', () => {
+    const plainer = withItems(defaultFurnishing('exec_studio'), i => (['tv', 'storage'].includes(i.id) ? { ...i, tier: 1 as const } : i));
+    expect(profileFurnishing(plainer)).toMatchObject({ type: 'deluxe', hasLounge: true });
+    expect(profileFurnishing(defaultFurnishing('exec_studio')).type).toBe('suite');
+  });
+
+  it('furniture can\'t make a room a category the hotel hasn\'t unlocked', () => {
+    const saved = (['bed_queen', 'bath_shower', 'rail'] as const).map(k => [k, FURNITURE[k].tier2Stars] as const);
+    for (const [k] of saved) FURNITURE[k].tier2Stars = 1; // as if premium pieces came at one star
+    try {
+      expect(validateFurnishing(deluxeQueen(), 1)).toBe('A deluxe room needs 2 stars');
+      expect(validateFurnishing(deluxeQueen(), 2)).toBeNull();
+    } finally {
+      for (const [k, v] of saved) FURNITURE[k].tier2Stars = v;
+    }
+  });
+
+  it('a suite for one is priced like a room for one', () => {
+    expect(classPriceFactor({ type: 'suite', layoutClass: 'single' })).toBe(0.75);
+    expect(classPriceFactor({ type: 'suite', layoutClass: 'double' })).toBe(1);
+  });
+
+  it('a wall piece can\'t hang on the door, or inside the bathroom', () => {
+    const base = defaultFurnishing('classic_queen', 'bath_back');
+    expect(profileFurnishing({ ...at(base, 'tv', { x: 1, y: 3, rot: 2 }), custom: true }).issues.map(i => i.code)).toContain('wall');
+    expect(profileFurnishing({ ...at(base, 'tv', { x: 3, y: 0, rot: 0 }), custom: true }).issues.map(i => i.code)).toContain('wall');
+  });
+
+  it('a piece on top of another still shows it blocks the doorway', () => {
+    const base = defaultFurnishing('classic_queen', 'bath_back');
+    const f = add(base, { id: 'living', kind: 'sofa', tier: 1, x: 0, y: 3, rot: 0 });
+    expect(profileFurnishing(f).issues.map(i => i.code)).toEqual(expect.arrayContaining(['overlap', 'doorway']));
+  });
+
+  it('every way of furnishing a room: refitting up to deluxe or a suite costs about what building one does', () => {
+    // From a $2,000 Standard Queen, over every choice of pieces (any of them
+    // left out but the bed, the bathroom and, for a suite, the lounge), for
+    // the same kind of room as the preset that's built for it
+    const base = defaultFurnishing('classic_queen');
+    const cheapest = (preset: PresetId, type: RoomType, optional: string[]) => {
+      const pieces = ROOM_PRESETS[preset].arrangements.bath_front.pieces;
+      const layoutClass = profileFurnishing(defaultFurnishing(preset)).layoutClass;
+      const choices = pieces.map(piece => {
+        const group = FURNITURE[ROOM_PRESETS[preset].defaults[piece.id].kind].group;
+        const kinds = GROUP_KINDS[group].flatMap(kind => [1, 2].map(tier => ({ id: piece.id, kind, tier: tier as Tier })));
+        return optional.includes(piece.id) ? [null, ...kinds] : kinds;
+      });
+      let best = Infinity;
+      const walk = (i: number, picked: Array<{ id: string; kind: FurnitureKind; tier: Tier }>) => {
+        if (i === choices.length) {
+          const f: Furnishing = { preset, arrangement: 'bath_front', mirrored: false, custom: true, items: arrangeItems(preset, 'bath_front', false, picked) };
+          const p = profileFurnishing(f);
+          if (p.type === type && p.layoutClass === layoutClass && p.issues.length === 0) best = Math.min(best, ROOM_CONFIG.standard.buildCost + quoteRefit(base, f).cost);
+          return;
+        }
+        for (const c of choices[i]) walk(i + 1, c ? [...picked, c] : picked);
+      };
+      walk(0, []);
+      return best;
+    };
+    expect(cheapest('classic_queen', 'deluxe', ['storage', 'seat', 'tv'])).toBeGreaterThan(ROOM_CONFIG.deluxe.buildCost * 0.9);
+    expect(cheapest('exec_studio', 'suite', ['storage', 'art'])).toBeGreaterThan(ROOM_CONFIG.suite.buildCost * 0.95);
   });
 });
 

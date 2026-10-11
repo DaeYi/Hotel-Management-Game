@@ -25,7 +25,7 @@ import { ToastQueue } from './ToastQueue';
 
 /** Anything the build panel can place (a room, facility, street entrance, desk, closet, break room, or elevator shaft), or the bulldoze tool. */
 /** Rooms built from a preset rather than one of the original types. */
-export const PRESET_TOOLS = ['twin', 'bunk_family'] as const;
+export const PRESET_TOOLS = ['twin', 'bunk_family', 'deluxe_twin', 'deluxe_family'] as const;
 export type PresetTool = typeof PRESET_TOOLS[number];
 export type BuildType = TileType | PresetTool | 'elevator' | FixtureType | 'bulldoze';
 

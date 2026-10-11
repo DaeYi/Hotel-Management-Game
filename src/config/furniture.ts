@@ -74,7 +74,7 @@ export const GROUP_LABELS: Record<FurnitureGroup, string> = {
   bed: 'Bed', bath: 'Bathroom', storage: 'Storage', seat: 'Seat', living: 'Lounge', tv: 'TV', art: 'Art',
 };
 
-export type PresetId = 'classic_queen' | 'compact_deluxe' | 'exec_studio' | 'twin' | 'bunk_family';
+export type PresetId = 'classic_queen' | 'compact_deluxe' | 'exec_studio' | 'twin' | 'bunk_family' | 'deluxe_twin' | 'deluxe_family';
 export type ArrangementId = 'bath_front' | 'bath_back';
 
 /** Where a preset's piece goes: door-local cell of its top-left, how it's turned, and a length if not its own (the long bathroom). */
@@ -194,6 +194,20 @@ export const ROOM_PRESETS: Record<PresetId, RoomPreset> = {
     arrangements: arrangements(FAMILY),
     defaults: { bed: { kind: 'bed_queen', tier: 1 }, 'bed-2': { kind: 'bunk', tier: 1 }, bath: { kind: 'bath_shower', tier: 1 }, storage: { kind: 'rail', tier: 1 }, tv: { kind: 'tv', tier: 1 } },
   },
+  // The twin with premium beds and bathroom: a deluxe room. $5,000, like a Deluxe King.
+  deluxe_twin: {
+    label: 'Deluxe Twin',
+    shellCost: SHELL,
+    arrangements: arrangements(TWIN),
+    defaults: { bed: { kind: 'bed_single', tier: 2 }, 'bed-2': { kind: 'bed_single', tier: 2 }, bath: { kind: 'bath_shower', tier: 2 }, storage: { kind: 'wardrobe', tier: 2 }, seat: { kind: 'desk', tier: 1 }, tv: { kind: 'tv', tier: 2 } },
+  },
+  // The family room with premium beds and bathroom: a deluxe room. $5,400.
+  deluxe_family: {
+    label: 'Deluxe Family Room',
+    shellCost: SHELL,
+    arrangements: arrangements(FAMILY),
+    defaults: { bed: { kind: 'bed_queen', tier: 2 }, 'bed-2': { kind: 'bunk', tier: 2 }, bath: { kind: 'bath_shower', tier: 2 }, storage: { kind: 'wardrobe', tier: 2 }, tv: { kind: 'tv', tier: 2 } },
+  },
 };
 
 export const PRESET_FOR_TYPE: Record<RoomType, PresetId> = {
@@ -204,6 +218,7 @@ export const PRESET_FOR_TYPE: Record<RoomType, PresetId> = {
 
 export const FURNISHING = {
   deluxeQuality: 1.75, // weighted tier average at which a room is deluxe
+  suiteQuality: 1.9, // and, with a lounge, a junior suite (so a lounge alone doesn't make one)
   sleepsPerTile: 4, // the most a one-tile room sleeps, however many beds are crammed in
   refitResale: 0.5, // share of a removed piece's cost you get back
   refitPremium: 1.4, // fitting out a room in place costs more than the parts (labour, disruption)

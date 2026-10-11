@@ -1,8 +1,9 @@
-import type { Room, RoomType, Furnishing, FurnitureItem, Direction } from './types.js';
+import type { Room, RoomType, Furnishing, FurnitureItem, Direction, Party } from './types.js';
 import {
-  FURNITURE, ROOM_PRESETS, PRESET_FOR_TYPE, FURNISHING, ROOM_CELLS,
+  FURNITURE, ROOM_PRESETS, PRESET_FOR_TYPE, FURNISHING, ROOM_CELLS, GROUP_KINDS,
   type PresetId, type ArrangementId, type Tier, type Rot, type FurnitureKind, type FurnitureGroup,
 } from '../config/furniture.js';
+import { ROOM_CONFIG } from '../config/balance.js';
 
 // What a room is, worked out from what's in it (docs/designs/rooms-rethink.md).
 // The player never picks "deluxe" or "family": they furnish a room, and the
@@ -111,7 +112,7 @@ const STEPS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 function checkLayout(items: PlacedItem[]): RoomIssue[] {
   const issues: RoomIssue[] = [];
   const label = (i: PlacedItem) => FURNITURE[i.kind].label.toLowerCase();
-  if (!items.some(i => (FURNITURE[i.kind].sleeps ?? 0) > 0)) issues.push({ code: 'no_bed', message: 'Needs a bed' });
+  if (!items.some(i => i.group === 'bed')) issues.push({ code: 'no_bed', message: 'Needs a bed' }); // a sofa bed is extra, not the bed
   if (!items.some(i => i.group === 'bath')) issues.push({ code: 'no_bath', message: 'Needs a bathroom' });
 
   for (const item of items) {
@@ -126,13 +127,12 @@ function checkLayout(items: PlacedItem[]): RoomIssue[] {
   const floor = items.filter(i => !i.wall);
   const taken = new Map<string, string>();
   for (const item of floor) {
+    let overlaps = false;
     for (const cell of cellsOf(item)) {
-      if (taken.has(cell)) {
-        issues.push({ code: 'overlap', itemId: item.id, message: `The ${label(item)} is on top of something` });
-        break;
-      }
-      taken.set(cell, item.id);
+      if (taken.has(cell)) overlaps = true;
+      else taken.set(cell, item.id); // every cell it covers is taken, overlapping or not
     }
+    if (overlaps) issues.push({ code: 'overlap', itemId: item.id, message: `The ${label(item)} is on top of something` });
   }
   const blocking = DOORWAY_CELLS.find(c => taken.has(c));
   if (blocking) issues.push({ code: 'doorway', itemId: taken.get(blocking), message: 'Keep the doorway clear' });
@@ -164,10 +164,14 @@ function checkLayout(items: PlacedItem[]): RoomIssue[] {
     const [dx, dy] = { top: [0, -1], right: [1, 0], bottom: [0, 1], left: [-1, 0] }[item.edge];
     const bx = item.x + dx;
     const by = item.y + dy;
-    const onRoomWall = bx < 0 || by < 0 || bx >= ROOM_CELLS || by >= ROOM_CELLS;
-    const onBathWall = bathCells.has(`${bx},${by}`) && !bathCells.has(`${item.x},${item.y}`);
+    const inBathroom = bathCells.has(`${item.x},${item.y}`);
+    const onDoor = item.edge === 'bottom' && by === ROOM_CELLS && DOORWAY_CELLS.includes(`${item.x},${item.y}`);
+    const onRoomWall = (bx < 0 || by < 0 || bx >= ROOM_CELLS || by >= ROOM_CELLS) && !onDoor;
+    const onBathWall = bathCells.has(`${bx},${by}`);
     const spot = `${item.x},${item.y},${item.edge}`;
-    if (!onRoomWall && !onBathWall) issues.push({ code: 'wall', itemId: item.id, message: `The ${label(item)} needs a wall to hang on` });
+    if (inBathroom || (!onRoomWall && !onBathWall)) {
+      issues.push({ code: 'wall', itemId: item.id, message: inBathroom ? `The ${label(item)} can't go in the bathroom` : onDoor ? `The ${label(item)} can't hang on the door` : `The ${label(item)} needs a wall to hang on` });
+    }
     else if (hung.has(spot)) issues.push({ code: 'overlap', itemId: item.id, message: `The ${label(item)} is where something else hangs` });
     hung.add(spot);
   }
@@ -195,28 +199,40 @@ export function profileFurnishing(f: Furnishing): RoomProfile {
   const sleeps = Math.min(FURNISHING.sleepsPerTile, sharing);
   const beds = Math.min(FURNISHING.sleepsPerTile, separate);
 
-  // How nice: every bed counts; of everything else, only the best piece of each
-  // kind of thing (so piling in extras doesn't buy a grade)
-  const counted: PlacedItem[] = items.filter(i => i.group === 'bed');
+  // How nice: the beds together (their average tier: more beds add room, not
+  // quality), the best piece of each other kind of thing (extras add nothing),
+  // and, for each thing a room is expected to have but doesn't -- storage, a
+  // TV, somewhere to sit -- a basic one (so leaving things out can't raise it)
+  const weightOf = (group: FurnitureGroup) => FURNITURE[GROUP_KINDS[group][0]].gradeWeight;
+  let weighted = 0;
+  let weights = 0;
+  const bedPieces = items.filter(i => i.group === 'bed');
+  if (bedPieces.length > 0) {
+    weighted += bedPieces.reduce((sum, b) => sum + b.tier, 0) / bedPieces.length * weightOf('bed');
+    weights += weightOf('bed');
+  }
   const best = new Map<FurnitureGroup, PlacedItem>();
   for (const item of items) {
     if (item.group === 'bed') continue;
     const prev = best.get(item.group);
     if (!prev || item.tier > prev.tier) best.set(item.group, item);
   }
-  counted.push(...best.values());
-  let weighted = 0;
-  let weights = 0;
-  for (const item of counted) {
-    const spec = FURNITURE[item.kind];
-    weighted += item.tier * spec.gradeWeight;
-    weights += spec.gradeWeight;
+  for (const [group, item] of best) {
+    weighted += item.tier * weightOf(group);
+    weights += weightOf(group);
+  }
+  const expected: FurnitureGroup[] = ['bath', 'storage', 'tv', ...(best.has('living') ? [] : ['seat' as const])];
+  for (const group of expected) {
+    if (best.has(group)) continue;
+    weighted += weightOf(group);
+    weights += weightOf(group);
   }
   const quality = weights > 0 ? weighted / weights : 1;
 
-  const hasLounge = items.some(i => i.group === 'living') && items.some(i => i.group === 'tv');
+  // A lounge is a sofa and a TV (a sofa bed is somewhere to sleep)
+  const hasLounge = items.some(i => i.kind === 'sofa') && items.some(i => i.group === 'tv');
   const deluxe = quality >= FURNISHING.deluxeQuality - 1e-9;
-  const type: RoomType = deluxe ? (hasLounge ? 'suite' : 'deluxe') : 'standard';
+  const type: RoomType = deluxe ? (hasLounge && quality >= FURNISHING.suiteQuality - 1e-9 ? 'suite' : 'deluxe') : 'standard';
   const sharedBed = items.some(i => FURNITURE[i.kind].shared);
   const layoutClass: LayoutClass = sleeps >= 3 ? 'family' : sleeps === 2 ? (sharedBed ? 'double' : 'twin') : 'single';
   const bedName = items.some(i => i.kind === 'bed_king') ? 'King' : 'Queen';
@@ -253,8 +269,44 @@ export function isBookable(room: Pick<Room, 'type' | 'furnishing'>): boolean {
  * exactly its category's price.
  */
 export function classPriceFactor(profile: Pick<RoomProfile, 'type' | 'layoutClass'>): number {
-  if (profile.type === 'suite') return profile.layoutClass === 'family' ? 1.1 : 1;
+  if (profile.type === 'suite') return profile.layoutClass === 'family' ? 1.1 : profile.layoutClass === 'single' ? 0.75 : 1;
   return { single: 0.75, double: 1, twin: 1.05, family: 1.25 }[profile.layoutClass];
+}
+
+/**
+ * Whether a room fits a party: couples and families share beds, so they need
+ * room for everyone; friends and colleagues each need a bed of their own.
+ */
+export function fitsParty(profile: Pick<RoomProfile, 'sleeps' | 'beds'>, party: Party): boolean {
+  const sharing = party.kind === 'couple' || party.kind === 'family';
+  return (sharing ? profile.sleeps : profile.beds) >= party.size;
+}
+
+/** Who a room fits, in words: "a couple, families of 4, 2 friends". */
+export function whoFits(profile: Pick<RoomProfile, 'sleeps' | 'beds'>): string {
+  if (profile.sleeps === 0) return 'nobody (it needs a bed)';
+  const parts = [profile.sleeps >= 2 ? 'a couple' : 'one person'];
+  if (profile.sleeps >= 3) parts.push(`families of ${profile.sleeps}`);
+  if (profile.beds >= 2) parts.push(`${profile.beds} friends`);
+  return parts.join(', ');
+}
+
+/** The smallest kind of room a party needs: a family room for three or more, twin beds for two who won't share, else a double. */
+export function neededClass(party: Party): LayoutClass {
+  if (party.size >= 3) return 'family';
+  if (party.size === 2 && party.kind !== 'couple' && party.kind !== 'family') return 'twin';
+  return 'double';
+}
+
+/**
+ * What a room is worth to a party, against its category's price: no more than
+ * the kind of room they need -- a family room is a double to a couple, so
+ * they won't pay a family's price for its extra beds. A double (every room
+ * furnished like an original type) is worth exactly its price to anyone.
+ */
+export function partyPriceFactor(profile: Pick<RoomProfile, 'type' | 'layoutClass'>, party: Party): number {
+  const needed = classPriceFactor({ type: profile.type, layoutClass: neededClass(party) });
+  return Math.min(classPriceFactor(profile), Math.max(1, needed));
 }
 
 /** The thin strip a wall piece takes along its edge (door-local cells), for drawing it. */
@@ -349,8 +401,12 @@ export function validateFurnishing(f: Furnishing, peakStars: number): string | n
     if (!FURNITURE[item.kind]) return 'Unknown furniture';
     if (!isFurnitureUnlocked(item.kind, item.tier, peakStars)) return `${FURNITURE[item.kind].label}${item.tier === 2 ? ' (premium)' : ''} needs a higher star rating`;
   }
-  const issue = profileFurnishing(f).issues[0];
-  return issue ? issue.message : null;
+  const profile = profileFurnishing(f);
+  const issue = profile.issues[0];
+  if (issue) return issue.message;
+  // The furniture can't make a room a category the hotel hasn't unlocked yet
+  if (peakStars < ROOM_CONFIG[profile.type].requiredStars) return `A ${profile.type} room needs ${ROOM_CONFIG[profile.type].requiredStars} stars`;
+  return null;
 }
 
 /** Start a room over from a preset: its layout and furniture, keeping where the bathroom goes. */
@@ -358,7 +414,7 @@ export function switchPreset(f: Furnishing, preset: PresetId): Furnishing {
   return defaultFurnishing(preset, f.arrangement, f.mirrored);
 }
 
-/** The same pieces laid out by another of the preset's arrangements (back to the preset's layout). */
+/** The preset's pieces, with the kinds and grades chosen for them, laid out by one of its arrangements (back to the preset's layout: pieces added beyond the preset's are dropped). */
 export function setArrangement(f: Furnishing, arrangement: ArrangementId): Furnishing {
   const { custom: _, ...rest } = f;
   return { ...rest, arrangement, items: arrangeItems(f.preset, arrangement, f.mirrored, f.items) };
@@ -396,20 +452,23 @@ export function rectToWorld(door: Direction, r: { x: number; y: number; w: numbe
  * person it sleeps: two across a double bed, two along bunk beds, one to a
  * single or a sofa bed. Empty if it has no bed.
  */
-export function sleepSpots(room: Pick<Room, 'type' | 'furnishing' | 'door'>): Array<[number, number]> {
-  const spots: Array<[number, number]> = [];
+export function sleepSpots(room: Pick<Room, 'type' | 'furnishing' | 'door'>, separate = false): Array<[number, number]> {
+  const own: Array<[number, number]> = []; // a bed each
+  const shared: Array<[number, number]> = []; // the second place in a shared bed
   for (const item of profileRoom(room).items) {
-    const n = FURNITURE[item.kind].sleeps ?? 0;
+    const spec = FURNITURE[item.kind];
+    const n = spec.sleeps ?? 0;
     if (n === 0) continue;
     const r = rectToWorld(room.door, item);
     for (let k = 0; k < n; k++) {
       const f = (k + 0.5) / n;
-      if (n === 1) spots.push([r.x + r.w / 2, r.y + r.h / 2]);
-      else if (r.w >= r.h) spots.push([r.x + r.w * f, r.y + r.h / 2]);
-      else spots.push([r.x + r.w / 2, r.y + r.h * f]);
+      const spot: [number, number] = n === 1 ? [r.x + r.w / 2, r.y + r.h / 2]
+        : r.w >= r.h ? [r.x + r.w * f, r.y + r.h / 2] : [r.x + r.w / 2, r.y + r.h * f];
+      // Sharing: in bed order. Not sharing (friends): one to a bed before anyone shares
+      (separate && spec.shared && k > 0 ? shared : own).push(spot);
     }
   }
-  return spots.slice(0, FURNISHING.sleepsPerTile);
+  return [...own, ...shared].slice(0, FURNISHING.sleepsPerTile);
 }
 
 /** Where a guest in their room is: in bed (cells, tile world frame), or the middle of the room. */

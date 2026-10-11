@@ -2,16 +2,21 @@ import type { ComponentChildren } from 'preact';
 import type { Room, Facility, HotelState, Guest, FacilityType } from '../simulation/types';
 import { ROOM_CONFIG, ECONOMY, AMENITIES, DECOR, RENOVATION, GRID, FACILITY_CONFIG, FACILITY_LEVELS } from '../config/balance';
 import {
-  formatRoomLabel, getDemolishRefund, isFacilityOpen, getRenovationCost, isRoomReachable, getFacilityUpgradeCost, getRoomInvestedCost,
+  formatRoomLabel, getDemolishRefund, isFacilityOpen, getRenovationCost, isRoomReachable, getFacilityUpgradeCost, getRoomInvestedCost, getRoomPriceRange,
 } from '../simulation/HotelState';
 import { getRoomExpectedPrice, getUpkeepMultiplier } from '../simulation/StarRatingManager';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
 import { DOOR_ARROWS } from './BuildPanel';
 import { RoomPlan } from './RoomPlan';
-import { profileRoom, profileFurnishing, furnishingOf } from '../simulation/RoomProfile';
+import { profileRoom, profileFurnishing, furnishingOf, whoFits } from '../simulation/RoomProfile';
+import { partyOf, describeParty } from '../simulation/Party';
+import type { GuestTrait } from '../simulation/types';
+
+/** How a guest's trait reads (the loud trait is "rowdy": not to be confused with a party of people). */
+const TRAIT_LABELS: Record<GuestTrait, string> = { normal: '', light_sleeper: 'light sleeper', big_spender: 'big spender', party_guest: 'rowdy' };
 import { getStaffTravelHours } from '../simulation/Layout';
 import { positionAt, legsEnd } from '../simulation/Movement';
-import { facilityCapacity, guestsInFacility, openingHours } from '../simulation/FacilityManager';
+import { facilityCapacity, facilityLoad, peopleInFacility, openingHours } from '../simulation/FacilityManager';
 import { roomCleaningAt, describeWait, type RoomCleaning } from '../simulation/CleaningStatus';
 import { useController, useLiveClock } from './context';
 import { formatBar, formatMoney, formatWalk, capitalize } from './format';
@@ -70,7 +75,7 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
   let status: string;
   if (room.status === 'occupied') {
     const where = guest ? guestWhereabouts(guest, state, c.gameTime) : null;
-    status = `Occupied (${guest?.trait ?? 'unknown'})${where ? `, ${where}` : ''}`;
+    status = `Occupied${guest ? `: ${describeParty(partyOf(guest))}${TRAIT_LABELS[guest.trait] ? ` (${TRAIT_LABELS[guest.trait]})` : ''}` : ''}${where ? `, ${where}` : ''}`;
   }
   else if (room.status === 'cleaning') status = turnoverStatus(cleaning);
   else if (room.status === 'renovating') status = `Renovating (${room.renovationHoursRemaining}h left)`;
@@ -98,6 +103,7 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
         <RoomPlan furnishing={furnishingOf(room)} size={64} />
         <div>
           <div class="small">{capitalize(room.type)} room{' \u00b7 '}sleeps {profile.sleeps}</div>
+          <div class="dim small">Fits {whoFits(profile)}</div>
           {room.pendingRefit && <div class="small gold">Refit booked: {profileFurnishing(room.pendingRefit).label}</div>}
           <button onClick={() => c.openFurnishing(room.id)}>Furnish{'\u2026'}</button>
         </div>
@@ -108,7 +114,7 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
         <span class="price">{formatMoney(room.pricePerNight)}</span>
       </label>
       <input
-        type="range" min={config.minPrice} max={config.maxPrice} step={1} value={room.pricePerNight}
+        type="range" min={getRoomPriceRange(room).min} max={getRoomPriceRange(room).max} step={1} value={room.pricePerNight}
         aria-label="Price per night"
         onInput={e => c.setRoomPrice(room.id, Number((e.target as HTMLInputElement).value))}
       />
@@ -181,7 +187,9 @@ function FacilityInspector({ facility, state }: { facility: Facility; state: Hot
   const c = useController();
   useLiveClock();
   const capacity = facilityCapacity(facility);
-  const inUse = guestsInFacility(state, facility.id, c.gameTime).length;
+  // How full it is (a big party takes more room) and how many people that is
+  const inUse = facilityLoad(state, facility.id, c.gameTime);
+  const people = peopleInFacility(state, facility.id, c.gameTime);
   const usedBy = state.guests.filter(g => g.facilitiesUsed?.[facility.type as FacilityType]).length;
   const config = FACILITY_CONFIG[facility.type];
   const level = FACILITY_LEVELS[facility.level - 1];
@@ -196,7 +204,7 @@ function FacilityInspector({ facility, state }: { facility: Facility; state: Hot
       <pre class="stats" style={{ marginTop: '6px' }}>
         {[
           `Open hours:     ${openingHours(facility.type)}`,
-          `In use:         ${inUse}/${capacity}`,
+          `In use:         ${Number.isInteger(inUse) ? inUse : inUse.toFixed(1)}/${capacity}${people > inUse ? ` (${people} people)` : ''}`,
           `Guests who've used one: ${usedBy}`,
           ...(config.spendPerVisit > 0 ? [`Spend/visit:    ${formatMoney(config.spendPerVisit * level.revenueMult)}`] : []),
           `Operating cost: ${formatMoney(operating)}/day`,

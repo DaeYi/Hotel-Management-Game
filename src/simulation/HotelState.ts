@@ -1,6 +1,6 @@
 import type { HotelState, Room, RoomType, Facility, FacilityType, TileType, Elevator, GameEvent, Fixture, FixtureType, Direction, Furnishing } from './types.js';
 import { PRESET_FOR_TYPE, ROOM_PRESETS, type PresetId } from '../config/furniture.js';
-import { defaultFurnishing, furnishingOf, quoteRefit, validateFurnishing, profileFurnishing, profileRoom, isBookable } from './RoomProfile.js';
+import { defaultFurnishing, furnishingOf, quoteRefit, validateFurnishing, profileFurnishing, profileRoom, isBookable, classPriceFactor } from './RoomProfile.js';
 import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS, FLOORS, ELEVATOR, DESK, CLOSET, BREAK_ROOM, ENTRANCE, STARTER_LAYOUT } from '../config/balance.js';
 import { isTileAccessible, findOpenDoor, isEdgeTile, isFacilityOpen, getOpenFacilities } from './Layout.js';
 import { createConstructionNoise } from './NoiseManager.js';
@@ -87,6 +87,24 @@ export function isValidTile(state: HotelState, gridX: number, gridY: number, flo
     && floor >= 0 && floor < state.floorCount;
 }
 
+/**
+ * The prices a room can be set to: its category's range, scaled like its fair
+ * price for who it fits (a family room's runs higher). Exactly the category's
+ * range for every room furnished like an original type.
+ */
+export function getRoomPriceRange(room: Pick<Room, 'type' | 'furnishing'>): { min: number; max: number } {
+  const profile = profileRoom(room);
+  const config = ROOM_CONFIG[profile.type];
+  const factor = classPriceFactor(profile);
+  return factor === 1 ? { min: config.minPrice, max: config.maxPrice } : { min: Math.round(config.minPrice * factor), max: Math.round(config.maxPrice * factor) };
+}
+
+/** A price kept within a room's range. */
+function clampPrice(room: Pick<Room, 'type' | 'furnishing'>, price: number): number {
+  const { min, max } = getRoomPriceRange(room);
+  return Math.max(min, Math.min(max, price));
+}
+
 /** The layout a room is built from: a preset by name, or an original room type (its preset). */
 export function presetFor(kind: RoomType | PresetId): PresetId {
   return kind in ROOM_PRESETS ? kind as PresetId : PRESET_FOR_TYPE[kind as RoomType];
@@ -139,7 +157,7 @@ export function addRoom(
   }
 
   // New rooms start at the fair price for the hotel's star level, their floor, and who they fit
-  const startingPrice = Math.max(config.minPrice, Math.min(config.maxPrice, getRoomExpectedPrice({ type, furnishing, floor }, state.starRating)));
+  const startingPrice = clampPrice({ type, furnishing }, getRoomExpectedPrice({ type, furnishing, floor }, state.starRating));
 
   const room: Room = {
     id: `room-${floor}-${gridX}-${gridY}`,
@@ -176,8 +194,7 @@ export function setRoomPrice(
   const config = state.rooms.find(r => r.id === roomId);
   if (!config) return state;
 
-  const roomConfig = ROOM_CONFIG[config.type];
-  const clampedPrice = Math.max(roomConfig.minPrice, Math.min(roomConfig.maxPrice, price));
+  const clampedPrice = clampPrice(config, price);
 
   return {
     ...state,
@@ -219,7 +236,7 @@ export function refitRoom(state: HotelState, roomId: string, to: Furnishing, whe
   // A room that's become something else (another category, or for other people) starts at its new fair price
   const sameKind = type === room.type && quote.after.layoutClass === quote.before.layoutClass;
   const pricePerNight = sameKind ? room.pricePerNight
-    : Math.max(ROOM_CONFIG[type].minPrice, Math.min(ROOM_CONFIG[type].maxPrice, getRoomExpectedPrice({ type, furnishing: to, floor: room.floor }, state.starRating)));
+    : clampPrice({ type, furnishing: to }, getRoomExpectedPrice({ type, furnishing: to, floor: room.floor }, state.starRating));
   const refitted: Room = {
     ...room,
     furnishing: to,
@@ -494,8 +511,16 @@ export function demolishElevator(state: HotelState, elevatorId: string): HotelSt
 }
 
 /** Upper-floor rooms per comfortable elevator capacity: 1 is full, 2+ is the worst wait. */
+/**
+ * Upper-floor rooms as lift traffic: counted by the people they sleep, two to
+ * a room (a family room is two rooms' worth, a double one).
+ */
+export function getUpperRoomLoad(state: HotelState): number {
+  return state.rooms.filter(r => r.floor > 0).reduce((sum, r) => sum + Math.max(1, profileRoom(r).sleeps / 2), 0);
+}
+
 export function getElevatorLoad(state: HotelState): number {
-  const upperRooms = state.rooms.filter(r => r.floor > 0).length;
+  const upperRooms = getUpperRoomLoad(state);
   if (upperRooms === 0) return 0;
   if (state.elevators.length === 0) return Infinity;
   return upperRooms / (state.elevators.length * ELEVATOR.roomsServed);

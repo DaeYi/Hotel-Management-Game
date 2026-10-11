@@ -117,6 +117,36 @@ export const GUEST_NAMES = [
   'Nadia', 'Leo', 'Ingrid', 'Deshawn',
 ];
 
+/** Family names, for parties: "the Okafor family". Picked by guest id, never from the shared random stream. */
+export const SURNAMES = [
+  'Okafor', 'Lindqvist', 'Moreau', 'Tanaka', 'Haddad', 'Novak', 'Ferreira', 'Kowalski',
+  'Mensah', 'Rossi', 'Nguyen', 'Brennan', 'Castillo', 'Ivanova', 'Sato', 'Adeyemi',
+  'Larsen', 'Patel', 'Duarte', 'Whitfield',
+];
+
+/**
+ * Parties (docs/designs/rooms-rethink.md, "Party size and capacity"). One
+ * booking is a party: one or two people, as every guest was before, or a
+ * group of friends or a family. Who books shifts with the week and the
+ * season. Everything a party changes scales only with people beyond two, so
+ * bookings of one or two are exactly what they always were.
+ */
+export const PARTIES = {
+  enabled: true,
+  // The mix of who books, Monday-Friday and at the weekend
+  weekday: { solo: 0.35, business: 0.20, couple: 0.30, friends: 0.05, family: 0.10 },
+  weekend: { solo: 0.15, business: 0.05, couple: 0.40, friends: 0.15, family: 0.25 },
+  summerShift: 0.10, // in summer this much of the mix moves from solo travellers to families
+  // How big friends and families come (a one-tile room sleeps four at most, so no fives yet)
+  friendsSizes: [[2, 0.5], [3, 0.3], [4, 0.2]] as Array<[number, number]>,
+  familySizes: [[3, 0.45], [4, 0.55]] as Array<[number, number]>,
+  budgetMult: { 3: 1.35, 4: 1.6, 5: 1.8 } as Record<number, number>, // a bigger party has more to spend on a room
+  perPersonScale: 0.3, // noise, wear, mess, consumables and spending: +30% per person beyond two
+  // When no free room fits a party, most of them book as one or two (the parents
+  // take a double; one friend comes alone); the rest are turned away
+  rerollChance: 0.9,
+};
+
 export const GUEST_TRAITS = {
   lightSleeperChance: 0.2,
   bigSpenderChance: 0.2,

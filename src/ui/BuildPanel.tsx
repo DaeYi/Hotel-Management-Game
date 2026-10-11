@@ -1,5 +1,5 @@
 import type { RoomType, FacilityType, TileType, Direction } from '../simulation/types';
-import type { BuildType } from '../game/GameController';
+import type { BuildType, PresetTool } from '../game/GameController';
 import { ROOM_CONFIG, FACILITY_CONFIG, ELEVATOR, DESK, CLOSET, BREAK_ROOM, ENTRANCE } from '../config/balance';
 import { ROOM_PRESETS, PRESET_FOR_TYPE, type PresetId } from '../config/furniture';
 import { getRequiredStars, isUnlocked, getRoomBuildCost, presetFor } from '../simulation/HotelState';
@@ -18,7 +18,7 @@ interface BuildOption {
 }
 
 const ROOM_COLORS: Record<RoomType, string> = { standard: '#4a90d9', deluxe: '#9b59b6', suite: '#f1c40f' };
-const ROOM_TOOLS: Array<RoomType | 'twin' | 'bunk_family'> = ['standard', 'twin', 'bunk_family', 'deluxe', 'suite'];
+const ROOM_TOOLS: Array<RoomType | PresetTool> = ['standard', 'twin', 'bunk_family', 'deluxe', 'deluxe_twin', 'deluxe_family', 'suite'];
 
 /** The category a room tool builds (twin and family rooms are standard rooms). */
 const roomTypeOf = (tool: RoomType | PresetId): RoomType => profileFurnishing(defaultFurnishing(presetFor(tool))).type;
@@ -44,7 +44,7 @@ export const DOOR_ARROWS: Record<Direction, string> = { up: '↑', right: '→',
 
 const isTile = (type: BuildType): type is TileType => type in ROOM_CONFIG || type in FACILITY_CONFIG;
 /** The type whose unlock a build option waits on (a twin or family room: a standard room's). */
-const unlockType = (type: BuildType): TileType | null => (isTile(type) ? type : type === 'twin' || type === 'bunk_family' ? roomTypeOf(type) : null);
+const unlockType = (type: BuildType): TileType | null => (isTile(type) ? type : type in ROOM_PRESETS ? roomTypeOf(type as PresetId) : null);
 
 export function BuildPanel() {
   const c = useController();

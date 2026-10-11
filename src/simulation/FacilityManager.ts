@@ -4,6 +4,7 @@ import { findRoute, getOpenFacilities } from './Layout.js';
 import { getCurrentSeason } from './SeasonManager.js';
 import { hourStart, makeWalk, makeStay, isUnderway, hash01 } from './Movement.js';
 import { roomTile } from './GuestMovement.js';
+import { partyLoad, partySize, perPersonFactor } from './Party.js';
 
 // Guests use the hotel's facilities. Each hour boundary, guests who are in
 // their rooms may head out to a facility -- breakfast at the restaurant, a
@@ -20,7 +21,10 @@ import { roomTile } from './GuestMovement.js';
 const PACE = TRAVEL.guestHoursPerTile;
 const LEAVE_SPREAD = 0.5; // guests set out over the first half of the hour
 
-/** How many guests fit in a facility at once. */
+/**
+ * How much a facility holds at once, in bookings of one or two (a bigger
+ * party takes more: partyLoad -- a family of four is two bookings' worth).
+ */
 export function facilityCapacity(facility: Facility): number {
   return Math.round(FACILITY_CONFIG[facility.type].capacity * FACILITY_LEVELS[facility.level - 1].capacityMult);
 }
@@ -44,12 +48,22 @@ export function guestsInFacility(state: HotelState, facilityId: string, t: numbe
   return state.guests.filter(g => g.trip?.some(l => l.kind === 'stay' && l.placeId === facilityId && l.start <= t && t < l.end));
 }
 
-/** Visits to a facility (stays planned at it) that overlap [from, to). */
+/** The people using a facility at time t. */
+export function peopleInFacility(state: HotelState, facilityId: string, t: number): number {
+  return guestsInFacility(state, facilityId, t).reduce((sum, g) => sum + partySize(g), 0);
+}
+
+/** How full a facility is at time t, in the units of facilityCapacity. */
+export function facilityLoad(state: HotelState, facilityId: string, t: number): number {
+  return guestsInFacility(state, facilityId, t).reduce((sum, g) => sum + partyLoad(partySize(g)), 0);
+}
+
+/** How full a facility is with visits (stays planned at it) that overlap [from, to), in the units of facilityCapacity. */
 function overlappingVisits(state: HotelState, facilityId: string, from: number, to: number): number {
   let n = 0;
   for (const g of state.guests) {
     for (const l of g.trip ?? []) {
-      if (l.kind === 'stay' && l.placeId === facilityId && l.start < to && from < l.end) n++;
+      if (l.kind === 'stay' && l.placeId === facilityId && l.start < to && from < l.end) n += partyLoad(partySize(g));
     }
   }
   return n;
@@ -99,7 +113,8 @@ export function planFacilityVisits(state: HotelState): HotelState {
     for (const { f, route } of options) {
       const arrive = leave + route.hours;
       const done = arrive + FACILITY_CONFIG[type].visitHours;
-      if (overlappingVisits(current, f.id, arrive, done) >= facilityCapacity(f)) continue;
+      // The whole party goes, so it has to fit
+      if (overlappingVisits(current, f.id, arrive, done) + partyLoad(partySize(guest)) > facilityCapacity(f) + 1e-9) continue;
       const back = findRoute(current, route.path[route.path.length - 1], from, PACE);
       if (!back) continue;
       const trip: Leg[] = [
@@ -132,7 +147,7 @@ export function creditFacilityVisits(state: HotelState, t: number): HotelState {
       if (f) {
         const used = facilitiesUsed?.[f.type];
         facilitiesUsed = { ...facilitiesUsed, [f.type]: { level: Math.max(used?.level ?? 0, f.level), day: Math.floor(l.start / 24) + 1 } };
-        cash += FACILITY_CONFIG[f.type].spendPerVisit * FACILITY_LEVELS[f.level - 1].revenueMult;
+        cash += FACILITY_CONFIG[f.type].spendPerVisit * FACILITY_LEVELS[f.level - 1].revenueMult * perPersonFactor(partySize(g));
       }
       return { ...l, credited: true };
     });

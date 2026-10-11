@@ -2,8 +2,10 @@ import type { HotelState, RoomType, FacilityType, AmenityTier, Direction } from 
 import { ROOM_CONFIG, FACILITY_CONFIG, GRID, LOAN, ELEVATOR, STARTER_LAYOUT, DESK, CLOSET } from '../config/balance.js';
 import {
   addRoom, addFacility, demolishRoom, isTileOccupied, isUnlocked, setRoomPrice, renovateRoom, renovateFacility,
-  upgradeFacility, getFacilityUpgradeCost, addElevator, buildFloor, getNextFloorCost, getElevatorLoad, addFixture,
+  upgradeFacility, getFacilityUpgradeCost, addElevator, buildFloor, getNextFloorCost, getElevatorLoad, addFixture, getRoomBuildCost,
 } from './HotelState.js';
+import { profileRoom } from './RoomProfile.js';
+import type { PresetId } from '../config/furniture.js';
 import { startCampaign, getCampaignCost } from './MarketingManager.js';
 import { FACILITY_LEVELS } from '../config/balance.js';
 import { getRoomExpectedPrice } from './StarRatingManager.js';
@@ -135,12 +137,26 @@ function addReservedElevator(state: HotelState, afford: Afford): HotelState {
   return state;
 }
 
-/** Room mix that pushes star points: deluxe once unlocked, every third room a suite once those unlock. */
-function nextRoomType(state: HotelState): RoomType {
-  if (isUnlocked(state, 'suite') && state.rooms.length % 3 === 0) return 'suite';
+/**
+ * Room mix: some twin and family rooms for the friends and families who
+ * can't use a double (a share of the hotel, once it's past its first few
+ * rooms), else what pushes star points -- deluxe once unlocked, every third
+ * room a suite once those unlock.
+ */
+function nextRoomType(state: HotelState): RoomType | PresetId {
+  const n = state.rooms.length;
+  if (n >= 6) {
+    const classes = state.rooms.map(r => profileRoom(r).layoutClass);
+    const deluxe = isUnlocked(state, 'deluxe');
+    if (classes.filter(c => c === 'family').length < Math.round(n * BOT_ROOM_MIX.family)) return deluxe ? 'deluxe_family' : 'bunk_family';
+    if (classes.filter(c => c === 'twin').length < Math.round(n * BOT_ROOM_MIX.twin)) return deluxe ? 'deluxe_twin' : 'twin';
+  }
+  if (isUnlocked(state, 'suite') && n % 3 === 0) return 'suite';
   if (isUnlocked(state, 'deluxe')) return 'deluxe';
   return 'standard';
 }
+/** The share of rooms the bots keep for families (sleeping four) and for friends (twin beds). */
+export const BOT_ROOM_MIX = { family: 0.12, twin: 0.08 };
 
 function amenityTierFor(stars: number): AmenityTier {
   if (stars >= 4) return 'luxury';
@@ -199,7 +215,7 @@ function managedStrategy(opts: ManagedOptions): Strategy {
       } else {
         const type = nextRoomType(s);
         const busy = rooms < 10 || demandOccupancy(s, true) >= opts.expandAtOccupancy;
-        if (busy && afford(s, ROOM_CONFIG[type].buildCost)) {
+        if (busy && afford(s, getRoomBuildCost(type))) {
           s = addRoom(s, type, tile.x, tile.y, tile.floor, templateDoor(tile.x, tile.y)) ?? s;
         }
       }
@@ -221,10 +237,12 @@ function managedStrategy(opts: ManagedOptions): Strategy {
       s = addReservedElevator(s, afford);
     }
 
-    // Climbing stars: with cash to spare, swap a vacant lower-tier room for the
-    // best unlocked type (a suite, eventually) -- room mix is the biggest star lever.
+    // Climbing stars: with cash to spare, swap a vacant lower-tier double for the
+    // best unlocked type (a suite, eventually) -- room mix is the biggest star
+    // lever. Twin and family rooms stay: they're for the guests a double can't take.
     const best: RoomType = isUnlocked(s, 'suite') ? 'suite' : isUnlocked(s, 'deluxe') ? 'deluxe' : 'standard';
-    const replaceable = s.rooms.find(r => r.status === 'vacant' && r.type !== best && (r.type === 'standard' || best === 'suite'));
+    const replaceable = s.rooms.find(r => r.status === 'vacant' && r.type !== best && (r.type === 'standard' || best === 'suite')
+      && profileRoom(r).layoutClass === 'double');
     if (replaceable && s.starRating < 5 && afford(s, ROOM_CONFIG[best].buildCost, 4)) {
       const cleared = demolishRoom(s, replaceable.id);
       if (cleared) s = addRoom(cleared, best, replaceable.gridX, replaceable.gridY, replaceable.floor, replaceable.door) ?? s;

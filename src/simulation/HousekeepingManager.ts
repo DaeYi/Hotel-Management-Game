@@ -4,6 +4,7 @@ import { formatRoomLabel, isRoomReachable } from './HotelState.js';
 import { getStaffTravelHours } from './Layout.js';
 import { getStaffPlan, plannedWork, isOnShift } from './StaffManager.js';
 import { isCheckoutDay } from './GuestManager.js';
+import { occupantFactor, guestsById } from './Party.js';
 
 /**
  * Start turnover cleaning on a room after guest checkout. The housekeepers'
@@ -168,11 +169,13 @@ export function housekeepersNeeded(state: HotelState, occupancy: number): number
  * Degrade cleanliness of occupied rooms. Called once per day.
  */
 export function degradeCleanliness(state: HotelState): HotelState {
+  const guests = guestsById(state);
   const updatedRooms = state.rooms.map(room => {
     if (room.status !== 'occupied') return room;
+    // A bigger party makes more mess
     return {
       ...room,
-      cleanliness: Math.max(0, room.cleanliness - HOUSEKEEPING.cleanlinessDecayPerDay),
+      cleanliness: Math.max(0, room.cleanliness - HOUSEKEEPING.cleanlinessDecayPerDay * occupantFactor(state, room, guests)),
     };
   });
   return { ...state, rooms: updatedRooms };

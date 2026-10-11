@@ -1,4 +1,5 @@
 import type { HotelState, TickResult, GameEvent, Booking } from './types.js';
+import { partyLabel, PartyLabel } from './Party.js';
 import type { PRNG } from './prng.js';
 import { processArrivals, processDepartures, calculateGuestReviewBreakdown, isCheckoutDue } from './GuestManager.js';
 import { processRevenue, processDailyCosts, updateReviewScore, checkBankruptcy, degradeRoomConditions, calculateEarlyDepartureSettlement, isLoanPaymentDay, processLoanPayment } from './EconomyManager.js';
@@ -19,7 +20,7 @@ import { processMaintenanceTick, getStaffDailyCost } from './MaintenanceManager.
 import { ECONOMY, REVIEW, HOUSEKEEPING, STAFF, ROOM_CONFIG, FACILITY_CONFIG } from '../config/balance.js';
 import {
   driftSatisfaction, advanceIncidents, dropIncidentsForGuests, selectNewIncident,
-  recordReturnGuestEntries, checkReviewSemiViral, tickReputationPenalties,
+  recordReturnGuestEntries, recordPartyTurnAways, checkReviewSemiViral, tickReputationPenalties,
 } from './StoryGenerator.js';
 import type { DepartedGuestReview } from './StoryGenerator.js';
 
@@ -79,6 +80,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
 
   // "A Regular Returns" -- converts this tick's guest_returned arrivals into log entries
   current = recordReturnGuestEntries(current, arrivals.events);
+  current = recordPartyTurnAways(current, arrivals.events);
 
   // 1.5 Ambient satisfaction drift (Satisfaction System Design point 1 / design-review D3)
   current = driftSatisfaction(current);
@@ -135,11 +137,11 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
       satisfactionAtCheckout: guest.satisfaction,
     };
     walkoutBookings.push(booking);
-    walkoutReviews.push({ guestName: guest.name, roomId: room.id, booking, breakdown });
+    walkoutReviews.push({ guestName: partyLabel(guest), roomId: room.id, booking, breakdown });
 
     events.push({
       type: 'guest_walked_out',
-      message: `${guest.name} checked out early ($${settlement.cashDelta.toFixed(0)})`,
+      message: `${PartyLabel(guest)} checked out early ($${settlement.cashDelta.toFixed(0)})`,
       data: { guestId: guest.id, roomId: room.id, reviewScore: score, cashDelta: settlement.cashDelta },
     });
   }
@@ -203,7 +205,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   // Review Goes Semi-Viral: check this tick's departures (normal + walkout)
   // for an unusually bad checkout, budget-gated same as other new incidents.
   const departureReviews: DepartedGuestReview[] = [
-    ...departures.departed.map(d => ({ guestName: d.guest.name, roomId: d.roomId, booking: d.booking, breakdown: d.breakdown })),
+    ...departures.departed.map(d => ({ guestName: partyLabel(d.guest), roomId: d.roomId, booking: d.booking, breakdown: d.breakdown })),
     ...walkoutReviews,
   ];
   const semiViral = checkReviewSemiViral(current, departureReviews, prng);

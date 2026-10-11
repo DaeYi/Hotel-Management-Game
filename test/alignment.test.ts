@@ -7,10 +7,12 @@ import { getStaffPlan } from '../src/simulation/StaffManager.js';
 import { settleChanges } from '../src/simulation/Settle.js';
 import { processCleaningTick } from '../src/simulation/HousekeepingManager.js';
 import { processMaintenanceTick } from '../src/simulation/MaintenanceManager.js';
-import { positionAt, legsEnd, hourStart } from '../src/simulation/Movement.js';
+import { positionAt, memberPositionAt, legsEnd, hourStart } from '../src/simulation/Movement.js';
 import { facilityCapacity } from '../src/simulation/FacilityManager.js';
 import { isEntranceTile } from '../src/simulation/Layout.js';
-import { STAFF } from '../src/config/balance.js';
+import { partyOf, partyLoad } from '../src/simulation/Party.js';
+import { guestFigures } from '../src/render/figures.js';
+import { STAFF, TRAVEL } from '../src/config/balance.js';
 import type { HotelState, Leg } from '../src/simulation/types.js';
 
 function contiguous(legs: Leg[]): boolean {
@@ -23,15 +25,19 @@ function contiguous(legs: Leg[]): boolean {
 // for time someone spends in the room, nobody jumps between hours, rooms have
 // one worker at a time, desks serve no more guests than they seat,
 // facilities never hold more than their capacity, people leave by the street
-// entrance, and nobody is in a room while it's turned over or repaired.
+// entrance, and nobody is in a room while it's turned over or repaired --
+// counting every member of every party, each drawn where the simulation has them.
 it('what everyone is shown doing is what the simulation does, hour after hour', () => {
   const problems: Record<string, number> = {};
   const examples: Record<string, string> = {};
   const bad = (k: string, ex: string) => { problems[k] = (problems[k] ?? 0) + 1; if (!examples[k]) examples[k] = ex; };
   let visits = 0;
+  let partyTrips = 0;
   for (const seed of [1, 2]) {
     let s: HotelState = createStarterHotel();
-    for (let x = 0; x < 8; x++) s = addRoom(s, 'standard', x, 2) ?? s;
+    // Doubles, and rooms for friends and families, so parties of every size stay
+    const kinds = ['standard', 'standard', 'bunk_family', 'standard', 'twin', 'standard', 'bunk_family', 'standard'] as const;
+    kinds.forEach((kind, x) => { s = addRoom(s, kind, x, 2) ?? s; });
     const prng = new PRNG(seed);
     for (let h = 0; h < 24 * 200; h++) {
       s = settleChanges(s, STRATEGIES.balanced(s), hourStart(s));
@@ -119,11 +125,29 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
         const overlap = checkIns.filter(d => d.desk === c.desk && d.a < c.b - 1e-9 && c.a < d.b - 1e-9).length;
         if (overlap > 2) bad('more check-ins at once than seats', c.desk);
       }
-      // F: capacity
+      // F: capacity, counting parties by size -- the visits planned there, and the people drawn there
       for (const f of after.facilities) {
         for (const t of [T + 1.1, T + 1.4, T + 1.7, T + 1.95]) {
-          const n = after.guests.filter(g => g.trip?.some(l => l.kind === 'stay' && l.placeId === f.id && l.start <= t && t < l.end)).length;
-          if (n > facilityCapacity(f)) bad('facility over capacity', f.id);
+          const n = after.guests.filter(g => g.trip?.some(l => l.kind === 'stay' && l.placeId === f.id && l.start <= t && t < l.end))
+            .reduce((sum, g) => sum + partyLoad(partyOf(g).size), 0);
+          if (n > facilityCapacity(f) + 1e-9) bad('facility over capacity', f.id);
+          const inside = after.guests.filter(g => g.trip && Array.from({ length: partyOf(g).size }, (_, m) => memberPositionAt(g.trip!, t, m, TRAVEL.guestHoursPerTile))
+            .some(at => at && at.leg.kind === 'stay' && at.leg.placeId === f.id))
+            .reduce((sum, g) => sum + partyLoad(partyOf(g).size), 0);
+          if (inside > facilityCapacity(f) + 1e-9) bad('more people drawn in a facility than it holds', f.id);
+        }
+      }
+      // J: every member of a party out of their room is drawn, together while stopped
+      for (const t of [T + 1.05, T + 1.35, T + 1.65, T + 1.9]) {
+        const { figures } = guestFigures(after, t);
+        for (const g of [...after.guests.map(g => ({ id: g.id, legs: g.trip ?? [], party: partyOf(g) })), ...(after.walkers ?? []).map(w => ({ id: w.id, legs: w.trip, party: partyOf(w) }))]) {
+          if (!g.legs.length || t < g.legs[0].start || t >= legsEnd(g.legs)) continue;
+          const at = positionAt(g.legs, t)!;
+          const drawn = figures.filter(f => f.id === g.id || f.id.startsWith(`${g.id}#`));
+          const expected = at.leg.kind === 'stay' && at.leg.activity === 'away' ? 0 : g.party.size;
+          if (drawn.length !== expected) bad('party members drawn != party size', `${g.id} drew ${drawn.length} of ${expected}`);
+          if (at.leg.kind === 'stay' && drawn.some(f => Math.abs(f.x - at.x) > 1e-9 || Math.abs(f.y - at.y) > 1e-9 || f.floor !== at.floor)) bad('party apart while stopped', g.id);
+          if (g.party.size >= 3) partyTrips++;
         }
       }
       // H: walkers end at an entrance
@@ -145,11 +169,13 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
         const room = after.rooms.find(x => x.id === st.room);
         if (!room) continue;
         for (const tt of [st.a + 0.001, (st.a + st.b) / 2]) {
-          const people = [...after.guests.map(g => ({ id: g.id, legs: g.trip ?? [] })), ...(after.walkers ?? []).map(w => ({ id: w.id, legs: w.trip }))];
+          const people = [...after.guests.map(g => ({ id: g.id, legs: g.trip ?? [], size: partyOf(g).size })), ...(after.walkers ?? []).map(w => ({ id: w.id, legs: w.trip, size: partyOf(w).size }))];
           for (const p of people) {
             if (!p.legs.length || tt < p.legs[0].start || tt >= legsEnd(p.legs)) continue;
-            const at = positionAt(p.legs, tt)!;
-            if (Math.round(at.x) === room.gridX && Math.round(at.y) === room.gridY && at.floor === room.floor) bad('someone in a room while staff work it', `${p.id} in ${room.id} (${st.job}) at ${tt}`);
+            for (let m = 0; m < p.size; m++) {
+              const at = memberPositionAt(p.legs, tt, m, TRAVEL.guestHoursPerTile)!;
+              if (Math.round(at.x) === room.gridX && Math.round(at.y) === room.gridY && at.floor === room.floor) bad('someone in a room while staff work it', `${p.id}#${m} in ${room.id} (${st.job}) at ${tt}`);
+            }
           }
         }
       }
@@ -157,5 +183,6 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
     }
     expect(visits).toBeGreaterThan(0); // the run got far enough for guests to be using facilities
   }
+  expect(partyTrips).toBeGreaterThan(50); // parties of three or more came and went
   expect(problems, JSON.stringify(examples)).toEqual({});
 }, 300000);

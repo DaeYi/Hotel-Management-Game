@@ -89,6 +89,52 @@ export function positionAt(legs: Leg[], t: number): Placement | null {
   return { x: end.gridX, y: end.gridY, floor: end.floor, leg, moving: false };
 }
 
+/** How far apart a party's members walk, in tiles. */
+export const PARTY_SPACING = 0.5;
+
+/**
+ * Where member `index` of a party on these legs is at time t (member 0 is
+ * the one whose legs they are: positionAt). The others walk ahead of them,
+ * PARTY_SPACING tiles apart, along the same path: on each stretch of walking
+ * (between stops -- the start, each stay, the end) they set off together,
+ * draw ahead, then ease back so everyone gets there at the same moment. So a
+ * party leaves a room no later than its first member would, arrives together
+ * (at the desk, the gym, their room), and is all in one place while stopped.
+ * Pure: the drawing and the tests use the same positions.
+ */
+export function memberPositionAt(legs: Leg[], t: number, index: number, hoursPerTile: number): Placement | null {
+  if (index <= 0 || legs.length === 0) return positionAt(legs, t);
+  if (t <= legs[0].start || t >= legsEnd(legs)) return positionAt(legs, t);
+  // The stretch of walking t is in: back to the last stop, on to the next
+  let k = 0;
+  for (let i = 0; i < legs.length; i++) if (legs[i].start <= t) k = i;
+  if (legs[k].kind === 'stay') return positionAt(legs, t);
+  let from = k;
+  while (from > 0 && legs[from - 1].kind === 'walk') from--;
+  let to = k;
+  while (to < legs.length - 1 && legs[to + 1].kind === 'walk') to++;
+  let s = legs[from].start;
+  let e = legs[to].end;
+  // A ride in the lift is a stop too: everyone boards together and gets off together
+  for (let i = from; i <= to; i++) {
+    const leg = legs[i];
+    if (leg.kind !== 'walk') continue;
+    let time = leg.start;
+    for (let j = 1; j < leg.path.length; j++) {
+      const dt = stepHours(leg.path[j - 1], leg.path[j], leg.hoursPerTile);
+      if (leg.path[j - 1].floor !== leg.path[j].floor) {
+        if (time + dt <= t) s = Math.max(s, time + dt);
+        else if (time >= t) e = Math.min(e, time);
+        else return positionAt(legs, t); // riding: all in the lift
+      }
+      time += dt;
+    }
+  }
+  const lead = index * PARTY_SPACING * hoursPerTile;
+  const ahead = Math.max(0, Math.min(lead, t - s, (e - t) / 2));
+  return positionAt(legs, t + ahead);
+}
+
 /**
  * The path tile someone has most recently reached at time t on a walk (where
  * a walk cut short at t can be resumed from), and the walk's tiles before it.

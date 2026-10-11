@@ -286,7 +286,7 @@ button.link { background: none; border: none; color: var(--gold); text-decoratio
 .room-plan.editing .plan-cell:hover, .room-plan.editing .plan-cell:focus { fill: rgba(255, 255, 255, 0.08); outline: none; }
 .room-plan.editing .plan-item { cursor: pointer; }
 .room-plan.editing .plan-item:focus { outline: none; }
-.room-plan.editing .plan-item:focus rect:not([fill='transparent']) { stroke: #ffffff; }
+.room-plan.editing .plan-item:focus rect:not([fill='transparent']) { stroke: #ffffff; stroke-width: 2; }
 .palette button { padding: 2px 6px; font-size: 10px; }
 .piece-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
 .piece-list .piece { width: 100%; display: flex; justify-content: space-between; gap: 4px; padding: 3px 6px; font-size: 11px; text-align: left; }

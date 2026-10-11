@@ -1,7 +1,18 @@
-import type { HotelState, GameEvent, RoomType } from './types.js';
+import type { HotelState, GameEvent, RoomType, Room, Guest } from './types.js';
 import { ECONOMY, REVIEW, AMENITIES, FACILITY_CONFIG, FACILITY_LEVELS, LOAN, ELEVATOR } from '../config/balance.js';
 import { getUpkeepMultiplier } from './StarRatingManager.js';
 import type { DepartureResult } from './GuestManager.js';
+import { occupantFactor, guestsById } from './Party.js';
+
+/**
+ * Tonight's in-room amenities for a room: its type's tier, per occupied room,
+ * more for a party beyond two (occupantFactor). Shared with the amenities panel.
+ */
+export function amenityCostTonight(state: HotelState, room: Room, guests?: Map<string, Guest>): number {
+  if (room.status !== 'occupied') return 0;
+  const tierConfig = AMENITIES.tiers[state.amenities[room.type]];
+  return tierConfig ? tierConfig.dailyCostPerRoom * occupantFactor(state, room, guests) : 0;
+}
 
 export interface EconomyResult {
   cashDelta: number;
@@ -31,15 +42,9 @@ export function processDailyCosts(state: HotelState): EconomyResult {
   const operatingCosts = state.rooms.length * ECONOMY.dailyOperatingCostPerRoom * upkeep;
   result.cashDelta -= operatingCosts;
 
-  // In-room amenities are used up by guests: charged per occupied room (tier per room type)
-  for (const room of state.rooms) {
-    if (room.status !== 'occupied') continue;
-    const tier = state.amenities[room.type];
-    const tierConfig = AMENITIES.tiers[tier];
-    if (tierConfig) {
-      result.cashDelta -= tierConfig.dailyCostPerRoom;
-    }
-  }
+  // In-room amenities are used up by guests: charged per occupied room (tier per room type), more for bigger parties
+  const guests = guestsById(state);
+  for (const room of state.rooms) result.cashDelta -= amenityCostTonight(state, room, guests);
 
   // Facility operating costs (shop sales come from visits: FacilityManager.ts)
   for (const facility of state.facilities) {
@@ -161,9 +166,11 @@ export function checkBankruptcy(state: HotelState): boolean {
 }
 
 export function degradeRoomConditions(state: HotelState): HotelState {
+  const guests = guestsById(state);
   const updatedRooms = state.rooms.map(room => {
     if (room.status !== 'occupied') return room;
-    const newCondition = Math.max(0, room.condition - ECONOMY.roomConditionDecayPerDay / 24);
+    // A bigger party wears a room faster
+    const newCondition = Math.max(0, room.condition - ECONOMY.roomConditionDecayPerDay / 24 * occupantFactor(state, room, guests));
     return { ...room, condition: newCondition };
   });
 

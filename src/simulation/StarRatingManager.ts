@@ -1,5 +1,5 @@
-import type { HotelState, RoomType, Room } from './types.js';
-import { profileRoom, classPriceFactor } from './RoomProfile.js';
+import type { HotelState, RoomType, Room, Party } from './types.js';
+import { profileRoom, classPriceFactor, partyPriceFactor } from './RoomProfile.js';
 import { STAR_RATING, AMENITIES, FACILITY_CONFIG, ROOM_CONFIG, FACILITY_LEVELS, FLOORS } from '../config/balance.js';
 import { getDecorStarPenalty } from './DecorManager.js';
 import { getOpenFacilities } from './Layout.js';
@@ -103,6 +103,18 @@ export function getRoomExpectedPrice(room: Pick<Room, 'type' | 'furnishing' | 'f
   const profile = profileRoom(room);
   const base = getExpectedPrice(profile.type, starRating, room.floor);
   const factor = classPriceFactor(profile);
+  return factor === 1 ? base : Math.round(base * factor);
+}
+
+/**
+ * What a room is worth a night to a particular party (partyPriceFactor): its
+ * fair price, but no more than for the kind of room they need. Exactly
+ * getRoomExpectedPrice for a party the room is sized for.
+ */
+export function getPartyFairPrice(room: Pick<Room, 'type' | 'furnishing' | 'floor'>, party: Party, starRating: number): number {
+  const profile = profileRoom(room);
+  const base = getExpectedPrice(profile.type, starRating, room.floor);
+  const factor = partyPriceFactor(profile, party);
   return factor === 1 ? base : Math.round(base * factor);
 }
 

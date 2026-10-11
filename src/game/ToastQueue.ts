@@ -23,6 +23,7 @@ export const EVENT_COLORS: Record<string, string> = {
   guest_walked_out: '#e67e22',
   guest_turned_away: '#e67e22',
   guest_impatient: '#e67e22',
+  party_turned_away: '#e67e22',
   review_score_changed: '#f1c40f',
   star_rating_changed: '#9b59b6',
   bankrupt: '#e74c3c',
@@ -61,7 +62,7 @@ const IMMEDIATE_EVENT_TYPES = new Set([
 export class ToastQueue {
   toasts: Toast[] = [];
   private nextId = 1;
-  private buffer = new Map<string, { count: number; lastMessage: string }>();
+  private buffer = new Map<string, { count: number; people: number; lastMessage: string }>();
   private lastFlush = 0;
 
   /** Queue toasts for a batch of events. `storyLogOpen` suppresses incident toasts. */
@@ -75,11 +76,13 @@ export class ToastQueue {
         this.show(event.message, EVENT_COLORS[event.type] ?? '#ffffff', now);
       } else {
         const existing = this.buffer.get(event.type);
+        const people = typeof event.data?.size === 'number' ? event.data.size as number : 1;
         if (existing) {
           existing.count++;
+          existing.people += people;
           existing.lastMessage = event.message;
         } else {
-          this.buffer.set(event.type, { count: 1, lastMessage: event.message });
+          this.buffer.set(event.type, { count: 1, people, lastMessage: event.message });
         }
       }
     }
@@ -92,7 +95,7 @@ export class ToastQueue {
       this.lastFlush = now;
       if (this.buffer.size > 0) {
         for (const [type, data] of this.buffer) {
-          this.show(data.count === 1 ? data.lastMessage : batchLabel(type, data.count, data.lastMessage), EVENT_COLORS[type] ?? '#ffffff', now);
+          this.show(data.count === 1 ? data.lastMessage : batchLabel(type, data.count, data.people, data.lastMessage), EVENT_COLORS[type] ?? '#ffffff', now);
         }
         this.buffer.clear();
         changed = true;
@@ -108,9 +111,12 @@ export class ToastQueue {
   }
 }
 
-function batchLabel(type: string, count: number, lastMessage: string): string {
-  if (type === 'guest_arrived') return `${count} guests arriving`;
-  if (type === 'guest_departed') return `${count} guests checked out`;
-  if (type === 'guest_turned_away') return `${count} guests turned away`;
+/** A batch of the same event: counted in people (a family of four is four guests), as the status bar counts them. */
+function batchLabel(type: string, count: number, people: number, lastMessage: string): string {
+  if (type === 'guest_arrived') return `${people} guests arriving`;
+  if (type === 'guest_departed') return `${people} guests checked out`;
+  if (type === 'guest_turned_away') return `${people} guests turned away`;
+  if (type === 'party_turned_away') return `${count} parties turned away: no room big enough`;
+  if (type === 'guest_impatient') return `${people} guests gave up at the front desk`;
   return `${count}x ${lastMessage}`;
 }

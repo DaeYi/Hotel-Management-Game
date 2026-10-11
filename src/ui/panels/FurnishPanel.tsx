@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks';
+import { useEffect, useState } from 'preact/hooks';
 import type { Furnishing, FurnitureItem, Room } from '../../simulation/types';
 import {
   ROOM_PRESETS, GROUP_KINDS, GROUP_LABELS, FURNITURE, ROOM_CELLS,
@@ -6,7 +6,7 @@ import {
 } from '../../config/furniture';
 import {
   furnishingOf, quoteRefit, validateFurnishing, switchPreset, isFurnitureUnlocked, setArrangement, mirrorFurnishing,
-  profileFurnishing, placeItem, classPriceFactor,
+  profileFurnishing, placeItem, classPriceFactor, whoFits,
 } from '../../simulation/RoomProfile';
 import { formatRoomLabel, roomsToRefitLike } from '../../simulation/HotelState';
 import { getExpectedPrice } from '../../simulation/StarRatingManager';
@@ -101,6 +101,18 @@ function FurnishEditor({ room }: { room: Room }) {
     }
   };
   const placing = mode.kind !== 'pick';
+  // Esc while putting a piece down cancels that, not the whole panel (and its unsaved changes)
+  useEffect(() => {
+    if (!placing) return;
+    const cancel = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      setMode({ kind: 'pick' });
+    };
+    window.addEventListener('keydown', cancel, true);
+    return () => window.removeEventListener('keydown', cancel, true);
+  }, [placing]);
   const hint = mode.kind === 'add' ? `Tap where the ${FURNITURE[mode.piece].label.toLowerCase()} goes (its top-left corner)`
     : mode.kind === 'move' ? 'Tap where it goes (its top-left corner)'
     : 'Tap a piece to change it';
@@ -122,6 +134,7 @@ function FurnishEditor({ room }: { room: Room }) {
                 <div class="dim small">Sleeps {after.sleeps}{after.beds < after.sleeps ? ` (${after.beds} in separate beds)` : ''} · {formatMoney(fair(draft))}/night fair</div>
               </>
             )}
+            <div class="dim small" style={{ marginTop: '6px' }}>Fits {whoFits(after)}</div>
           </div>
         </div>
         <div class="dim small furnish-hint" aria-live="polite">
@@ -132,6 +145,18 @@ function FurnishEditor({ room }: { room: Room }) {
           onChange={change => update(item.id, change)}
           onMove={() => setMode({ kind: 'move', id: item.id })}
           onRemove={() => { edit(draft.items.filter(i => i.id !== item.id)); setSelected(null); }} />}
+
+        <div class="section-label">FURNITURE</div>
+        <ul class="piece-list">
+          {draft.items.map(i => (
+            <li key={i.id}>
+              <button class={`piece${i.id === selected ? ' selected' : ''}`} onClick={() => { setMode({ kind: 'pick' }); setSelected(i.id === selected ? null : i.id); }}>
+                <span>{FURNITURE[i.kind].label}</span>
+                <span class={i.tier === 2 ? 'gold' : 'dim'}>{i.tier === 2 ? 'Premium' : 'Basic'}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
 
         <div class="section-label">ADD</div>
         <div class="row-buttons palette">
@@ -161,25 +186,13 @@ function FurnishEditor({ room }: { room: Room }) {
         <div class="row-buttons">
           {(['bath_front', 'bath_back'] as ArrangementId[]).map(a => (
             <button key={a} aria-pressed={draft.arrangement === a && !draft.custom}
-              title={draft.custom ? `Puts the ${ROOM_PRESETS[draft.preset].label} pieces back in their places` : ''}
+              title={draft.custom ? `Puts the ${ROOM_PRESETS[draft.preset].label} pieces back in their places (pieces you added are removed)` : ''}
               onClick={() => { setDraft(setArrangement(draft, a)); setSelected(null); }}>
               {ROOM_PRESETS[draft.preset].arrangements[a].label}
             </button>
           ))}
           <button aria-pressed={draft.mirrored} onClick={() => setDraft(mirrorFurnishing(draft))}>Mirror</button>
         </div>
-
-        <div class="section-label">FURNITURE</div>
-        <ul class="piece-list">
-          {draft.items.map(i => (
-            <li key={i.id}>
-              <button class={`piece${i.id === selected ? ' selected' : ''}`} onClick={() => { setMode({ kind: 'pick' }); setSelected(i.id === selected ? null : i.id); }}>
-                <span>{FURNITURE[i.kind].label}</span>
-                <span class={i.tier === 2 ? 'gold' : 'dim'}>{i.tier === 2 ? 'Premium' : 'Basic'}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
 
         {after.issues.length > 0 && (
           <ul class="warn-text small furnish-issues">
@@ -250,7 +263,10 @@ function PieceEditor({ item, draft, unlocked, onChange, onMove, onRemove }: {
           <select aria-label={GROUP_LABELS[spec.group]} value={item.kind}
             onChange={e => {
               const kind = (e.target as HTMLSelectElement).value as FurnitureKind;
-              onChange({ kind, tier: unlocked(kind, item.tier) ? item.tier : 1, length: undefined });
+              // Keep a long bathroom long if the new kind comes that long too
+              const next = FURNITURE[kind];
+              const keeps = item.length !== undefined && (next.sizes ?? []).some(([, h]) => h === item.length);
+              onChange({ kind, tier: unlocked(kind, item.tier) ? item.tier : 1, length: keeps ? item.length : undefined });
             }}>
             {GROUP_KINDS[spec.group].map(kind => (
               <option key={kind} value={kind} disabled={!unlocked(kind)}>

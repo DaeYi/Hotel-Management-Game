@@ -3,22 +3,17 @@ import type { HotelState, RoomType, FacilityType, GuestTrait, Direction, Room, S
 import { GRID, ECONOMY, NOISE, FACILITY_CONFIG, DECOR } from '../config/balance';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
 import { formatRoomLabel, isRoomReachable, isFacilityOpen } from '../simulation/HotelState';
-import { profileRoom, profileFurnishing, defaultFurnishing, rectToWorld, bedSpot, wallBar, pillowRect } from '../simulation/RoomProfile';
+import { profileRoom, profileFurnishing, defaultFurnishing, rectToWorld, bedSpot, sleepSpots, wallBar, pillowRect } from '../simulation/RoomProfile';
 import { FURNITURE, ROOM_CELLS, ROOM_PRESETS, type PresetId } from '../config/furniture';
 import { isHallway } from '../simulation/Layout';
 import { getStaffPlan } from '../simulation/StaffManager';
 import { roomCleaningAt, GRUBBY_BELOW } from '../simulation/CleaningStatus';
+import { getGuestDotColor, isChild } from './figures';
+import { partyOf, sharesBeds } from '../simulation/Party';
 
-/** Guest dot color by trait, in one place so every trait gets an explicit,
- * distinct color instead of silently falling through to the default. */
-export function getGuestDotColor(trait: GuestTrait): number {
-  switch (trait) {
-    case 'light_sleeper': return 0x3498db;
-    case 'big_spender': return 0xe74c3c;
-    case 'party_guest': return 0xe91e63;
-    case 'normal': return 0xecf0f1;
-  }
-}
+/** Guest dot color by trait (see figures.ts). */
+export { getGuestDotColor };
+
 
 export const TILE_SIZE = 52;
 
@@ -420,21 +415,27 @@ export class GridRenderer {
       const room = state.rooms.find(r => r.guestId === guest.id);
       if (!room || room.floor !== floor) continue;
 
-      // In bed (or wherever the room's bed is)
-      const [bx, by] = bedSpot(room);
-      const x = GRID_OFFSET_X + room.gridX * TILE_SIZE + bx * (TILE_SIZE / ROOM_CELLS);
-      const y = GRID_OFFSET_Y + room.gridY * TILE_SIZE + by * (TILE_SIZE / ROOM_CELLS);
-
+      // In bed: one person in the middle of it, a party one to a sleeping spot
+      const party = partyOf(guest);
+      const spots = party.size > 1 ? sleepSpots(room, !sharesBeds(party)) : [];
       const dotColor = getGuestDotColor(guest.trait);
+      for (let m = 0; m < party.size; m++) {
+        const [bx, by] = spots[m] ?? bedSpot(room);
+        const x = GRID_OFFSET_X + room.gridX * TILE_SIZE + bx * (TILE_SIZE / ROOM_CELLS);
+        const y = GRID_OFFSET_Y + room.gridY * TILE_SIZE + by * (TILE_SIZE / ROOM_CELLS);
+        // Outlined, so a guest in a white bed still shows
+        const r = isChild(party, m) ? 4 : party.size > 1 ? 5 : 6;
+        this.guestGraphics.fillStyle(dotColor, 0.95);
+        this.guestGraphics.fillCircle(x, y, r);
+        this.guestGraphics.lineStyle(1.5, 0x1b1b2b, 0.9);
+        this.guestGraphics.strokeCircle(x, y, r);
 
-      this.guestGraphics.fillStyle(dotColor, 0.9);
-      this.guestGraphics.fillCircle(x, y, 6);
-
-      // Return-guest marker (design-review D7/D10): a thin ring around the
-      // existing trait-color dot, visible on the grid during actual play.
-      if (guest.isReturning) {
-        this.guestGraphics.lineStyle(1.5, 0xffffff, 0.9);
-        this.guestGraphics.strokeCircle(x, y, 9);
+        // Return-guest marker (design-review D7/D10): a thin ring around the
+        // first member's trait-color dot, visible on the grid during actual play.
+        if (m === 0 && guest.isReturning) {
+          this.guestGraphics.lineStyle(1.5, 0xffffff, 0.9);
+          this.guestGraphics.strokeCircle(x, y, 9);
+        }
       }
     }
   }

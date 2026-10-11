@@ -2,6 +2,17 @@ import type { HotelState, Room, Guest, NoiseSource } from './types.js';
 import { NOISE, FACILITY_CONFIG } from '../config/balance.js';
 import { isGuestAway } from './GuestMovement.js';
 import { hourStart } from './Movement.js';
+import { perPersonFactor, partySize } from './Party.js';
+
+/**
+ * How much noise a guest in their room makes: the base, times their trait
+ * (party-prone guests are louder), times how many of them there are beyond
+ * two (perPersonFactor). One function for the noise heard and for who's
+ * blamed for it, so the two always agree.
+ */
+export function occupantNoiseOutput(guest: Guest): number {
+  return NOISE.baseOccupiedNoise * (NOISE.traitNoiseOutput[guest.trait] ?? 1) * perPersonFactor(partySize(guest));
+}
 
 /** The moment noise is judged at: the middle of the hour being played out. */
 const midHour = (state: HotelState) => hourStart(state) + 0.5;
@@ -31,16 +42,9 @@ export function calculateRoomNoise(
     const neighborRoom = state.rooms.find(r => r.floor === nf && r.gridX === nx && r.gridY === ny);
 
     if (neighborRoom && neighborRoom.status === 'occupied' && neighborRoom.guestId) {
-      // Base noise from an occupied neighbor, if they're in
-      let neighborNoise = NOISE.baseOccupiedNoise;
-
-      // Guest trait modifies noise OUTPUT
+      // Noise from an occupied neighbor, if they're in: their trait and party size set how much
       const guest = state.guests.find(g => g.id === neighborRoom.guestId);
-      if (guest && isGuestAway(guest, t)) neighborNoise = 0;
-      else if (guest) {
-        const outputMult = NOISE.traitNoiseOutput[guest.trait] ?? 1;
-        neighborNoise *= outputMult;
-      }
+      const neighborNoise = !guest ? NOISE.baseOccupiedNoise : isGuestAway(guest, t) ? 0 : occupantNoiseOutput(guest);
 
       totalNoise += neighborNoise * weight;
     }
@@ -92,16 +96,15 @@ export function getLoudestNeighborGuestId(room: Room, state: HotelState, t = mid
     const guest = state.guests.find(g => g.id === neighborRoom.guestId);
     if (!guest || isGuestAway(guest, t)) continue; // not there: can't be the culprit
 
-    const outputMult = NOISE.traitNoiseOutput[guest.trait] ?? 1;
-    const neighborNoise = NOISE.baseOccupiedNoise * outputMult * weight;
+    const neighborNoise = occupantNoiseOutput(guest) * weight;
 
     if (neighborNoise <= 0) continue;
 
-    if (neighborNoise > topNoise) {
+    if (neighborNoise > topNoise + 1e-9) {
       topNoise = neighborNoise;
       topGuestId = guest.id;
       tied = false;
-    } else if (neighborNoise === topNoise) {
+    } else if (Math.abs(neighborNoise - topNoise) <= 1e-9) {
       tied = true;
     }
   }

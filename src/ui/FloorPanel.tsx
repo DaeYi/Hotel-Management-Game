@@ -1,5 +1,5 @@
 import { ELEVATOR } from '../config/balance';
-import { getNextFloorCost, getElevatorLoad } from '../simulation/HotelState';
+import { getNextFloorCost, getElevatorLoad, getUpperRoomLoad } from '../simulation/HotelState';
 import { useController } from './context';
 import { formatMoney } from './format';
 
@@ -17,8 +17,10 @@ export function FloorPanel() {
   } else if (state.elevators.length === 0) {
     elevatorLine = upper > 0 ? 'No elevator: upper rooms unbookable!' : 'Build an elevator to use upper floors';
   } else {
+    // Upper rooms as lift traffic (a family room counts double), against what the lifts carry
     const busy = getElevatorLoad(state) > 1 ? ' (busy!)' : '';
-    elevatorLine = `Elevators: ${state.elevators.length}, ${upper}/${state.elevators.length * ELEVATOR.roomsServed} upper rooms${busy}`;
+    const load = getUpperRoomLoad(state);
+    elevatorLine = `Elevators: ${state.elevators.length}, ${Number.isInteger(load) ? load : load.toFixed(1)}/${state.elevators.length * ELEVATOR.roomsServed} upper rooms${load > upper ? ' (family rooms count double)' : ''}${busy}`;
   }
 
   return (
