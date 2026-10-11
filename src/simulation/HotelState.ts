@@ -1,4 +1,6 @@
-import type { HotelState, Room, RoomType, Facility, FacilityType, TileType, Elevator, GameEvent, Fixture, FixtureType, Direction } from './types.js';
+import type { HotelState, Room, RoomType, Facility, FacilityType, TileType, Elevator, GameEvent, Fixture, FixtureType, Direction, Furnishing } from './types.js';
+import { PRESET_FOR_TYPE, type PresetId } from '../config/furniture.js';
+import { defaultFurnishing, furnishingOf, quoteRefit, validateFurnishing } from './RoomProfile.js';
 import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS, FLOORS, ELEVATOR, DESK, CLOSET, BREAK_ROOM, ENTRANCE, STARTER_LAYOUT } from '../config/balance.js';
 import { isTileAccessible, findOpenDoor, isEdgeTile, isFacilityOpen, getOpenFacilities } from './Layout.js';
 import { createConstructionNoise } from './NoiseManager.js';
@@ -135,6 +137,7 @@ export function addRoom(
     decor: 100,
     renovationHoursRemaining: 0,
     dailyCleanHoursRemaining: 0,
+    furnishing: defaultFurnishing(PRESET_FOR_TYPE[type]),
   };
 
   return {
@@ -167,6 +170,95 @@ export function setRoomPrice(
 /** Refund amount when demolishing a room or facility: a fixed fraction of build cost. */
 export function getDemolishRefund(buildCost: number): number {
   return Math.floor(buildCost * ECONOMY.demolishRefundRate);
+}
+
+/**
+ * Refit a room: change its furniture or layout (what it's furnished with
+ * decides what kind of room it is -- RoomProfile.ts). 'now' needs the room
+ * empty and the cash: it closes for the fitting (status 'renovating') and the
+ * new furniture goes straight in. 'checkout' does that if it can, and
+ * otherwise books it for when the room is next empty and the cash is there
+ * (startPendingRefits); it's paid for then. Null if it isn't allowed, or
+ * changes nothing (or, 'now', can't happen now).
+ */
+export function refitRoom(state: HotelState, roomId: string, to: Furnishing, when: 'now' | 'checkout' = 'now'): HotelState | null {
+  const room = state.rooms.find(r => r.id === roomId);
+  if (!room || validateFurnishing(to, state.peakStarRating)) return null;
+  const quote = quoteRefit(furnishingOf(room), to);
+  if (quote.changed.length === 0 && !quote.moved) return null;
+  if (when === 'checkout') {
+    return refitRoom(state, roomId, to, 'now')
+      ?? { ...state, rooms: state.rooms.map(r => (r.id === roomId ? { ...r, pendingRefit: to } : r)) };
+  }
+  if (room.status !== 'vacant' || state.cash < quote.cost) return null;
+  const type = quote.after.type;
+  // The refit freshens the room as far as the money would have gone on a
+  // renovation: a refit is no cheaper a way to buy decor (swapping pieces for
+  // cheaper ones, which the old ones' resale pays for, freshens it little).
+  const share = Math.min(1, quote.cost / Math.max(1, getRenovationCost(ROOM_CONFIG[type].buildCost, state.starRating)));
+  const pricePerNight = type === room.type ? room.pricePerNight
+    : Math.max(ROOM_CONFIG[type].minPrice, Math.min(ROOM_CONFIG[type].maxPrice, getExpectedPrice(type, state.starRating, room.floor)));
+  const refitted: Room = {
+    ...room,
+    furnishing: to,
+    type,
+    pricePerNight,
+    pendingRefit: undefined,
+    status: 'renovating',
+    renovationHoursRemaining: Math.max(1, quote.installHours),
+    refitting: { decorAfter: room.decor + (100 - room.decor) * share },
+  };
+  return {
+    ...state,
+    cash: state.cash - quote.cost,
+    rooms: state.rooms.map(r => (r.id === roomId ? refitted : r)),
+    noiseSources: [...state.noiseSources, createConstructionNoise(room.gridX, room.gridY, 'renovate', room.floor)],
+  };
+}
+
+/** Drop a refit booked for after checkout. */
+export function cancelPendingRefit(state: HotelState, roomId: string): HotelState {
+  return { ...state, rooms: state.rooms.map(r => (r.id === roomId && r.pendingRefit ? { ...r, pendingRefit: undefined } : r)) };
+}
+
+/** Start refits booked for after checkout in rooms that are now empty (and affordable: otherwise they wait). */
+export function startPendingRefits(state: HotelState): HotelState {
+  let current = state;
+  for (const room of state.rooms) {
+    if (!room.pendingRefit || room.status !== 'vacant') continue;
+    current = refitRoom(current, room.id, room.pendingRefit, 'now') ?? current;
+  }
+  return current;
+}
+
+/** The other rooms with a layout that a refit of every room "like" it would change (not counting ones already booked for it). */
+export function roomsToRefitLike(state: HotelState, to: Furnishing, like: PresetId, exceptRoomId?: string): Room[] {
+  const differs = (from: Furnishing) => {
+    const quote = quoteRefit(from, to);
+    return quote.changed.length > 0 || quote.moved;
+  };
+  return state.rooms.filter(room =>
+    room.id !== exceptRoomId && furnishingOf(room).preset === like
+    && differs(furnishingOf(room)) && (!room.pendingRefit || differs(room.pendingRefit)));
+}
+
+/**
+ * Furnish every other room with the layout `like` this way: empty rooms now
+ * (as far as the cash goes), the rest booked for when they're empty and it's
+ * affordable. Rooms already furnished (or booked) like this are left alone.
+ * Returns null if nothing would change.
+ */
+export function refitAllLike(state: HotelState, to: Furnishing, like: PresetId, exceptRoomId?: string): HotelState | null {
+  let current = state;
+  let changed = false;
+  for (const room of roomsToRefitLike(state, to, like, exceptRoomId)) {
+    const next = refitRoom(current, room.id, to, 'checkout');
+    if (next) {
+      current = next;
+      changed = true;
+    }
+  }
+  return changed ? current : null;
 }
 
 /** Move a facility's door to another side (free). */

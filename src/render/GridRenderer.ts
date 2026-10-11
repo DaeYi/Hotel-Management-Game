@@ -1,8 +1,10 @@
 import Phaser from 'phaser';
-import type { HotelState, RoomType, FacilityType, GuestTrait, Direction } from '../simulation/types';
+import type { HotelState, RoomType, FacilityType, GuestTrait, Direction, Room } from '../simulation/types';
 import { GRID, ECONOMY, NOISE, FACILITY_CONFIG, DECOR } from '../config/balance';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
 import { formatRoomLabel, isRoomReachable, isFacilityOpen } from '../simulation/HotelState';
+import { profileRoom, rectToWorld, bedSpot, wallBar } from '../simulation/RoomProfile';
+import { FURNITURE, ROOM_CELLS } from '../config/furniture';
 import { isHallway } from '../simulation/Layout';
 
 /** Guest dot color by trait, in one place so every trait gets an explicit,
@@ -138,6 +140,37 @@ export class GridRenderer {
     }
   }
 
+  /** A room's furniture, as laid out in its furnishing and turned to face its door. */
+  private drawFurniture(room: Room, x: number, y: number, alpha: number) {
+    const g = this.roomGraphics;
+    const cell = TILE_SIZE / ROOM_CELLS;
+    for (const item of profileRoom(room).items) {
+      const spec = FURNITURE[item.kind];
+      if (item.wall) {
+        // A thin piece on the wall it hangs on
+        const edge = rectToWorld(room.door, wallBar(item));
+        g.fillStyle(spec.color === 0x17202a ? 0xbdc3c7 : spec.color, alpha);
+        g.fillRect(x + edge.x * cell, y + edge.y * cell, Math.max(2, edge.w * cell), Math.max(2, edge.h * cell));
+        continue;
+      }
+      const r = rectToWorld(room.door, item);
+      const px = x + r.x * cell + 1.5;
+      const py = y + r.y * cell + 1.5;
+      const pw = r.w * cell - 3;
+      const ph = r.h * cell - 3;
+      g.fillStyle(spec.color, alpha);
+      g.fillRect(px, py, pw, ph);
+      if (item.slot === 'bed') {
+        // Pillows at the head of the bed (its door-local top edge)
+        const head = rectToWorld(room.door, { x: item.x + 0.2, y: item.y + 0.15, w: item.w - 0.4, h: 0.45 });
+        g.fillStyle(0xbfc9ca, alpha);
+        g.fillRect(x + head.x * cell, y + head.y * cell, head.w * cell, head.h * cell);
+      }
+      g.lineStyle(1, item.tier === 2 ? 0xf1c40f : 0x34495e, alpha);
+      g.strokeRect(px, py, pw, ph);
+    }
+  }
+
   /** A door: a gap-colored bar on the edge of the tile, on the side it opens. */
   private drawDoor(g: Phaser.GameObjects.Graphics, x: number, y: number, door: Direction, color: number, alpha: number) {
     const long = TILE_SIZE * 0.4;
@@ -187,10 +220,12 @@ export class GridRenderer {
         : room.status === 'cleaning' ? 0x888888
         : room.status === 'renovating' ? 0xd35400
         : ROOM_COLORS[room.type];
-      const alpha = room.condition <= ECONOMY.roomBreakdownThreshold || !isRoomReachable(state, room) ? 0.3 : 0.85;
+      const usable = room.condition > ECONOMY.roomBreakdownThreshold && isRoomReachable(state, room);
 
-      this.roomGraphics.fillStyle(color, alpha);
+      // The floor, tinted by what kind of room it is and what's happening in it; then the furniture
+      this.roomGraphics.fillStyle(color, usable ? 0.55 : 0.25);
       this.roomGraphics.fillRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+      this.drawFurniture(room, x, y, usable ? 0.95 : 0.4);
       // The door: hallway-colored where it opens onto a connected hallway, red where it's blocked
       this.drawDoor(this.roomGraphics, x, y, room.door, isRoomReachable(state, room) ? 0xd8d8e8 : 0xe74c3c, 0.95);
 
@@ -360,8 +395,10 @@ export class GridRenderer {
       const room = state.rooms.find(r => r.guestId === guest.id);
       if (!room || room.floor !== floor) continue;
 
-      const x = GRID_OFFSET_X + room.gridX * TILE_SIZE + TILE_SIZE / 2;
-      const y = GRID_OFFSET_Y + room.gridY * TILE_SIZE + TILE_SIZE / 2;
+      // In bed (or wherever the room's bed is)
+      const [bx, by] = bedSpot(room);
+      const x = GRID_OFFSET_X + room.gridX * TILE_SIZE + bx * (TILE_SIZE / ROOM_CELLS);
+      const y = GRID_OFFSET_Y + room.gridY * TILE_SIZE + by * (TILE_SIZE / ROOM_CELLS);
 
       const dotColor = getGuestDotColor(guest.trait);
 

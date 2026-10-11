@@ -1,7 +1,7 @@
 # Design: Rethinking Rooms (Exploration)
 
 Date: 2026-10-11
-Status: EXPLORATION. Nothing is scheduled. The owner decisions this needs are listed at the end.
+Status: PHASE 1 SHIPPED (furnished rooms, 2026-10-11). Later phases are planned, not scheduled. Open owner questions are listed at the end.
 Repo: DaeYi/Hotel-Management-Game
 Follows: aligned-movement.md, open-floor-plan.md, late-game-economy.md
 Depends on: the 11:00 checkout rebalance and guest outings, both in flight and uncommitted (`ECONOMY.checkOutHour: 11`, `GUEST_OUTINGS`, `OutingManager.ts`)
@@ -589,6 +589,18 @@ This gives a measured baseline, so two balance passes don't confound each other.
 - **Not in phase 1:** parties, twins and families, multi-tile rooms, noise changes, tier 3, and the free editor.
 - **Phase 1b (stretch):** `StayLeg.slot`, so housekeepers visibly clean bath → bed → rest, checked by the alignment test.
 
+**Phase 1 as shipped (2026-10-11).** Save version 19.
+- **Content** (`src/config/furniture.ts`): 11 kinds at tiers 1-2 (queen/king bed, shower room/bathroom with tub, rail/wardrobe, armchair/desk, sofa, TV, art), each with a cost per tier, install hours and a star unlock. Three presets on a 4x4 door-local grid, each with two bath arrangements and a mirror: Standard Queen, Deluxe King and Executive Studio. Their default furniture costs exactly the old standard/deluxe/suite build cost ($1,200 shell + furniture).
+  - Layouts: the bed's head is on the back wall. "Bath by the door" is a long (2x3) bathroom down one side, entered just inside the door; "at the back" is a 2x2 bathroom in the back corner with the front of the room open. The studio's sofa stands against the side wall facing a TV. With a 2x2 bathroom beside the door there is always a shut-off nook behind it, which is why that bathroom is long. Every piece in every layout, mirrored or not, can be walked up to from the doorway with no floor shut off, and wall pieces hang on a wall; the tests check all of this.
+- **Classification** (`src/simulation/RoomProfile.ts`): quality is the grade-weighted tier average (bed and bath 3, lounge 2, the rest 1). At 1.75 or more a room is deluxe; deluxe with a sofa and TV is a Junior Suite. `room.type` holds the derived category, so prices, stars and amenities read it unchanged, and every room built from a preset is exactly its old type.
+- **Refits:** new pieces, less 50% back on the old ones, times 1.4 for fitting in place. Moving the bathroom (arrangement or mirror; every preset puts it in the same place for an arrangement) re-plumbs it: half its price again plus its install hours. Refits never pay out. An empty room closes for the install hours with construction noise. An occupied room, or an empty one the hotel can't afford yet, is booked and paid when it starts. A changed category resets the price to the new fair price. On reopening, the room's decor freshens as far as the refit's cost would have gone on a renovation, so swapping pieces for cheaper ones (which the old ones' resale pays for) is no cheap way around renovating.
+  - Upgrading in place costs about what building new does: Standard Queen to the cheapest deluxe is $2,870 (total $4,870 against $5,000 for a Deluxe King), and to the cheapest Junior Suite $7,140 (total $9,140 against $10,000).
+- **UI:** the inspector shows the room's plan, its label ("Deluxe Queen 104") and a Furnish… button. The Furnish panel has "Start from" (a preset's layout and furniture, keeping the bathroom where it is), bath placement and mirror, a row per slot (piece and Basic/Premium), the before → after label and fair price, the cost and hours closed, Refit now / after checkout / "Book it" (when it can't be afforded yet), and "Same for all N other <layout> rooms": house standards as a one-time stamp over every room currently with this room's layout and not already furnished or booked that way. Locked pieces and layouts are disabled with their star requirement.
+- **Rendering:** furniture is drawn in every room on the floor plan, turned with the door; premium pieces have a gold edge, and the guest in a room is drawn at the bed.
+- **Not done from the phase 1 list:** "List as" (downward), the separate "Rooms & Amenities" standards panel (the copy-to-all button covers it), bots that refit (they still build by type, so balance is unchanged by construction), map level-of-detail and RenderTexture caching (drawing every frame is fine at one floor's ~60 tiles), and phase 1b.
+- **Tests:** `test/furnishing.test.ts` covers classification and exact legacy costs, layout fit and reachability (every rotation and mirror), refit pricing and re-plumbing, decor gained per dollar against renovation, unlocks, refit now / after checkout / booking until affordable / copy-to-all, the v18 → v19 migration, and refits in a running hotel (nobody is put in a room being refitted). `test/ui.test.tsx` drives the Furnish panel, including booking and demolishing a room with the panel open.
+- **Review:** an adversarial review (3 reviewers, each finding independently verified) confirmed 8 problems, all fixed above: the decor exploit, re-plumbing charged when the bathroom didn't move, pieces (storage, the studio sofa, one bathroom) that could only be reached over the bed in every layout, copy-to-all skipping (and keeping an older booking on) empty rooms it couldn't afford, a "Same for all" that did nothing, the panel reappearing for a room rebuilt on a demolished room's tile, and a wrong "when it reopens" note on an empty room waiting for cash.
+
 **Phase 2: "Make it yours" and "Who's staying" (L).**
 - **Free placement (owner decision).** A Preact/SVG room editor on the same item list: drag or tap items onto the room's sub-grid, rotate, delete, start from any preset, and see the live classification as you go (label, sleeps, fair price, issues). It is hardened against min-maxing with crowding penalties, a sleeps cap per tile, and property tests over random layouts. On phones it uses tap-to-place with a fixed palette. Bots keep using presets.
 - Parties behind the flag: the `hash01` mix, fit matching, the pay cap, the soft trickle of named turn-aways, normalized per-person scaling, and N figures on one itinerary.
@@ -647,11 +659,11 @@ This gives a measured baseline, so two balance passes don't confound each other.
 8. **Paying for parties:** one rate per room with larger budgets for 3+ (recommended), or per-person surcharges for sofa beds and cribs?
 9. **Unservable segments:** a soft 25% trickle of named turn-aways (recommended), full turn-aways, or simply no arrivals?
 10. **Crew cleaning:** may several housekeepers clean one big room (phase 4), or do suites carry a built-in vacancy risk?
-11. **Refits:** offline for install hours with construction noise and queued while occupied (recommended), or instant? And how big should the install premium be?
+11. **Refits:** offline for install hours with construction noise and queued while occupied (recommended), or instant? And how big should the install premium be? *Phase 1 shipped the recommendation with a 1.4x premium; easy to retune.*
 12. **Consumable amenity tiers:** keep them hotel-wide, keyed by the compatibility bucket (recommended for now), re-key them by grade or class, or fold them into furniture tiers?
 13. **Category:** always derived, with only a downward "list as" (recommended), or does the player declare a target category and the game validate it?
 14. **Personality preferences:** review-only at first (recommended), or can they steer matching or reject a room at the desk?
 15. **Sub-grid:** 4x4 at 1 m (recommended), or 8x8 at 0.5 m for finer furniture, at the cost of phone editing and save size?
-16. **House standards:** live-linked, so editing one flags rooms for refit, or one-time stamps?
+16. **House standards:** live-linked, so editing one flags rooms for refit, or one-time stamps? *Phase 1 shipped one-time stamps ("Same for all N other rooms").*
 17. **Phone map:** may it drop furniture detail at phone scale (recommended), or is pinch-zoom on the world wanted?
 18. **Later depth:** are connecting rooms, kitchenettes, minibars and exterior-window appeal wanted, and if so, in which phase?

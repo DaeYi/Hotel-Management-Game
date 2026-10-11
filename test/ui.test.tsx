@@ -40,11 +40,11 @@ describe('Interface', () => {
 
   it('build options select tools; locked ones are disabled', () => {
     const { controller, flush } = setup();
-    fireEvent.click(screen.getByText('Standard'));
+    fireEvent.click(screen.getByText('Standard Queen'));
     flush();
     expect(controller.tool).toBe('standard');
-    expect(screen.getByText('Standard').closest('button')!.getAttribute('aria-pressed')).toBe('true');
-    expect((screen.getByText('Suite').closest('button') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText('Standard Queen').closest('button')!.getAttribute('aria-pressed')).toBe('true');
+    expect((screen.getByText('Executive Studio').closest('button') as HTMLButtonElement).disabled).toBe(true);
   });
 
   it('toolbar buttons open panels, and the staff panel hires staff', () => {
@@ -79,7 +79,7 @@ describe('Interface', () => {
     controller.tileDown({ gridX: 5, gridY: 2 });
     flush();
 
-    const inspector = screen.getByRole('dialog', { name: /Standard Room/ });
+    const inspector = screen.getByRole('dialog', { name: /Standard Queen/ });
     expect(inspector.textContent).toContain('Vacant');
     fireEvent.input(screen.getByLabelText('Price per night'), { target: { value: '110' } });
     flush();
@@ -88,7 +88,67 @@ describe('Interface', () => {
     fireEvent.click(screen.getByText(/Demolish/));
     flush();
     expect(controller.state.rooms).toHaveLength(0);
-    expect(screen.queryByRole('dialog', { name: /Standard Room/ })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: /Standard Queen/ })).toBeNull();
+  });
+
+  it('furnishing a room: premium pieces make it deluxe, and refitting closes it for the fitting', () => {
+    const { controller, flush } = setup();
+    controller.selectTool('standard');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.tileDown({ gridX: 6, gridY: 2 });
+    controller.selectTool(null);
+    controller.state = { ...controller.state, peakStarRating: 2 };
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    flush();
+    fireEvent.click(screen.getByText(/Furnish/));
+    flush();
+    const panel = () => screen.getByRole('region', { name: /FURNISH ROOM/ });
+    expect(panel()).toBeTruthy();
+    // Locked at 2 stars: the studio's sofa needs 3
+    expect((screen.getByText('Executive Studio', { selector: '.furnish button' }) as HTMLButtonElement).disabled).toBe(true);
+
+    for (const slot of ['Bed', 'Bathroom', 'Storage']) fireEvent.click(screen.getByLabelText(`${slot} premium`));
+    flush();
+    expect(panel().textContent).toContain('Deluxe Queen');
+    expect(panel().textContent).toContain('Same for the other Standard Queen room');
+
+    const cash = controller.state.cash;
+    fireEvent.click(screen.getByText(/Refit now/));
+    flush();
+    const room = controller.state.rooms.find(r => r.gridX === 5)!;
+    expect(room.type).toBe('deluxe');
+    expect(room.status).toBe('renovating');
+    expect(controller.state.cash).toBe(cash - 2870);
+    expect(panel().textContent).toContain('Closed for its refit');
+  });
+
+  it('a refit the hotel can\'t afford yet can be booked; demolishing the room closes its furnishing for good', () => {
+    const { controller, flush } = setup();
+    controller.selectTool('standard');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.selectTool(null);
+    controller.state = { ...controller.state, peakStarRating: 2, cash: 1000 };
+    controller.openFurnishing(controller.state.rooms[0].id);
+    flush();
+    for (const slot of ['Bed', 'Bathroom', 'Storage']) fireEvent.click(screen.getByLabelText(`${slot} premium`));
+    flush();
+    expect(screen.queryByText(/Refit now/)).toBeNull();
+    fireEvent.click(screen.getByText(/Book it: starts once there's \$2,870/));
+    flush();
+    expect(controller.state.rooms[0].pendingRefit).toBeDefined();
+    expect(screen.getByRole('region', { name: /FURNISH ROOM/ }).textContent).toContain("starts once there's $2,870");
+
+    controller.demolishRoom(controller.state.rooms[0].id);
+    flush();
+    expect(screen.queryByRole('region', { name: /FURNISH ROOM/ })).toBeNull();
+    // A new room on the same tile (same id) doesn't bring the panel back
+    controller.state = { ...controller.state, cash: 10_000 };
+    controller.selectTool('standard');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.selectTool(null);
+    flush();
+    expect(controller.state.rooms).toHaveLength(1);
+    expect(screen.queryByRole('region', { name: /FURNISH ROOM/ })).toBeNull();
   });
 
   it('floors: building one adds it to the stack and switches to it', () => {

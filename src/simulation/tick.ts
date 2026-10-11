@@ -5,7 +5,7 @@ import { processRevenue, processDailyCosts, updateReviewScore, checkBankruptcy, 
 import { processObjectives, recordDailyStat } from './ObjectivesManager.js';
 import { decayDecor, processRenovationTick } from './DecorManager.js';
 import { tickCampaign } from './MarketingManager.js';
-import { formatRoomLabel } from './HotelState.js';
+import { formatRoomLabel, startPendingRefits } from './HotelState.js';
 import { getStaffPlan, rosterAfter, syncRoster, planStaff } from './StaffManager.js';
 import { planArrivalTrips, departureWalker, tidyMovement } from './GuestMovement.js';
 import { planFacilityVisits, creditFacilityVisits } from './FacilityManager.js';
@@ -45,6 +45,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   current = maintenanceResult.state;
   events.push(...maintenanceResult.events);
   current = { ...current, staffRoster: rosterAfter(current, staffPlan) };
+  current = startPendingRefits(current); // rooms booked for a refit, now empty, close for it
 
   // 1. Process guest arrivals: rooms are booked now, and the guests walk in,
   // check in at a staffed desk, and go up to their rooms over the next hour.

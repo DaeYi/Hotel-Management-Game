@@ -6,6 +6,7 @@ import { MarketingPanel } from './MarketingPanel';
 import { GoalsPanel } from './GoalsPanel';
 import { StoryLogPanel } from './StoryLogPanel';
 import { FinancePanel } from './FinancePanel';
+import { FurnishPanel } from './FurnishPanel';
 
 /** Whichever management/view panel is open (one at a time), floating over the world. */
 export function PanelHost() {
@@ -18,6 +19,7 @@ export function PanelHost() {
     case 'goals': return <GoalsPanel />;
     case 'story': return <StoryLogPanel />;
     case 'finance': return <FinancePanel />;
+    case 'furnish': return <FurnishPanel />;
     default: return null;
   }
 }

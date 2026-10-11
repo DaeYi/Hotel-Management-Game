@@ -8,6 +8,8 @@ import {
 import { getExpectedPrice, getUpkeepMultiplier } from '../simulation/StarRatingManager';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
 import { DOOR_ARROWS } from './BuildPanel';
+import { RoomPlan } from './RoomPlan';
+import { profileRoom, profileFurnishing, furnishingOf } from '../simulation/RoomProfile';
 import { getStaffTravelHours } from '../simulation/Layout';
 import { positionAt, legsEnd } from '../simulation/Movement';
 import { facilityCapacity, guestsInFacility, openingHours } from '../simulation/FacilityManager';
@@ -69,6 +71,7 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
   const c = useController();
   useLiveClock();
   const config = ROOM_CONFIG[room.type];
+  const profile = profileRoom(room);
   const guest = state.guests.find(g => g.id === room.guestId);
   const fair = getExpectedPrice(room.type, state.starRating, room.floor);
 
@@ -98,7 +101,15 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
   const canDemolish = room.status !== 'occupied' && room.status !== 'renovating';
 
   return (
-    <TileCard tile={room} title={`${capitalize(room.type)} Room ${formatRoomLabel(room.gridX, room.gridY, room.floor)}`}>
+    <TileCard tile={room} title={`${profile.label} ${formatRoomLabel(room.gridX, room.gridY, room.floor)}`}>
+      <div class="room-furnishing">
+        <RoomPlan furnishing={furnishingOf(room)} size={64} />
+        <div>
+          <div class="small">{capitalize(room.type)} room{' \u00b7 '}sleeps {profile.sleeps}</div>
+          {room.pendingRefit && <div class="small gold">Refit booked: {profileFurnishing(room.pendingRefit).label}</div>}
+          <button onClick={() => c.openFurnishing(room.id)}>Furnish{'\u2026'}</button>
+        </div>
+      </div>
       <pre class="stats">{stats.join('\n')}</pre>
       <label class="price-row">
         <span>Price/night (fair {formatMoney(fair)}):</span>

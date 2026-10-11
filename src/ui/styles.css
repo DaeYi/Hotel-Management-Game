@@ -238,3 +238,23 @@ input[type='range'] { width: 100%; accent-color: var(--gold); }
   .side { width: 100%; }
   .build-panel, .floor-panel { width: auto; flex: 1 1 160px; }
 }
+
+/* ---------- Furnishing ---------- */
+
+.room-plan { display: block; flex: none; }
+.room-furnishing { display: flex; gap: 8px; align-items: center; margin: 4px 0 6px; }
+.room-furnishing button { margin-top: 4px; padding: 3px 8px; }
+.furnish { width: 300px; max-width: 100%; }
+.furnish-top { display: flex; gap: 10px; align-items: flex-start; }
+.furnish-summary { font-size: 12px; line-height: 1.35; }
+.row-buttons { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0; }
+.row-buttons button { padding: 3px 7px; font-size: 11px; }
+.row-buttons button[aria-pressed='true'], .tier-toggle button[aria-pressed='true'] { background: var(--gold); color: #1a1a2e; }
+.furnish-row { display: grid; grid-template-columns: 62px 1fr auto; gap: 6px; align-items: center; margin: 3px 0; font-size: 11px; }
+.furnish-row select { width: 100%; font-size: 11px; }
+.slot-name { color: var(--text-dim); }
+.tier-toggle { display: inline-flex; gap: 2px; }
+.tier-toggle button { padding: 2px 5px; font-size: 10px; }
+.warn-text { color: #e67e22; }
+button.link { background: none; border: none; color: var(--gold); text-decoration: underline; padding: 0; cursor: pointer; }
+

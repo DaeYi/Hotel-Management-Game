@@ -1,4 +1,5 @@
 import type { HotelState, GameEvent } from './types.js';
+import { profileRoom } from './RoomProfile.js';
 import { DECOR } from '../config/balance.js';
 import { formatRoomLabel } from './HotelState.js';
 
@@ -22,6 +23,15 @@ export function processRenovationTick(state: HotelState): { state: HotelState; e
     const hours = room.renovationHoursRemaining - 1;
     if (hours > 0) return { ...room, renovationHoursRemaining: hours };
 
+    if (room.refitting) {
+      // A refit: the new furniture's in; it freshens the room as far as it goes
+      events.push({
+        type: 'renovation_complete',
+        message: `Room ${formatRoomLabel(room.gridX, room.gridY, room.floor)} refitted: ${profileRoom(room).label}`,
+        data: { roomId: room.id },
+      });
+      return { ...room, status: 'vacant' as const, renovationHoursRemaining: 0, decor: Math.max(room.decor, room.refitting.decorAfter), refitting: undefined };
+    }
     events.push({
       type: 'renovation_complete',
       message: `Room ${formatRoomLabel(room.gridX, room.gridY, room.floor)} renovated`,

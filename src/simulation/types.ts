@@ -1,3 +1,4 @@
+import type { SlotKind, FurnitureKind, Tier, PresetId, ArrangementId } from '../config/furniture';
 export type RoomType = 'standard' | 'deluxe' | 'suite';
 export type FacilityType = 'gym' | 'restaurant' | 'pool' | 'shop';
 export type TileType = RoomType | FacilityType;
@@ -27,6 +28,27 @@ export interface Room {
   decor: number; // 0-100, how fresh the furnishings are; fades daily, restored by renovation
   renovationHoursRemaining: number; // hours left while status is 'renovating'
   dailyCleanHoursRemaining: number; // a queued daily clean (housekeeper-hours incl. walk), 0 = none
+  // What's in the room: its layout and furniture. Its category (type) is worked
+  // out from this (RoomProfile.ts). Absent on rooms from before furniture: they
+  // get their type's preset.
+  furnishing?: Furnishing;
+  pendingRefit?: Furnishing; // a refit booked for after the guest leaves
+  refitting?: { decorAfter: number }; // set while the room is closed for a refit (status 'renovating')
+}
+
+/** A piece of furniture in a room: which spot it fills, what it is, and how nice (tier 1 basic, 2 premium). */
+export interface FurnitureItem {
+  slot: SlotKind;
+  kind: FurnitureKind;
+  tier: Tier;
+}
+
+/** How a room is laid out and furnished. */
+export interface Furnishing {
+  preset: PresetId; // the layout: which spots it has
+  arrangement: ArrangementId; // where the bathroom goes
+  mirrored: boolean;
+  items: FurnitureItem[];
 }
 
 export interface HousekeepingConfig {

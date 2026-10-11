@@ -1,6 +1,7 @@
 import type { RoomType, FacilityType, TileType, Direction } from '../simulation/types';
 import type { BuildType } from '../game/GameController';
 import { ROOM_CONFIG, FACILITY_CONFIG, ELEVATOR, DESK, CLOSET, BREAK_ROOM, ENTRANCE } from '../config/balance';
+import { ROOM_PRESETS, PRESET_FOR_TYPE } from '../config/furniture';
 import { getRequiredStars, isUnlocked } from '../simulation/HotelState';
 import { getExpectedPrice } from '../simulation/StarRatingManager';
 import { useController } from './context';
@@ -20,7 +21,7 @@ const toCss = (color: number) => `#${color.toString(16).padStart(6, '0')}`;
 
 const OPTIONS: BuildOption[] = [
   ...(['standard', 'deluxe', 'suite'] as RoomType[]).map(type => ({
-    type, label: capitalize(type), cost: ROOM_CONFIG[type].buildCost, subtitle: '', color: ROOM_COLORS[type], category: 'ROOMS' as const,
+    type, label: ROOM_PRESETS[PRESET_FOR_TYPE[type]].label, cost: ROOM_CONFIG[type].buildCost, subtitle: '', color: ROOM_COLORS[type], category: 'ROOMS' as const,
   })),
   ...(Object.entries(FACILITY_CONFIG)).map(([type, config]) => ({
     type: type as FacilityType, label: config.label, cost: config.buildCost,

@@ -1,13 +1,15 @@
 import type {
-  HotelState, RoomType, FacilityType, TileType, StaffConfig, AmenityTier, CleaningQuality, DailyCleaningCadence, GameEvent, FixtureType, Direction,
+  HotelState, RoomType, FacilityType, TileType, StaffConfig, AmenityTier, CleaningQuality, DailyCleaningCadence, GameEvent, FixtureType, Direction, Furnishing,
 } from '../simulation/types';
 import {
   createStarterHotel, addFixture, demolishFixture, demolishElevator, addRoom, setRoomPrice, repairRoom, demolishRoom,
   addFacility, demolishFacility, renovateRoom, renovateFacility, upgradeFacility, addElevator, buildFloor, setRoomDoor, setFacilityDoor,
+  refitRoom, refitAllLike, cancelPendingRefit,
 } from '../simulation/HotelState';
 import { rotateDirection, doorTile, isReachableHallway } from '../simulation/Layout';
 import { getRoster, getStaffPlan } from '../simulation/StaffManager';
 import { settleChanges } from '../simulation/Settle';
+import { furnishingOf } from '../simulation/RoomProfile';
 import { hourStart } from '../simulation/Movement';
 import { startCampaign } from '../simulation/MarketingManager';
 import { tickSimulation } from '../simulation/tick';
@@ -27,7 +29,7 @@ export type BuildType = TileType | 'elevator' | FixtureType | 'bulldoze';
 /** Tools that place on (or clear) one tile per click and can be dragged across tiles. */
 export const PAINTABLE_TYPES = new Set<BuildType>(['bulldoze']);
 
-export type PanelId = 'staff' | 'housekeeping' | 'amenities' | 'marketing' | 'finance' | 'story' | 'goals';
+export type PanelId = 'staff' | 'housekeeping' | 'amenities' | 'marketing' | 'finance' | 'story' | 'goals' | 'furnish';
 
 export type Selection = { kind: 'room' | 'facility'; id: string } | null;
 
@@ -60,6 +62,8 @@ export class GameController {
   tool: BuildType | null = null;
   selection: Selection = null;
   openPanel: PanelId | null = null;
+  /** The room the furnishing panel is open for. */
+  furnishRoomId: string | null = null;
   noiseOverlay = false;
   tutorialOpen: boolean;
   confirmingNewGame = false;
@@ -203,11 +207,13 @@ export class GameController {
 
   togglePanel(panel: PanelId) {
     this.openPanel = this.openPanel === panel ? null : panel;
+    if (this.openPanel !== 'furnish') this.furnishRoomId = null;
     this.changed();
   }
 
   closePanel() {
     this.openPanel = null;
+    this.furnishRoomId = null;
     this.changed();
   }
 
@@ -427,7 +433,34 @@ export class GameController {
   }
 
   demolishRoom(roomId: string) {
-    if (this.apply(demolishRoom(this.state, roomId))) this.clearSelection();
+    if (!this.apply(demolishRoom(this.state, roomId))) return;
+    // A rebuilt room on the tile gets the same id: don't reopen its furnishing
+    if (this.furnishRoomId === roomId) this.closePanel();
+    this.clearSelection();
+  }
+
+  /** Open the furnishing panel for a room (it replaces the room's inspector card). */
+  openFurnishing(roomId: string) {
+    this.furnishRoomId = roomId;
+    this.openPanel = 'furnish';
+    this.selection = null;
+    this.changed();
+  }
+
+  /** Refit a room with new furniture or layout: now (it closes for the fitting) or after its guest leaves. */
+  refitRoom(roomId: string, furnishing: Furnishing, when: 'now' | 'checkout'): boolean {
+    return this.apply(refitRoom(this.state, roomId, furnishing, when));
+  }
+
+  /** Furnish every other room laid out like this room is now the same way (empty ones now, the rest after checkout). */
+  refitAllLike(roomId: string, furnishing: Furnishing): boolean {
+    const room = this.state.rooms.find(r => r.id === roomId);
+    if (!room) return false;
+    return this.apply(refitAllLike(this.state, furnishing, furnishingOf(room).preset, roomId));
+  }
+
+  cancelRefit(roomId: string) {
+    this.apply(cancelPendingRefit(this.state, roomId));
   }
 
   upgradeFacility(facilityId: string) {

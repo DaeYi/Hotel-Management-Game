@@ -1,4 +1,6 @@
-import type { HotelState } from './types.js';
+import type { HotelState, RoomType } from './types.js';
+import { PRESET_FOR_TYPE } from '../config/furniture.js';
+import { defaultFurnishing } from './RoomProfile.js';
 import type { PRNG } from './prng.js';
 import { GUEST_NAMES, LOAN, GRID, STARTER_LAYOUT } from '../config/balance.js';
 import { isEdgeTile } from './Layout.js';
@@ -6,7 +8,7 @@ import { DIRECTIONS, doorTile, isReachableHallway, findOpenDoor } from './Layout
 import { calculateStarRating } from './StarRatingManager.js';
 
 const SAVE_KEY = 'hotel-game-save';
-const SAVE_VERSION = 18; // v18: people move on itineraries; guests visit facilities
+const SAVE_VERSION = 19; // v19: rooms are furnished
 
 interface SaveData {
   version: number;
@@ -211,6 +213,14 @@ export function loadGame(): SaveData | null {
       data.state.staffPlan = null;
       data.version = 18;
       console.log('Migrated save from v17 to v18');
+    }
+
+    if (data.version === 18) {
+      // Every room gets the furniture of its type's layout, which makes it
+      // exactly that type again: same price, stars, costs.
+      data.state.rooms = data.state.rooms.map((r: any) => ({ ...r, furnishing: r.furnishing ?? defaultFurnishing(PRESET_FOR_TYPE[r.type as RoomType]) }));
+      data.version = 19;
+      console.log('Migrated save from v18 to v19');
     }
 
     if (data.version !== SAVE_VERSION) {
