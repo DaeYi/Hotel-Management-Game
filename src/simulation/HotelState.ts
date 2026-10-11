@@ -1,10 +1,10 @@
 import type { HotelState, Room, RoomType, Facility, FacilityType, TileType, Elevator, GameEvent, Fixture, FixtureType, Direction, Furnishing } from './types.js';
-import { PRESET_FOR_TYPE, type PresetId } from '../config/furniture.js';
-import { defaultFurnishing, furnishingOf, quoteRefit, validateFurnishing } from './RoomProfile.js';
+import { PRESET_FOR_TYPE, ROOM_PRESETS, type PresetId } from '../config/furniture.js';
+import { defaultFurnishing, furnishingOf, quoteRefit, validateFurnishing, profileFurnishing, profileRoom, isBookable } from './RoomProfile.js';
 import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS, FLOORS, ELEVATOR, DESK, CLOSET, BREAK_ROOM, ENTRANCE, STARTER_LAYOUT } from '../config/balance.js';
 import { isTileAccessible, findOpenDoor, isEdgeTile, isFacilityOpen, getOpenFacilities } from './Layout.js';
 import { createConstructionNoise } from './NoiseManager.js';
-import { getExpectedPrice, getPriceMultiplier } from './StarRatingManager.js';
+import { getExpectedPrice, getRoomExpectedPrice, getPriceMultiplier } from './StarRatingManager.js';
 
 /** The free street entrance every hotel starts with. */
 function starterEntrance(): Fixture {
@@ -87,21 +87,41 @@ export function isValidTile(state: HotelState, gridX: number, gridY: number, flo
     && floor >= 0 && floor < state.floorCount;
 }
 
+/** The layout a room is built from: a preset by name, or an original room type (its preset). */
+export function presetFor(kind: RoomType | PresetId): PresetId {
+  return kind in ROOM_PRESETS ? kind as PresetId : PRESET_FOR_TYPE[kind as RoomType];
+}
+
+/** What a room of a type or preset costs to build: its shell and furniture (exactly the original price for the original types). */
+export function getRoomBuildCost(kind: RoomType | PresetId): number {
+  return profileFurnishing(defaultFurnishing(presetFor(kind))).furnishingCost;
+}
+
+/** What a room has cost: what it's built with now (a refit changes it). Its refund, renovation and value follow from this. */
+export function getRoomInvestedCost(room: Pick<Room, 'type' | 'furnishing'>): number {
+  return profileRoom(room).furnishingCost;
+}
+
 /**
- * Build a room on an open hallway tile. `door` is the side its door is on;
- * left out, it faces the first side that opens onto a connected hallway.
- * A room whose door faces a wall still gets built -- it just can't be used
- * until the player opens a path to it.
+ * Build a room on an open hallway tile: an original type (standard, deluxe,
+ * suite) or a preset by name (twin, bunk_family), with its preset's
+ * furniture. `door` is the side its door is on; left out, it faces the first
+ * side that opens onto a connected hallway. A room whose door faces a wall
+ * still gets built -- it just can't be used until the player opens a path to it.
  */
 export function addRoom(
   state: HotelState,
-  type: RoomType,
+  kind: RoomType | PresetId,
   gridX: number,
   gridY: number,
   floor = 0,
   door?: Direction,
 ): HotelState | null {
+  const furnishing = defaultFurnishing(presetFor(kind));
+  const profile = profileFurnishing(furnishing);
+  const type = profile.type;
   const config = ROOM_CONFIG[type];
+  const buildCost = profile.furnishingCost;
 
   if (!isValidTile(state, gridX, gridY, floor)) return null;
 
@@ -111,15 +131,15 @@ export function addRoom(
   }
 
   // Check affordability and unlock
-  if (state.cash < config.buildCost) {
+  if (state.cash < buildCost) {
     return null;
   }
   if (!isUnlocked(state, type)) {
     return null;
   }
 
-  // New rooms start at the fair price for the hotel's star level and their floor
-  const startingPrice = Math.max(config.minPrice, Math.min(config.maxPrice, getExpectedPrice(type, state.starRating, floor)));
+  // New rooms start at the fair price for the hotel's star level, their floor, and who they fit
+  const startingPrice = Math.max(config.minPrice, Math.min(config.maxPrice, getRoomExpectedPrice({ type, furnishing, floor }, state.starRating)));
 
   const room: Room = {
     id: `room-${floor}-${gridX}-${gridY}`,
@@ -137,12 +157,12 @@ export function addRoom(
     decor: 100,
     renovationHoursRemaining: 0,
     dailyCleanHoursRemaining: 0,
-    furnishing: defaultFurnishing(PRESET_FOR_TYPE[type]),
+    furnishing,
   };
 
   return {
     ...state,
-    cash: state.cash - config.buildCost,
+    cash: state.cash - buildCost,
     rooms: [...state.rooms, room],
     noiseSources: [...state.noiseSources, createConstructionNoise(gridX, gridY, 'build', floor)],
   };
@@ -195,9 +215,11 @@ export function refitRoom(state: HotelState, roomId: string, to: Furnishing, whe
   // The refit freshens the room as far as the money would have gone on a
   // renovation: a refit is no cheaper a way to buy decor (swapping pieces for
   // cheaper ones, which the old ones' resale pays for, freshens it little).
-  const share = Math.min(1, quote.cost / Math.max(1, getRenovationCost(ROOM_CONFIG[type].buildCost, state.starRating)));
-  const pricePerNight = type === room.type ? room.pricePerNight
-    : Math.max(ROOM_CONFIG[type].minPrice, Math.min(ROOM_CONFIG[type].maxPrice, getExpectedPrice(type, state.starRating, room.floor)));
+  const share = Math.min(1, quote.cost / Math.max(1, getRenovationCost(quote.after.furnishingCost, state.starRating)));
+  // A room that's become something else (another category, or for other people) starts at its new fair price
+  const sameKind = type === room.type && quote.after.layoutClass === quote.before.layoutClass;
+  const pricePerNight = sameKind ? room.pricePerNight
+    : Math.max(ROOM_CONFIG[type].minPrice, Math.min(ROOM_CONFIG[type].maxPrice, getRoomExpectedPrice({ type, furnishing: to, floor: room.floor }, state.starRating)));
   const refitted: Room = {
     ...room,
     furnishing: to,
@@ -278,7 +300,7 @@ export function demolishRoom(state: HotelState, roomId: string): HotelState | nu
   if (!room) return null;
   if (room.status === 'occupied') return null; // can't demolish while occupied
 
-  const refund = getDemolishRefund(ROOM_CONFIG[room.type].buildCost);
+  const refund = getDemolishRefund(getRoomInvestedCost(room));
 
   return {
     ...state,
@@ -317,7 +339,7 @@ export function getRenovationCost(buildCost: number, starRating: number): number
 export function renovateRoom(state: HotelState, roomId: string): HotelState | null {
   const room = state.rooms.find(r => r.id === roomId);
   if (!room || room.status !== 'vacant') return null;
-  const cost = getRenovationCost(ROOM_CONFIG[room.type].buildCost, state.starRating);
+  const cost = getRenovationCost(getRoomInvestedCost(room), state.starRating);
   if (state.cash < cost) return null;
 
   return {
@@ -384,7 +406,7 @@ export function isRoomReachable(state: HotelState, room: Room): boolean {
 
 export function getAvailableRooms(state: HotelState): Room[] {
   return state.rooms
-    .filter(r => r.status === 'vacant' && r.condition > ECONOMY.roomBreakdownThreshold && isRoomReachable(state, r))
+    .filter(r => r.status === 'vacant' && r.condition > ECONOMY.roomBreakdownThreshold && isRoomReachable(state, r) && isBookable(r))
     .sort((a, b) => a.pricePerNight - b.pricePerNight); // ascending price
 }
 

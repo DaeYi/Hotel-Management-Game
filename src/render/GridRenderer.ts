@@ -3,8 +3,8 @@ import type { HotelState, RoomType, FacilityType, GuestTrait, Direction, Room, S
 import { GRID, ECONOMY, NOISE, FACILITY_CONFIG, DECOR } from '../config/balance';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
 import { formatRoomLabel, isRoomReachable, isFacilityOpen } from '../simulation/HotelState';
-import { profileRoom, rectToWorld, bedSpot, wallBar } from '../simulation/RoomProfile';
-import { FURNITURE, ROOM_CELLS } from '../config/furniture';
+import { profileRoom, profileFurnishing, defaultFurnishing, rectToWorld, bedSpot, wallBar, pillowRect } from '../simulation/RoomProfile';
+import { FURNITURE, ROOM_CELLS, ROOM_PRESETS, type PresetId } from '../config/furniture';
 import { isHallway } from '../simulation/Layout';
 import { getStaffPlan } from '../simulation/StaffManager';
 import { roomCleaningAt, GRUBBY_BELOW } from '../simulation/CleaningStatus';
@@ -137,6 +137,7 @@ export class GridRenderer {
 
     // Get color: room types use ROOM_COLORS, facilities use FACILITY_CONFIG
     const color = ROOM_COLORS[type as RoomType]
+      ?? (type in ROOM_PRESETS ? ROOM_COLORS[profileFurnishing(defaultFurnishing(type as PresetId)).type] : undefined)
       ?? FACILITY_CONFIG[type]?.color
       ?? (type === 'desk' ? DESK_COLOR : type === 'closet' ? CLOSET_COLOR : type === 'breakroom' ? BREAK_ROOM_COLOR : type === 'entrance' ? ENTRANCE_COLOR : type === 'bulldoze' ? 0xc0392b : ELEVATOR_COLOR);
 
@@ -176,11 +177,17 @@ export class GridRenderer {
       const ph = r.h * cell - 3;
       g.fillStyle(spec.color, alpha);
       g.fillRect(px, py, pw, ph);
-      if (item.slot === 'bed') {
-        // Pillows at the head of the bed (its door-local top edge)
-        const head = rectToWorld(room.door, { x: item.x + 0.2, y: item.y + 0.15, w: item.w - 0.4, h: 0.45 });
+      if (item.group === 'bed') {
+        // Pillows at the head of the bed
+        const head = rectToWorld(room.door, pillowRect(item));
         g.fillStyle(0xbfc9ca, alpha);
         g.fillRect(x + head.x * cell, y + head.y * cell, head.w * cell, head.h * cell);
+        if (item.kind === 'bunk') {
+          // The top bunk: a rail down the middle
+          const mid = rectToWorld(room.door, { x: item.x, y: item.y + item.h / 2 - 0.05, w: item.w, h: 0.1 });
+          g.fillStyle(0x7f8c8d, alpha);
+          g.fillRect(x + mid.x * cell, y + mid.y * cell, Math.max(1, mid.w * cell), Math.max(1, mid.h * cell));
+        }
       }
       g.lineStyle(1, item.tier === 2 ? 0xf1c40f : 0x34495e, alpha);
       g.strokeRect(px, py, pw, ph);

@@ -1,4 +1,4 @@
-import type { SlotKind, FurnitureKind, Tier, PresetId, ArrangementId } from '../config/furniture';
+import type { FurnitureKind, Tier, Rot, PresetId, ArrangementId } from '../config/furniture';
 export type RoomType = 'standard' | 'deluxe' | 'suite';
 export type FacilityType = 'gym' | 'restaurant' | 'pool' | 'shop';
 export type TileType = RoomType | FacilityType;
@@ -37,18 +37,27 @@ export interface Room {
   refitting?: { decorAfter: number }; // set while the room is closed for a refit (status 'renovating')
 }
 
-/** A piece of furniture in a room: which spot it fills, what it is, and how nice (tier 1 basic, 2 premium). */
+/**
+ * A piece of furniture in a room: what it is, how nice (tier 1 basic, 2
+ * premium), and where -- the door-local cell of its top-left, turned `rot`
+ * quarter turns (a wall piece: which edge of its cell it hangs on).
+ */
 export interface FurnitureItem {
-  slot: SlotKind;
+  id: string; // stable within the room: 'bed', 'bed-2', 'bath', 'tv'
   kind: FurnitureKind;
   tier: Tier;
+  x: number;
+  y: number;
+  rot: Rot;
+  length?: number; // its length when it comes in more than one (the long bathroom), unturned
 }
 
 /** How a room is laid out and furnished. */
 export interface Furnishing {
-  preset: PresetId; // the layout: which spots it has
-  arrangement: ArrangementId; // where the bathroom goes
+  preset: PresetId; // what it was laid out from
+  arrangement: ArrangementId; // where the preset put the bathroom
   mirrored: boolean;
+  custom?: boolean; // pieces moved, added or removed by hand: no longer the preset's layout
   items: FurnitureItem[];
 }
 

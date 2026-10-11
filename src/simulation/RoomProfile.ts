@@ -1,49 +1,177 @@
 import type { Room, RoomType, Furnishing, FurnitureItem, Direction } from './types.js';
 import {
-  FURNITURE, ROOM_PRESETS, PRESET_FOR_TYPE, FURNISHING, ROOM_CELLS, SLOT_KINDS,
-  type PresetId, type ArrangementId, type SlotKind, type Tier, type FurnitureKind, type WallEdge,
+  FURNITURE, ROOM_PRESETS, PRESET_FOR_TYPE, FURNISHING, ROOM_CELLS,
+  type PresetId, type ArrangementId, type Tier, type Rot, type FurnitureKind, type FurnitureGroup,
 } from '../config/furniture.js';
 
-// What a room is, worked out from what's in it (docs/designs/rooms-rethink.md,
-// phase 1). The player never picks "deluxe": they furnish a room, and a room
-// furnished well enough (FURNISHING.deluxeQuality) is deluxe; one that also
-// has a lounge is a junior suite. room.type is this derived category, kept on
-// the room so prices, stars, amenities and everything else that reads it work
-// as before -- and a room furnished like one of today's types is exactly that
-// type, at exactly today's numbers.
+// What a room is, worked out from what's in it (docs/designs/rooms-rethink.md).
+// The player never picks "deluxe" or "family": they furnish a room, and the
+// furniture decides who it fits (its class: single, double, twin, family) and
+// how nice it is (its grade). A room nice enough (FURNISHING.deluxeQuality) is
+// deluxe; deluxe with a lounge is a junior suite. room.type holds the result as
+// the original standard / deluxe / suite category, so prices, stars and
+// amenities read it as before -- and a room furnished like one of the
+// original types is exactly that type, at exactly its numbers.
 
-/** A piece of furniture with its place in the room (door-local cells: door on the bottom edge). */
+export type WallEdge = 'top' | 'right' | 'bottom' | 'left';
+const EDGES: WallEdge[] = ['top', 'right', 'bottom', 'left'];
+
+/** A piece with its rectangle in the room (door-local cells, door on the bottom edge). */
 export interface PlacedItem extends FurnitureItem {
-  x: number;
-  y: number;
   w: number;
   h: number;
+  group: FurnitureGroup;
   wall: boolean;
-  edge: WallEdge; // for a wall piece, the edge of its cell it hangs on
+  edge: WallEdge; // a wall piece: the edge of its cell it hangs on; a bed: the edge its head is against
+}
+
+/** Who a room fits: one person, a couple in one bed, two in separate beds, or three or more. */
+export type LayoutClass = 'single' | 'double' | 'twin' | 'family';
+
+export type RoomIssueCode = 'no_bed' | 'no_bath' | 'outside' | 'size' | 'overlap' | 'doorway' | 'unreachable' | 'wall';
+export interface RoomIssue {
+  code: RoomIssueCode;
+  itemId?: string;
+  message: string;
 }
 
 export interface RoomProfile {
   type: RoomType; // the category: standard / deluxe / suite
-  label: string; // "Standard Queen", "Deluxe King", "Junior Suite"
+  layoutClass: LayoutClass;
+  label: string; // "Standard Queen", "Deluxe Twin", "Standard Family Room", "Junior Suite"
   quality: number; // weighted tier average, 1-2
-  sleeps: number;
+  sleeps: number; // people it sleeps when they'll share a bed (couples, families)
+  beds: number; // people it sleeps when nobody shares a bed (friends, colleagues)
   hasLounge: boolean;
   items: PlacedItem[];
   furnishingCost: number; // shell + furniture: what it would cost to build like this
+  freeCells: number; // floor not taken by furniture
+  issues: RoomIssue[]; // why it can't be sold (empty: it can)
 }
 
-/** The furnishing a room of a type is built with: its preset's defaults. */
+/** A piece's rectangle and facing. */
+export function placeItem(item: FurnitureItem): PlacedItem {
+  const spec = FURNITURE[item.kind];
+  const w0 = spec.size[0];
+  const h0 = item.length ?? spec.size[1];
+  const turned = item.rot % 2 === 1;
+  return { ...item, w: turned ? h0 : w0, h: turned ? w0 : h0, group: spec.group, wall: !!spec.wall, edge: EDGES[item.rot] };
+}
+
+/** A preset's pieces in an arrangement, with the given kinds and tiers (by piece id), mirrored or not. */
+function presetItems(preset: PresetId, arrangement: ArrangementId, mirrored: boolean, kinds: Record<string, { kind: FurnitureKind; tier: Tier }>): FurnitureItem[] {
+  const pieces = ROOM_PRESETS[preset].arrangements[arrangement].pieces;
+  const items: FurnitureItem[] = pieces
+    .filter(p => kinds[p.id])
+    .map(p => ({ id: p.id, kind: kinds[p.id].kind, tier: kinds[p.id].tier, x: p.x, y: p.y, rot: p.rot ?? 0, ...(p.length ? { length: p.length } : {}) }));
+  return mirrored ? mirrorItems(items) : items;
+}
+
+/** Pieces flipped left to right. */
+export function mirrorItems(items: FurnitureItem[]): FurnitureItem[] {
+  return items.map(item => {
+    const { w } = placeItem(item);
+    const rot = (item.rot % 2 === 1 ? (item.rot + 2) % 4 : item.rot) as Rot;
+    return { ...item, x: ROOM_CELLS - item.x - w, rot };
+  });
+}
+
+/** The furnishing a room of a preset is built with: its default pieces. */
 export function defaultFurnishing(preset: PresetId, arrangement: ArrangementId = 'bath_front', mirrored = false): Furnishing {
-  const p = ROOM_PRESETS[preset];
-  const items: FurnitureItem[] = p.slots
-    .filter(slot => p.defaults[slot])
-    .map(slot => ({ slot, kind: p.defaults[slot]!.kind, tier: p.defaults[slot]!.tier }));
-  return { preset, arrangement, mirrored, items };
+  return { preset, arrangement, mirrored, items: presetItems(preset, arrangement, mirrored, ROOM_PRESETS[preset].defaults) };
+}
+
+/** Lay pieces out per their preset's arrangement, by id, keeping kinds and tiers (pieces the arrangement has no place for are dropped). */
+export function arrangeItems(preset: PresetId, arrangement: ArrangementId, mirrored: boolean, items: Array<Pick<FurnitureItem, 'kind' | 'tier'> & { id: string }>): FurnitureItem[] {
+  return presetItems(preset, arrangement, mirrored, Object.fromEntries(items.map(i => [i.id, { kind: i.kind, tier: i.tier }])));
 }
 
 /** A room's furnishing (rooms from before furniture, or built in tests, get their type's preset). */
 export function furnishingOf(room: Pick<Room, 'type' | 'furnishing'>): Furnishing {
   return room.furnishing ?? defaultFurnishing(PRESET_FOR_TYPE[room.type]);
+}
+
+/** Every floor cell a rectangle covers. */
+export function cellsOf(r: { x: number; y: number; w: number; h: number }): string[] {
+  const cells: string[] = [];
+  for (let x = r.x; x < r.x + r.w; x++) for (let y = r.y; y < r.y + r.h; y++) cells.push(`${x},${y}`);
+  return cells;
+}
+
+/** The cells just inside the door: they stay clear. */
+export const DOORWAY_CELLS = ['1,3', '2,3'];
+const STEPS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+/**
+ * What's wrong with a layout, if anything: a room needs a bed and a bathroom,
+ * every piece on the grid and on nothing else, the doorway clear, every piece
+ * reachable on foot from the doorway, and wall pieces on a wall (the room's,
+ * or the outside of the bathroom's).
+ */
+function checkLayout(items: PlacedItem[]): RoomIssue[] {
+  const issues: RoomIssue[] = [];
+  const label = (i: PlacedItem) => FURNITURE[i.kind].label.toLowerCase();
+  if (!items.some(i => (FURNITURE[i.kind].sleeps ?? 0) > 0)) issues.push({ code: 'no_bed', message: 'Needs a bed' });
+  if (!items.some(i => i.group === 'bath')) issues.push({ code: 'no_bath', message: 'Needs a bathroom' });
+
+  for (const item of items) {
+    const spec = FURNITURE[item.kind];
+    if (item.length !== undefined && item.length !== spec.size[1] && !(spec.sizes ?? []).some(([w, h]) => w === spec.size[0] && h === item.length)) {
+      issues.push({ code: 'size', itemId: item.id, message: `The ${label(item)} doesn't come in that size` });
+    }
+    if (item.x < 0 || item.y < 0 || item.x + item.w > ROOM_CELLS || item.y + item.h > ROOM_CELLS) {
+      issues.push({ code: 'outside', itemId: item.id, message: `The ${label(item)} doesn't fit in the room there` });
+    }
+  }
+  const floor = items.filter(i => !i.wall);
+  const taken = new Map<string, string>();
+  for (const item of floor) {
+    for (const cell of cellsOf(item)) {
+      if (taken.has(cell)) {
+        issues.push({ code: 'overlap', itemId: item.id, message: `The ${label(item)} is on top of something` });
+        break;
+      }
+      taken.set(cell, item.id);
+    }
+  }
+  const blocking = DOORWAY_CELLS.find(c => taken.has(c));
+  if (blocking) issues.push({ code: 'doorway', itemId: taken.get(blocking), message: 'Keep the doorway clear' });
+
+  // Walk the free floor from the doorway: every piece must border it
+  const reached = new Set(DOORWAY_CELLS.filter(c => !taken.has(c)));
+  const queue = [...reached];
+  while (queue.length) {
+    const [x, y] = queue.pop()!.split(',').map(Number);
+    for (const [dx, dy] of STEPS) {
+      const nx = x + dx, ny = y + dy, k = `${nx},${ny}`;
+      if (nx < 0 || ny < 0 || nx >= ROOM_CELLS || ny >= ROOM_CELLS || taken.has(k) || reached.has(k)) continue;
+      reached.add(k);
+      queue.push(k);
+    }
+  }
+  for (const item of floor) {
+    const near = cellsOf(item).some(c => {
+      const [x, y] = c.split(',').map(Number);
+      return STEPS.some(([dx, dy]) => reached.has(`${x + dx},${y + dy}`));
+    });
+    if (!near) issues.push({ code: 'unreachable', itemId: item.id, message: `There's no way to get to the ${label(item)}` });
+  }
+
+  // Wall pieces: on the room's wall, or on the outside of the bathroom's
+  const bathCells = new Set(items.filter(i => i.group === 'bath').flatMap(cellsOf));
+  const hung = new Set<string>();
+  for (const item of items.filter(i => i.wall)) {
+    const [dx, dy] = { top: [0, -1], right: [1, 0], bottom: [0, 1], left: [-1, 0] }[item.edge];
+    const bx = item.x + dx;
+    const by = item.y + dy;
+    const onRoomWall = bx < 0 || by < 0 || bx >= ROOM_CELLS || by >= ROOM_CELLS;
+    const onBathWall = bathCells.has(`${bx},${by}`) && !bathCells.has(`${item.x},${item.y}`);
+    const spot = `${item.x},${item.y},${item.edge}`;
+    if (!onRoomWall && !onBathWall) issues.push({ code: 'wall', itemId: item.id, message: `The ${label(item)} needs a wall to hang on` });
+    else if (hung.has(spot)) issues.push({ code: 'overlap', itemId: item.id, message: `The ${label(item)} is where something else hangs` });
+    hung.add(spot);
+  }
+  return issues;
 }
 
 const profiles = new WeakMap<Furnishing, RoomProfile>();
@@ -52,37 +180,81 @@ const profiles = new WeakMap<Furnishing, RoomProfile>();
 export function profileFurnishing(f: Furnishing): RoomProfile {
   const cached = profiles.get(f);
   if (cached) return cached;
-  const preset = ROOM_PRESETS[f.preset];
-  const places = preset.arrangements[f.arrangement].places;
-  const flip: Record<WallEdge, WallEdge> = { top: 'top', bottom: 'bottom', left: 'right', right: 'left' };
-  const items: PlacedItem[] = f.items.map(item => {
+  const items = f.items.map(placeItem);
+
+  // Who it sleeps: a shared bed counts once for people who won't share. A
+  // one-tile room sleeps FURNISHING.sleepsPerTile at most, however it's crammed.
+  let sharing = 0;
+  let separate = 0;
+  for (const item of items) {
     const spec = FURNITURE[item.kind];
-    const place = places.find(p => p.slot === item.slot)!;
-    const w = place.w ?? spec.size[0];
-    const h = place.h ?? spec.size[1];
-    const edge = place.wall ?? 'top';
-    return f.mirrored
-      ? { ...item, x: ROOM_CELLS - place.x - w, y: place.y, w, h, wall: !!spec.wall, edge: flip[edge] }
-      : { ...item, x: place.x, y: place.y, w, h, wall: !!spec.wall, edge };
-  });
+    const n = spec.sleeps ?? 0;
+    sharing += n;
+    separate += spec.shared ? Math.min(1, n) : n;
+  }
+  const sleeps = Math.min(FURNISHING.sleepsPerTile, sharing);
+  const beds = Math.min(FURNISHING.sleepsPerTile, separate);
+
+  // How nice: every bed counts; of everything else, only the best piece of each
+  // kind of thing (so piling in extras doesn't buy a grade)
+  const counted: PlacedItem[] = items.filter(i => i.group === 'bed');
+  const best = new Map<FurnitureGroup, PlacedItem>();
+  for (const item of items) {
+    if (item.group === 'bed') continue;
+    const prev = best.get(item.group);
+    if (!prev || item.tier > prev.tier) best.set(item.group, item);
+  }
+  counted.push(...best.values());
   let weighted = 0;
   let weights = 0;
-  for (const item of f.items) {
+  for (const item of counted) {
     const spec = FURNITURE[item.kind];
     weighted += item.tier * spec.gradeWeight;
     weights += spec.gradeWeight;
   }
   const quality = weights > 0 ? weighted / weights : 1;
-  const hasLounge = f.items.some(i => i.slot === 'living') && f.items.some(i => i.slot === 'tv');
+
+  const hasLounge = items.some(i => i.group === 'living') && items.some(i => i.group === 'tv');
   const deluxe = quality >= FURNISHING.deluxeQuality - 1e-9;
   const type: RoomType = deluxe ? (hasLounge ? 'suite' : 'deluxe') : 'standard';
-  const bed = f.items.find(i => i.slot === 'bed');
-  const bedName = bed?.kind === 'bed_king' ? 'King' : 'Queen';
-  const label = type === 'suite' ? 'Junior Suite' : `${type === 'deluxe' ? 'Deluxe' : 'Standard'} ${bedName}`;
-  const furnishingCost = preset.shellCost + f.items.reduce((sum, i) => sum + FURNITURE[i.kind].cost[i.tier], 0);
-  const profile: RoomProfile = { type, label, quality, sleeps: bed ? 2 : 0, hasLounge, items, furnishingCost };
+  const sharedBed = items.some(i => FURNITURE[i.kind].shared);
+  const layoutClass: LayoutClass = sleeps >= 3 ? 'family' : sleeps === 2 ? (sharedBed ? 'double' : 'twin') : 'single';
+  const bedName = items.some(i => i.kind === 'bed_king') ? 'King' : 'Queen';
+  const noun = { single: 'Single', double: bedName, twin: 'Twin', family: 'Family Room' }[layoutClass];
+  const label = type === 'suite'
+    ? (layoutClass === 'family' ? 'Family Junior Suite' : 'Junior Suite')
+    : `${deluxe ? 'Deluxe' : 'Standard'} ${noun}`;
+  const shell = ROOM_PRESETS[f.preset]?.shellCost ?? 0;
+  const furnishingCost = shell + items.reduce((sum, i) => sum + FURNITURE[i.kind].cost[i.tier], 0);
+  const floorCells = new Set(items.filter(i => !i.wall).flatMap(cellsOf));
+  const profile: RoomProfile = {
+    type, layoutClass, label, quality, sleeps, beds, hasLounge, items, furnishingCost,
+    freeCells: ROOM_CELLS * ROOM_CELLS - floorCells.size,
+    issues: checkLayout(items),
+  };
   profiles.set(f, profile);
   return profile;
+}
+
+/** What a room is (see profileFurnishing). */
+export function profileRoom(room: Pick<Room, 'type' | 'furnishing'>): RoomProfile {
+  return profileFurnishing(furnishingOf(room));
+}
+
+/** Whether a room can be sold: furnished so it works (a bed, a bathroom, everything reachable). */
+export function isBookable(room: Pick<Room, 'type' | 'furnishing'>): boolean {
+  return profileRoom(room).issues.length === 0;
+}
+
+/**
+ * How a room's fair price compares to its category's, for who it fits: a
+ * room for one is cheaper; separate beds, and space for a family, dearer. A
+ * double (and so every room furnished like one of the original types) is
+ * exactly its category's price.
+ */
+export function classPriceFactor(profile: Pick<RoomProfile, 'type' | 'layoutClass'>): number {
+  if (profile.type === 'suite') return profile.layoutClass === 'family' ? 1.1 : 1;
+  return { single: 0.75, double: 1, twin: 1.05, family: 1.25 }[profile.layoutClass];
 }
 
 /** The thin strip a wall piece takes along its edge (door-local cells), for drawing it. */
@@ -95,66 +267,72 @@ export function wallBar(item: Pick<PlacedItem, 'x' | 'y' | 'w' | 'h' | 'edge'>, 
   }
 }
 
-/** What a room is (see profileFurnishing). */
-export function profileRoom(room: Pick<Room, 'type' | 'furnishing'>): RoomProfile {
-  return profileFurnishing(furnishingOf(room));
+/** The pillow end of a bed: a strip along its head edge (door-local cells). */
+export function pillowRect(item: Pick<PlacedItem, 'x' | 'y' | 'w' | 'h' | 'edge'>): { x: number; y: number; w: number; h: number } {
+  const depth = 0.45;
+  const inset = 0.2;
+  switch (item.edge) {
+    case 'top': return { x: item.x + inset, y: item.y + 0.15, w: item.w - inset * 2, h: depth };
+    case 'bottom': return { x: item.x + inset, y: item.y + item.h - 0.15 - depth, w: item.w - inset * 2, h: depth };
+    case 'left': return { x: item.x + 0.15, y: item.y + inset, w: depth, h: item.h - inset * 2 };
+    case 'right': return { x: item.x + item.w - 0.15 - depth, y: item.y + inset, w: depth, h: item.h - inset * 2 };
+  }
 }
 
 /** What changing a room's furnishing involves: what it costs, how long the room is closed, and what it becomes. */
 export interface RefitQuote {
   cost: number;
   installHours: number;
-  changed: SlotKind[]; // slots whose piece changes
-  moved: boolean; // the layout (arrangement / mirror / preset) changes
+  changed: string[]; // ids of pieces added, removed or swapped
+  moved: boolean; // pieces moved (or the layout it follows changed)
   replumbed: boolean; // the bathroom moves
   before: RoomProfile;
   after: RoomProfile;
 }
 
 /**
- * Price a refit: the new pieces, less what the old ones fetch
- * (FURNISHING.refitResale), times FURNISHING.refitPremium for fitting them in
- * a working hotel. Moving the bathroom (a new arrangement or mirror; every
- * layout puts it in the same place for the same arrangement) means
- * re-plumbing a bathroom that's otherwise kept: half its price again, and its
- * install time.
+ * Price a refit, piece by piece (matched by id): the new pieces, less what
+ * the old ones fetch (FURNISHING.refitResale), times FURNISHING.refitPremium
+ * for fitting them in a working hotel. A piece that stays but moves takes a
+ * little time; moving the bathroom means re-plumbing it, half its price again
+ * and its install time.
  */
 export function quoteRefit(from: Furnishing, to: Furnishing): RefitQuote {
-  const slotsOf = (f: Furnishing) => new Map(f.items.map(i => [i.slot, i]));
-  const a = slotsOf(from);
-  const b = slotsOf(to);
-  const changed: SlotKind[] = [];
+  const byId = (f: Furnishing) => new Map(f.items.map(i => [i.id, i]));
+  const a = byId(from);
+  const b = byId(to);
+  const changed: string[] = [];
   let spend = 0;
   let resale = 0;
   let hours = 0;
-  for (const slot of new Set([...a.keys(), ...b.keys()])) {
-    const before = a.get(slot);
-    const after = b.get(slot);
-    if (before && after && before.kind === after.kind && before.tier === after.tier) continue;
-    changed.push(slot);
+  let movedPiece = false;
+  let replumbed = false;
+  for (const id of new Set([...a.keys(), ...b.keys()])) {
+    const before = a.get(id);
+    const after = b.get(id);
+    if (before && after && before.kind === after.kind && before.tier === after.tier) {
+      if (before.x === after.x && before.y === after.y && before.rot === after.rot && (before.length ?? 0) === (after.length ?? 0)) continue;
+      movedPiece = true;
+      const spec = FURNITURE[after.kind];
+      if (spec.group === 'bath') {
+        replumbed = true;
+        spend += spec.cost[after.tier] * 0.5;
+        hours += spec.installHours;
+      } else {
+        hours += FURNISHING.moveHours;
+      }
+      continue;
+    }
+    changed.push(id);
     if (after) {
       spend += FURNITURE[after.kind].cost[after.tier];
       hours += FURNITURE[after.kind].installHours;
     }
     if (before) resale += FURNITURE[before.kind].cost[before.tier] * FURNISHING.refitResale;
   }
-  const before = profileFurnishing(from);
-  const after = profileFurnishing(to);
-  const moved = from.preset !== to.preset || from.arrangement !== to.arrangement || from.mirrored !== to.mirrored;
-  const bathAt = (p: RoomProfile) => {
-    const bath = p.items.find(i => i.slot === 'bath');
-    return bath ? `${bath.x},${bath.y},${bath.w},${bath.h}` : '';
-  };
-  const replumbed = bathAt(before) !== bathAt(after);
-  if (replumbed && !changed.includes('bath')) {
-    const bath = b.get('bath');
-    if (bath) {
-      spend += FURNITURE[bath.kind].cost[bath.tier] * 0.5;
-      hours += FURNITURE[bath.kind].installHours;
-    }
-  }
+  const moved = movedPiece || from.preset !== to.preset || from.arrangement !== to.arrangement || from.mirrored !== to.mirrored;
   const cost = Math.max(0, Math.round((spend - resale) * FURNISHING.refitPremium));
-  return { cost, installHours: Math.ceil(hours), changed, moved, replumbed, before, after };
+  return { cost, installHours: Math.ceil(hours), changed, moved, replumbed, before: profileFurnishing(from), after: profileFurnishing(to) };
 }
 
 /** Whether a piece (at a tier) can be fitted yet: furniture unlocks with the hotel's peak star rating. */
@@ -163,26 +341,32 @@ export function isFurnitureUnlocked(kind: FurnitureKind, tier: Tier, peakStars: 
   return peakStars >= spec.requiredStars && (tier === 1 || peakStars >= spec.tier2Stars);
 }
 
-/** Whether a furnishing is allowed: every slot of its preset filled with a piece that fits there and is unlocked. */
+/** Whether a furnishing is allowed: every piece unlocked, and the room works (see RoomProfile.issues). Null if so, else why not. */
 export function validateFurnishing(f: Furnishing, peakStars: number): string | null {
-  const preset = ROOM_PRESETS[f.preset];
-  if (!preset || !preset.arrangements[f.arrangement]) return 'Unknown layout';
-  for (const slot of preset.slots) {
-    const item = f.items.find(i => i.slot === slot);
-    if (!item) return `Needs a ${slot}`;
-    if (!SLOT_KINDS[slot].includes(item.kind)) return `${FURNITURE[item.kind].label} doesn't go in the ${slot} spot`;
+  if (!ROOM_PRESETS[f.preset] || !ROOM_PRESETS[f.preset].arrangements[f.arrangement]) return 'Unknown layout';
+  if (new Set(f.items.map(i => i.id)).size !== f.items.length) return 'Two pieces share an id';
+  for (const item of f.items) {
+    if (!FURNITURE[item.kind]) return 'Unknown furniture';
     if (!isFurnitureUnlocked(item.kind, item.tier, peakStars)) return `${FURNITURE[item.kind].label}${item.tier === 2 ? ' (premium)' : ''} needs a higher star rating`;
   }
-  if (f.items.some(i => !preset.slots.includes(i.slot))) return 'A piece has no place in this layout';
-  return null;
+  const issue = profileFurnishing(f).issues[0];
+  return issue ? issue.message : null;
 }
 
-/**
- * Start a room over from a preset: its layout and furniture, keeping where
- * the bathroom goes (the player then changes pieces from there).
- */
+/** Start a room over from a preset: its layout and furniture, keeping where the bathroom goes. */
 export function switchPreset(f: Furnishing, preset: PresetId): Furnishing {
   return defaultFurnishing(preset, f.arrangement, f.mirrored);
+}
+
+/** The same pieces laid out by another of the preset's arrangements (back to the preset's layout). */
+export function setArrangement(f: Furnishing, arrangement: ArrangementId): Furnishing {
+  const { custom: _, ...rest } = f;
+  return { ...rest, arrangement, items: arrangeItems(f.preset, arrangement, f.mirrored, f.items) };
+}
+
+/** Everything flipped left to right. */
+export function mirrorFurnishing(f: Furnishing): Furnishing {
+  return { ...f, mirrored: !f.mirrored, items: mirrorItems(f.items) };
 }
 
 /**
@@ -207,11 +391,31 @@ export function rectToWorld(door: Direction, r: { x: number; y: number; w: numbe
   return { x: Math.min(ax, bx), y: Math.min(ay, by), w: Math.abs(bx - ax), h: Math.abs(by - ay) };
 }
 
+/**
+ * Where people sleep in a room (cells, tile world frame), one spot per
+ * person it sleeps: two across a double bed, two along bunk beds, one to a
+ * single or a sofa bed. Empty if it has no bed.
+ */
+export function sleepSpots(room: Pick<Room, 'type' | 'furnishing' | 'door'>): Array<[number, number]> {
+  const spots: Array<[number, number]> = [];
+  for (const item of profileRoom(room).items) {
+    const n = FURNITURE[item.kind].sleeps ?? 0;
+    if (n === 0) continue;
+    const r = rectToWorld(room.door, item);
+    for (let k = 0; k < n; k++) {
+      const f = (k + 0.5) / n;
+      if (n === 1) spots.push([r.x + r.w / 2, r.y + r.h / 2]);
+      else if (r.w >= r.h) spots.push([r.x + r.w * f, r.y + r.h / 2]);
+      else spots.push([r.x + r.w / 2, r.y + r.h * f]);
+    }
+  }
+  return spots.slice(0, FURNISHING.sleepsPerTile);
+}
+
 /** Where a guest in their room is: in bed (cells, tile world frame), or the middle of the room. */
 export function bedSpot(room: Pick<Room, 'type' | 'furnishing' | 'door'>): [number, number] {
-  const bed = profileRoom(room).items.find(i => i.slot === 'bed');
+  const bed = profileRoom(room).items.find(i => (FURNITURE[i.kind].sleeps ?? 0) > 0);
   if (!bed) return [ROOM_CELLS / 2, ROOM_CELLS / 2];
   const r = rectToWorld(room.door, bed);
   return [r.x + r.w / 2, r.y + r.h / 2];
 }
-

@@ -391,7 +391,7 @@ describe('Save migration to v18', () => {
     localStorage.clear();
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 17, prngState: 1, state }));
     const loaded = loadGame()!;
-    expect(loaded.version).toBe(19);
+    expect(loaded.version).toBe(20);
     expect(loaded.state.guests[0]).toMatchObject({ trip: null, facilitiesUsed: {} });
     expect(loaded.state.walkers).toEqual([]);
     expect(loaded.state.staffRoster).toBeUndefined();

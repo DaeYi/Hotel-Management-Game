@@ -1,4 +1,5 @@
-import type { HotelState, RoomType } from './types.js';
+import type { HotelState, RoomType, Room } from './types.js';
+import { profileRoom, classPriceFactor } from './RoomProfile.js';
 import { STAR_RATING, AMENITIES, FACILITY_CONFIG, ROOM_CONFIG, FACILITY_LEVELS, FLOORS } from '../config/balance.js';
 import { getDecorStarPenalty } from './DecorManager.js';
 import { getOpenFacilities } from './Layout.js';
@@ -90,6 +91,19 @@ export function starsForPoints(points: number): number {
 /** Star points needed to reach a given star level (1-5). */
 export function pointsForStars(stars: number): number {
   return STAR_RATING.pointThresholds[Math.max(1, Math.min(5, stars)) - 1];
+}
+
+/**
+ * What guests consider a fair nightly price for a particular room: its
+ * category's (getExpectedPrice), adjusted for who it fits -- a twin or a
+ * family room is worth more than a double, a single less. Exactly the
+ * category's price for every room furnished like an original type.
+ */
+export function getRoomExpectedPrice(room: Pick<Room, 'type' | 'furnishing' | 'floor'>, starRating: number): number {
+  const profile = profileRoom(room);
+  const base = getExpectedPrice(profile.type, starRating, room.floor);
+  const factor = classPriceFactor(profile);
+  return factor === 1 ? base : Math.round(base * factor);
 }
 
 /** What guests consider a fair nightly price for a room type at a given star level, with a view premium for higher floors. */

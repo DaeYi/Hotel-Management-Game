@@ -1,6 +1,6 @@
 import type { HotelState, RoomType } from './types.js';
 import { PRESET_FOR_TYPE } from '../config/furniture.js';
-import { defaultFurnishing } from './RoomProfile.js';
+import { defaultFurnishing, arrangeItems } from './RoomProfile.js';
 import type { PRNG } from './prng.js';
 import { GUEST_NAMES, LOAN, GRID, STARTER_LAYOUT } from '../config/balance.js';
 import { isEdgeTile } from './Layout.js';
@@ -8,7 +8,7 @@ import { DIRECTIONS, doorTile, isReachableHallway, findOpenDoor } from './Layout
 import { calculateStarRating } from './StarRatingManager.js';
 
 const SAVE_KEY = 'hotel-game-save';
-const SAVE_VERSION = 19; // v19: rooms are furnished
+const SAVE_VERSION = 20; // v20: furniture has positions (free placement)
 
 interface SaveData {
   version: number;
@@ -221,6 +221,19 @@ export function loadGame(): SaveData | null {
       data.state.rooms = data.state.rooms.map((r: any) => ({ ...r, furnishing: r.furnishing ?? defaultFurnishing(PRESET_FOR_TYPE[r.type as RoomType]) }));
       data.version = 19;
       console.log('Migrated save from v18 to v19');
+    }
+
+    if (data.version === 19) {
+      // Pieces get the places their layout gave them (they had a spot by name
+      // before), so nothing moves and every room is exactly what it was.
+      const place = (f: any) => {
+        if (!f || !Array.isArray(f.items) || f.items.every((i: any) => typeof i.x === 'number')) return f;
+        const items = arrangeItems(f.preset, f.arrangement, !!f.mirrored, f.items.map((i: any) => ({ id: i.id ?? i.slot, kind: i.kind, tier: i.tier })));
+        return { preset: f.preset, arrangement: f.arrangement, mirrored: !!f.mirrored, items };
+      };
+      data.state.rooms = data.state.rooms.map((r: any) => ({ ...r, furnishing: place(r.furnishing), ...(r.pendingRefit ? { pendingRefit: place(r.pendingRefit) } : {}) }));
+      data.version = 20;
+      console.log('Migrated save from v19 to v20');
     }
 
     if (data.version !== SAVE_VERSION) {

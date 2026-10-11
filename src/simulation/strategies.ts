@@ -6,7 +6,7 @@ import {
 } from './HotelState.js';
 import { startCampaign, getCampaignCost } from './MarketingManager.js';
 import { FACILITY_LEVELS } from '../config/balance.js';
-import { getExpectedPrice } from './StarRatingManager.js';
+import { getRoomExpectedPrice } from './StarRatingManager.js';
 import { repayLoan, processDailyCosts } from './EconomyManager.js';
 import { getStaffDailyCost } from './MaintenanceManager.js';
 import { housekeepersNeeded, PLANNING_OCCUPANCY } from './HousekeepingManager.js';
@@ -182,7 +182,7 @@ function managedStrategy(opts: ManagedOptions): Strategy {
     s = { ...s, amenities: { standard: tier, deluxe: tier, suite: tier } };
 
     for (const room of s.rooms) {
-      const price = Math.round(getExpectedPrice(room.type, s.starRating, room.floor) * opts.priceMultiplier);
+      const price = Math.round(getRoomExpectedPrice(room, s.starRating) * opts.priceMultiplier);
       if (room.pricePerNight !== price) s = setRoomPrice(s, room.id, price);
     }
 

@@ -18,6 +18,19 @@ function setup(options: { tutorialSeen?: boolean } = {}) {
 }
 
 afterEach(() => cleanup());
+
+/** In the furnishing editor: pick a piece from the furniture list. */
+function pickPiece(name: string) {
+  fireEvent.click(screen.getByText(name, { selector: '.piece-list span' }));
+}
+
+/** In the furnishing editor: pick each named piece from the list and make it premium. */
+function upgrade(...pieces: string[]) {
+  for (const name of pieces) {
+    pickPiece(name);
+    fireEvent.click(screen.getByLabelText(`${name} premium`));
+  }
+}
 beforeEach(() => localStorage.clear());
 
 describe('Interface', () => {
@@ -107,7 +120,7 @@ describe('Interface', () => {
     // Locked at 2 stars: the studio's sofa needs 3
     expect((screen.getByText('Executive Studio', { selector: '.furnish button' }) as HTMLButtonElement).disabled).toBe(true);
 
-    for (const slot of ['Bed', 'Bathroom', 'Storage']) fireEvent.click(screen.getByLabelText(`${slot} premium`));
+    upgrade('Queen bed', 'Shower room', 'Clothes rail');
     flush();
     expect(panel().textContent).toContain('Deluxe Queen');
     expect(panel().textContent).toContain('Same for the other Standard Queen room');
@@ -122,6 +135,58 @@ describe('Interface', () => {
     expect(panel().textContent).toContain('Closed for its refit');
   });
 
+  it('the editor: a bed from the palette makes a family room; a piece in the doorway, or taken out, has to be fixed first', () => {
+    const { controller, flush } = setup();
+    controller.selectTool('standard');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.selectTool(null);
+    controller.openFurnishing(controller.state.rooms[0].id);
+    flush();
+    const panel = () => screen.getByRole('region', { name: /FURNISH ROOM/ });
+    const refit = () => screen.getByText(/Refit now/).closest('button') as HTMLButtonElement;
+
+    // Out with the armchair, in with a single bed where it was
+    pickPiece('Armchair');
+    fireEvent.click(screen.getByText('Remove'));
+    fireEvent.click(screen.getByText('Single bed', { selector: '.palette button' }));
+    expect(panel().textContent).toContain('Tap where the single bed goes');
+    fireEvent.click(screen.getByLabelText('Cell 1, 3')); // column 1, row 3: the left wall, below the queen
+    flush();
+    expect(panel().textContent).toContain('Standard Family Room');
+    expect(panel().textContent).toContain('Sleeps 3');
+    expect(refit().disabled).toBe(false);
+
+    // Moved into the doorway: the room doesn't work, and can't be refitted to
+    fireEvent.click(screen.getByText('Move'));
+    fireEvent.click(screen.getByLabelText('Cell 2, 3'));
+    flush();
+    expect(panel().textContent).toContain('Keep the doorway clear');
+    expect(refit().disabled).toBe(true);
+    fireEvent.click(screen.getByText('Move'));
+    fireEvent.click(screen.getByLabelText('Cell 1, 3'));
+
+    // No bathroom: same
+    pickPiece('Shower room');
+    fireEvent.click(screen.getByText('Remove'));
+    flush();
+    expect(panel().textContent).toContain('Needs a bathroom');
+    expect(refit().disabled).toBe(true);
+    fireEvent.click(screen.getByText('Reset'));
+    flush();
+    expect(panel().textContent).not.toContain('After');
+  });
+
+  it('twin and family rooms can be built from the start', () => {
+    const { controller, flush } = setup();
+    fireEvent.click(screen.getByText('Standard Twin'));
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    fireEvent.click(screen.getByText('Family Room'));
+    controller.tileDown({ gridX: 6, gridY: 2 });
+    flush();
+    expect(controller.state.rooms.map(r => r.furnishing?.preset)).toEqual(['twin', 'bunk_family']);
+    expect(controller.state.cash).toBe(50_000 - 2100 - 2350);
+  });
+
   it('a refit the hotel can\'t afford yet can be booked; demolishing the room closes its furnishing for good', () => {
     const { controller, flush } = setup();
     controller.selectTool('standard');
@@ -130,7 +195,7 @@ describe('Interface', () => {
     controller.state = { ...controller.state, peakStarRating: 2, cash: 1000 };
     controller.openFurnishing(controller.state.rooms[0].id);
     flush();
-    for (const slot of ['Bed', 'Bathroom', 'Storage']) fireEvent.click(screen.getByLabelText(`${slot} premium`));
+    upgrade('Queen bed', 'Shower room', 'Clothes rail');
     flush();
     expect(screen.queryByText(/Refit now/)).toBeNull();
     fireEvent.click(screen.getByText(/Book it: starts once there's \$2,870/));

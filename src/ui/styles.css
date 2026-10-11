@@ -278,3 +278,18 @@ button.link { background: none; border: none; color: var(--gold); text-decoratio
 .cleaning-floors button.link { margin-right: 8px; }
 .legend-group { display: inline-flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
 .legend-title { color: var(--text-body); }
+
+/* ---------- Furnishing editor ---------- */
+
+.furnish-hint { margin: 2px 0 4px; min-height: 1.4em; }
+.room-plan.editing .plan-cell { cursor: crosshair; }
+.room-plan.editing .plan-cell:hover, .room-plan.editing .plan-cell:focus { fill: rgba(255, 255, 255, 0.08); outline: none; }
+.room-plan.editing .plan-item { cursor: pointer; }
+.room-plan.editing .plan-item:focus { outline: none; }
+.room-plan.editing .plan-item:focus rect:not([fill='transparent']) { stroke: #ffffff; }
+.palette button { padding: 2px 6px; font-size: 10px; }
+.piece-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
+.piece-list .piece { width: 100%; display: flex; justify-content: space-between; gap: 4px; padding: 3px 6px; font-size: 11px; text-align: left; }
+.piece-list .piece.selected { outline: 2px solid #ffffff; outline-offset: -2px; }
+.piece-editor { border: 1px solid var(--border-soft); border-radius: 4px; padding: 6px; margin: 4px 0; }
+.furnish-issues { margin: 6px 0; padding-left: 16px; }

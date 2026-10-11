@@ -24,7 +24,15 @@ import { ToastQueue } from './ToastQueue';
 // read from it and call into it; neither owns any game logic.
 
 /** Anything the build panel can place (a room, facility, street entrance, desk, closet, break room, or elevator shaft), or the bulldoze tool. */
-export type BuildType = TileType | 'elevator' | FixtureType | 'bulldoze';
+/** Rooms built from a preset rather than one of the original types. */
+export const PRESET_TOOLS = ['twin', 'bunk_family'] as const;
+export type PresetTool = typeof PRESET_TOOLS[number];
+export type BuildType = TileType | PresetTool | 'elevator' | FixtureType | 'bulldoze';
+
+/** Whether a build tool builds a room (an original type or a preset). */
+export function isRoomTool(tool: BuildType): tool is RoomType | PresetTool {
+  return tool in ROOM_CONFIG || (PRESET_TOOLS as readonly string[]).includes(tool);
+}
 
 /** Tools that place on (or clear) one tile per click and can be dragged across tiles. */
 export const PAINTABLE_TYPES = new Set<BuildType>(['bulldoze']);
@@ -302,7 +310,7 @@ export class GameController {
     if (type === 'bulldoze') return this.bulldoze(gridX, gridY);
     if (type === 'entrance' || type === 'desk' || type === 'closet' || type === 'breakroom') return addFixture(this.state, type, gridX, gridY, this.currentFloor);
     if (type === 'elevator') return addElevator(this.state, gridX, gridY);
-    if (type in ROOM_CONFIG) return addRoom(this.state, type as RoomType, gridX, gridY, this.currentFloor, this.doorDirection);
+    if (isRoomTool(type)) return addRoom(this.state, type, gridX, gridY, this.currentFloor, this.doorDirection);
     if (type in FACILITY_CONFIG) return addFacility(this.state, type as FacilityType, gridX, gridY, this.currentFloor, this.doorDirection);
     return null;
   }
@@ -378,7 +386,7 @@ export class GameController {
       return;
     }
     this.hover = { ...tile, canPlace: this.tryBuild(this.tool, tile.gridX, tile.gridY) !== null };
-    if (this.tool in ROOM_CONFIG || this.tool in FACILITY_CONFIG) {
+    if (isRoomTool(this.tool) || this.tool in FACILITY_CONFIG) {
       const door = this.doorDirection;
       this.hover.door = door;
       this.hover.doorOpen = isReachableHallway(this.state, doorTile({ ...tile, floor: this.currentFloor }, door));

@@ -1,9 +1,10 @@
 import type { RoomType, FacilityType, TileType, Direction } from '../simulation/types';
 import type { BuildType } from '../game/GameController';
 import { ROOM_CONFIG, FACILITY_CONFIG, ELEVATOR, DESK, CLOSET, BREAK_ROOM, ENTRANCE } from '../config/balance';
-import { ROOM_PRESETS, PRESET_FOR_TYPE } from '../config/furniture';
-import { getRequiredStars, isUnlocked } from '../simulation/HotelState';
-import { getExpectedPrice } from '../simulation/StarRatingManager';
+import { ROOM_PRESETS, PRESET_FOR_TYPE, type PresetId } from '../config/furniture';
+import { getRequiredStars, isUnlocked, getRoomBuildCost, presetFor } from '../simulation/HotelState';
+import { defaultFurnishing, profileFurnishing } from '../simulation/RoomProfile';
+import { getRoomExpectedPrice } from '../simulation/StarRatingManager';
 import { useController } from './context';
 import { formatMoney, capitalize } from './format';
 
@@ -17,11 +18,15 @@ interface BuildOption {
 }
 
 const ROOM_COLORS: Record<RoomType, string> = { standard: '#4a90d9', deluxe: '#9b59b6', suite: '#f1c40f' };
+const ROOM_TOOLS: Array<RoomType | 'twin' | 'bunk_family'> = ['standard', 'twin', 'bunk_family', 'deluxe', 'suite'];
+
+/** The category a room tool builds (twin and family rooms are standard rooms). */
+const roomTypeOf = (tool: RoomType | PresetId): RoomType => profileFurnishing(defaultFurnishing(presetFor(tool))).type;
 const toCss = (color: number) => `#${color.toString(16).padStart(6, '0')}`;
 
 const OPTIONS: BuildOption[] = [
-  ...(['standard', 'deluxe', 'suite'] as RoomType[]).map(type => ({
-    type, label: ROOM_PRESETS[PRESET_FOR_TYPE[type]].label, cost: ROOM_CONFIG[type].buildCost, subtitle: '', color: ROOM_COLORS[type], category: 'ROOMS' as const,
+  ...ROOM_TOOLS.map(tool => ({
+    type: tool, label: ROOM_PRESETS[presetFor(tool)].label, cost: getRoomBuildCost(tool), subtitle: '', color: ROOM_COLORS[roomTypeOf(tool)], category: 'ROOMS' as const,
   })),
   ...(Object.entries(FACILITY_CONFIG)).map(([type, config]) => ({
     type: type as FacilityType, label: config.label, cost: config.buildCost,
@@ -38,6 +43,8 @@ const OPTIONS: BuildOption[] = [
 export const DOOR_ARROWS: Record<Direction, string> = { up: '↑', right: '→', down: '↓', left: '←' };
 
 const isTile = (type: BuildType): type is TileType => type in ROOM_CONFIG || type in FACILITY_CONFIG;
+/** The type whose unlock a build option waits on (a twin or family room: a standard room's). */
+const unlockType = (type: BuildType): TileType | null => (isTile(type) ? type : type === 'twin' || type === 'bunk_family' ? roomTypeOf(type) : null);
 
 export function BuildPanel() {
   const c = useController();
@@ -49,13 +56,14 @@ export function BuildPanel() {
       {OPTIONS.map(option => {
         const header = option.category !== lastCategory ? option.category : null;
         lastCategory = option.category;
-        const locked = isTile(option.type) && !isUnlocked(state, option.type);
+        const gate = unlockType(option.type);
+        const locked = gate !== null && !isUnlocked(state, gate);
         const affordable = state.cash >= option.cost;
         const subtitle = option.category === 'ROOMS'
-          ? `$${getExpectedPrice(option.type as RoomType, state.starRating)}/nt`
+          ? `$${getRoomExpectedPrice({ type: roomTypeOf(option.type as RoomType | PresetId), furnishing: defaultFurnishing(presetFor(option.type as RoomType | PresetId)), floor: 0 }, state.starRating)}/nt`
           : option.subtitle;
         const cost = locked
-          ? `🔒 ${getRequiredStars(option.type as TileType)}★`
+          ? `🔒 ${getRequiredStars(gate!)}★`
           : option.cost > 0 ? formatMoney(option.cost) : 'Free';
 
         const doorPicker = (option.category === 'ROOMS' || option.category === 'FACILITIES') && c.tool === option.type && (

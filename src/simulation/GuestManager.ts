@@ -7,7 +7,7 @@ import { getCheckInCapacity } from './Layout.js';
 import { getAvailableRooms, getElevatorWaitPenalty } from './HotelState.js';
 import { facilityReviewBonus } from './FacilityManager.js';
 import { calculateRoomNoise, noiseToRatingPenalty } from './NoiseManager.js';
-import { getExpectationMultiplier, getExpectedPrice, getPriceMultiplier, getStarDemandMultiplier } from './StarRatingManager.js';
+import { getExpectationMultiplier, getRoomExpectedPrice, getPriceMultiplier, getStarDemandMultiplier } from './StarRatingManager.js';
 import { getTotalDemandMultiplier } from './SeasonManager.js';
 import { getReputationPenaltyMultiplier } from './StoryGenerator.js';
 
@@ -104,11 +104,11 @@ export function getExpectedArrivalsPerDay(state: HotelState): number {
 /**
  * Cheapest available room the guest can afford and considers worth the price:
  * within their budget, and no more than `priceTolerance` x the fair price for
- * that room type at the hotel's current star level.
+ * that room at the hotel's current star level.
  */
 function matchGuestToRoom(guest: Guest, availableRooms: Room[], priceTolerance: number, starRating: number): Room | null {
   for (const room of availableRooms) {
-    const fairPrice = getExpectedPrice(room.type, starRating, room.floor);
+    const fairPrice = getRoomExpectedPrice(room, starRating);
     if (room.pricePerNight <= guest.budget && room.pricePerNight <= fairPrice * priceTolerance) {
       return room;
     }
@@ -310,7 +310,7 @@ export function calculateGuestReviewBreakdown(
   guest: Guest,
   prng: PRNG
 ): GuestReviewBreakdown {
-  const expectedPrice = getExpectedPrice(room.type, state.starRating, room.floor);
+  const expectedPrice = getRoomExpectedPrice(room, state.starRating);
   const priceFairness = 1 - Math.abs(room.pricePerNight - expectedPrice) / expectedPrice;
 
   // Proximity-based noise

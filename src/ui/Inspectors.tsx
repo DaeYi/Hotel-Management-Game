@@ -2,9 +2,9 @@ import type { ComponentChildren } from 'preact';
 import type { Room, Facility, HotelState, Guest, FacilityType } from '../simulation/types';
 import { ROOM_CONFIG, ECONOMY, AMENITIES, DECOR, RENOVATION, GRID, FACILITY_CONFIG, FACILITY_LEVELS } from '../config/balance';
 import {
-  formatRoomLabel, getDemolishRefund, isFacilityOpen, getRenovationCost, isRoomReachable, getFacilityUpgradeCost,
+  formatRoomLabel, getDemolishRefund, isFacilityOpen, getRenovationCost, isRoomReachable, getFacilityUpgradeCost, getRoomInvestedCost,
 } from '../simulation/HotelState';
-import { getExpectedPrice, getUpkeepMultiplier } from '../simulation/StarRatingManager';
+import { getRoomExpectedPrice, getUpkeepMultiplier } from '../simulation/StarRatingManager';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
 import { DOOR_ARROWS } from './BuildPanel';
 import { RoomPlan } from './RoomPlan';
@@ -64,7 +64,7 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
   const config = ROOM_CONFIG[room.type];
   const profile = profileRoom(room);
   const guest = state.guests.find(g => g.id === room.guestId);
-  const fair = getExpectedPrice(room.type, state.starRating, room.floor);
+  const fair = getRoomExpectedPrice(room, state.starRating);
   const cleaning = roomCleaningAt(state, c.gameTime).get(room.id);
 
   let status: string;
@@ -89,7 +89,7 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
 
   const canRepair = room.condition < 80 && room.status === 'vacant';
   const canRenovate = room.status === 'vacant' && room.decor < 90;
-  const renovationCost = getRenovationCost(config.buildCost, state.starRating);
+  const renovationCost = getRenovationCost(getRoomInvestedCost(room), state.starRating);
   const canDemolish = room.status !== 'occupied' && room.status !== 'renovating';
 
   return (
@@ -128,7 +128,7 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
         )}
         {canDemolish && (
           <button class="danger" onClick={() => c.demolishRoom(room.id)}>
-            Demolish (+{formatMoney(getDemolishRefund(config.buildCost))})
+            Demolish (+{formatMoney(getDemolishRefund(getRoomInvestedCost(room)))})
           </button>
         )}
       </div>
