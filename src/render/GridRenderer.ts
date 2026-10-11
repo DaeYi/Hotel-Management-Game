@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 import type { HotelState, RoomType, FacilityType, GuestTrait, Direction } from '../simulation/types';
 import { GRID, ECONOMY, NOISE, FACILITY_CONFIG, DECOR } from '../config/balance';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
-import { formatRoomLabel, isRoomReachable } from '../simulation/HotelState';
+import { formatRoomLabel, isRoomReachable, isFacilityOpen } from '../simulation/HotelState';
 import { isHallway } from '../simulation/Layout';
 
 /** Guest dot color by trait, in one place so every trait gets an explicit,
@@ -34,6 +34,7 @@ const HALLWAY_COLOR = 0x4b4b63;
 const DESK_COLOR = 0xa0522d;
 const CLOSET_COLOR = 0x16a085;
 const BREAK_ROOM_COLOR = 0x8e44ad;
+const ENTRANCE_COLOR = 0x27ae60;
 
 const ROOM_OCCUPIED_COLORS: Record<RoomType, number> = {
   standard: 0x2e6da4,
@@ -119,7 +120,7 @@ export class GridRenderer {
     // Get color: room types use ROOM_COLORS, facilities use FACILITY_CONFIG
     const color = ROOM_COLORS[type as RoomType]
       ?? FACILITY_CONFIG[type]?.color
-      ?? (type === 'desk' ? DESK_COLOR : type === 'closet' ? CLOSET_COLOR : type === 'breakroom' ? BREAK_ROOM_COLOR : type === 'bulldoze' ? 0xc0392b : ELEVATOR_COLOR);
+      ?? (type === 'desk' ? DESK_COLOR : type === 'closet' ? CLOSET_COLOR : type === 'breakroom' ? BREAK_ROOM_COLOR : type === 'entrance' ? ENTRANCE_COLOR : type === 'bulldoze' ? 0xc0392b : ELEVATOR_COLOR);
 
     if (canPlace) {
       this.hoverGraphics.fillStyle(color, 0.4);
@@ -246,7 +247,19 @@ export class GridRenderer {
       if (fixture.floor !== floor) continue;
       const x = GRID_OFFSET_X + fixture.gridX * TILE_SIZE;
       const y = GRID_OFFSET_Y + fixture.gridY * TILE_SIZE;
-      if (fixture.type === 'closet') {
+      if (fixture.type === 'entrance') {
+        // Street entrance: a doormat with an arrow pointing in from the street side
+        const cx = x + TILE_SIZE / 2;
+        const cy = y + TILE_SIZE / 2;
+        this.roomGraphics.fillStyle(ENTRANCE_COLOR, 0.85);
+        this.roomGraphics.fillRect(x + 6, y + 6, TILE_SIZE - 12, TILE_SIZE - 12);
+        this.roomGraphics.fillStyle(0xffffff, 0.9);
+        const s = 9;
+        if (fixture.gridX === 0) this.roomGraphics.fillTriangle(cx + s, cy, cx - s, cy - s, cx - s, cy + s);
+        else if (fixture.gridX === GRID.width - 1) this.roomGraphics.fillTriangle(cx - s, cy, cx + s, cy - s, cx + s, cy + s);
+        else if (fixture.gridY === 0) this.roomGraphics.fillTriangle(cx, cy + s, cx - s, cy - s, cx + s, cy - s);
+        else this.roomGraphics.fillTriangle(cx, cy - s, cx - s, cy + s, cx + s, cy + s);
+      } else if (fixture.type === 'closet') {
         // Staff closet: a door with shelves behind it
         this.roomGraphics.fillStyle(CLOSET_COLOR, 0.85);
         this.roomGraphics.fillRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);
@@ -297,9 +310,11 @@ export class GridRenderer {
       const fConfig = FACILITY_CONFIG[facility.type];
       if (!fConfig) continue;
 
-      // Fill with facility color
-      this.roomGraphics.fillStyle(fConfig.color, 0.85);
+      // Fill with facility color (dimmed when guests can't get in), and its door
+      const open = isFacilityOpen(state, facility);
+      this.roomGraphics.fillStyle(fConfig.color, open ? 0.85 : 0.3);
       this.roomGraphics.fillRect(x + 1, y + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+      this.drawDoor(this.roomGraphics, x, y, facility.door, open ? 0xd8d8e8 : 0xe74c3c, 0.95);
 
       // Small centered icon per facility type (graphics, not text objects)
       this.roomGraphics.fillStyle(0xffffff, 0.7);

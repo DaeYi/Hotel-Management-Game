@@ -2,7 +2,7 @@ import type { ComponentChildren } from 'preact';
 import type { Room, Facility, HotelState } from '../simulation/types';
 import { ROOM_CONFIG, ECONOMY, AMENITIES, DECOR, RENOVATION, GRID, FACILITY_CONFIG, FACILITY_LEVELS } from '../config/balance';
 import {
-  formatRoomLabel, getDemolishRefund, getRenovationCost, isRoomReachable, getFacilityUpgradeCost,
+  formatRoomLabel, getDemolishRefund, isFacilityOpen, getRenovationCost, isRoomReachable, getFacilityUpgradeCost,
 } from '../simulation/HotelState';
 import { getExpectedPrice, getUpkeepMultiplier } from '../simulation/StarRatingManager';
 import { calculateRoomNoise } from '../simulation/NoiseManager';
@@ -130,9 +130,13 @@ function FacilityInspector({ facility, state }: { facility: Facility; state: Hot
     <TileCard tile={facility} title={`${config.label}  (Lv ${facility.level}/${FACILITY_LEVELS.length})`}>
       <p class="body small">{config.description}</p>
       <pre class="stats" style={{ marginTop: '6px' }}>
-        {`Operating cost: ${formatMoney(operating)}/day\nDecor: ${facility.decor.toFixed(0)}%${facility.decor < DECOR.freshThreshold ? ' (stale)' : ''}`}
+        {`Operating cost: ${formatMoney(operating)}/day\nDecor: ${facility.decor.toFixed(0)}%${facility.decor < DECOR.freshThreshold ? ' (stale)' : ''}`
+          + (isFacilityOpen(state, facility) ? '' : '\nDoor blocked: guests can\'t get in!')}
       </pre>
       <div class="actions">
+        <button onClick={() => c.turnFacilityDoor(facility.id)} aria-label="Turn door">
+          Door {DOOR_ARROWS[facility.door]} Turn
+        </button>
         {upgradeCost !== null && next && (
           state.peakStarRating < next.requiredStars
             ? <button disabled>Upgrade to Lv {facility.level + 1}: needs {next.requiredStars}{'★'}</button>

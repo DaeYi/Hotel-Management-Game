@@ -3,7 +3,7 @@ import type {
 } from '../simulation/types';
 import {
   createStarterHotel, addFixture, demolishFixture, demolishElevator, addRoom, setRoomPrice, repairRoom, demolishRoom,
-  addFacility, demolishFacility, renovateRoom, renovateFacility, upgradeFacility, addElevator, buildFloor, setRoomDoor,
+  addFacility, demolishFacility, renovateRoom, renovateFacility, upgradeFacility, addElevator, buildFloor, setRoomDoor, setFacilityDoor,
 } from '../simulation/HotelState';
 import { rotateDirection, doorTile, isReachableHallway } from '../simulation/Layout';
 import { startCampaign } from '../simulation/MarketingManager';
@@ -18,7 +18,7 @@ import { ToastQueue } from './ToastQueue';
 // action. The renderer (Phaser today, 3D later) and the HTML interface both
 // read from it and call into it; neither owns any game logic.
 
-/** Anything the build panel can place (a room, facility, desk, closet, break room, or elevator shaft), or the bulldoze tool. */
+/** Anything the build panel can place (a room, facility, street entrance, desk, closet, break room, or elevator shaft), or the bulldoze tool. */
 export type BuildType = TileType | 'elevator' | FixtureType | 'bulldoze';
 
 /** Tools that place on (or clear) one tile per click and can be dragged across tiles. */
@@ -61,9 +61,9 @@ export class GameController {
   tutorialOpen: boolean;
   confirmingNewGame = false;
   gameOver = false;
-  /** Which side new rooms get their door on (R rotates it). */
+  /** Which side new rooms and facilities get their door on (R rotates it). */
   doorDirection: Direction = 'down';
-  /** The placement preview: for rooms, also where the door goes and whether it opens onto a connected hallway. */
+  /** The placement preview: for rooms and facilities, also where the door goes and whether it opens onto a connected hallway. */
   hover: (Tile & { canPlace: boolean; door?: Direction; doorOpen?: boolean }) | null = null;
   feedback: PlacementFeedback | null = null;
   readonly toasts = new ToastQueue();
@@ -253,14 +253,14 @@ export class GameController {
   /** The state after building `type` at a tile on the current floor, or null if not allowed (also the hover check). */
   tryBuild(type: BuildType, gridX: number, gridY: number): HotelState | null {
     if (type === 'bulldoze') return this.bulldoze(gridX, gridY);
-    if (type === 'desk' || type === 'closet' || type === 'breakroom') return addFixture(this.state, type, gridX, gridY, this.currentFloor);
+    if (type === 'entrance' || type === 'desk' || type === 'closet' || type === 'breakroom') return addFixture(this.state, type, gridX, gridY, this.currentFloor);
     if (type === 'elevator') return addElevator(this.state, gridX, gridY);
     if (type in ROOM_CONFIG) return addRoom(this.state, type as RoomType, gridX, gridY, this.currentFloor, this.doorDirection);
-    if (type in FACILITY_CONFIG) return addFacility(this.state, type as FacilityType, gridX, gridY, this.currentFloor);
+    if (type in FACILITY_CONFIG) return addFacility(this.state, type as FacilityType, gridX, gridY, this.currentFloor, this.doorDirection);
     return null;
   }
 
-  /** Remove a desk, staff closet, break room, or elevator shaft (the tile goes back to hallway). Rooms and facilities are demolished from their inspectors. */
+  /** Remove a street entrance, desk, staff closet, break room, or elevator shaft (the tile goes back to hallway). Rooms and facilities are demolished from their inspectors. */
   private bulldoze(gridX: number, gridY: number): HotelState | null {
     const fixture = this.state.fixtures.find(f => f.floor === this.currentFloor && f.gridX === gridX && f.gridY === gridY);
     if (fixture) return demolishFixture(this.state, fixture.id);
@@ -326,14 +326,14 @@ export class GameController {
       return;
     }
     this.hover = { ...tile, canPlace: this.tryBuild(this.tool, tile.gridX, tile.gridY) !== null };
-    if (this.tool in ROOM_CONFIG) {
+    if (this.tool in ROOM_CONFIG || this.tool in FACILITY_CONFIG) {
       const door = this.doorDirection;
       this.hover.door = door;
       this.hover.doorOpen = isReachableHallway(this.state, doorTile({ ...tile, floor: this.currentFloor }, door));
     }
   }
 
-  /** Turn the door of the next room to be built a quarter turn clockwise. */
+  /** Turn the door of the next room or facility to be built a quarter turn clockwise. */
   rotateDoor() {
     this.doorDirection = rotateDirection(this.doorDirection);
     if (this.hover) this.refreshHover(this.hover);
@@ -344,6 +344,12 @@ export class GameController {
   turnRoomDoor(roomId: string) {
     const room = this.state.rooms.find(r => r.id === roomId);
     if (room) this.apply(setRoomDoor(this.state, roomId, rotateDirection(room.door)));
+  }
+
+  /** Turn an existing facility's door a quarter turn clockwise (free). */
+  turnFacilityDoor(facilityId: string) {
+    const facility = this.state.facilities.find(f => f.id === facilityId);
+    if (facility) this.apply(setFacilityDoor(this.state, facilityId, rotateDirection(facility.door)));
   }
 
   clearSelection() {

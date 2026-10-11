@@ -195,7 +195,7 @@ function managedStrategy(opts: ManagedOptions): Strategy {
         && afford(s, FACILITY_CONFIG[type].buildCost)
       );
       if (facility) {
-        s = addFacility(s, facility, tile.x, tile.y, tile.floor) ?? s;
+        s = addFacility(s, facility, tile.x, tile.y, tile.floor, templateDoor(tile.x, tile.y)) ?? s;
       } else {
         const type = nextRoomType(s);
         const busy = rooms < 10 || demandOccupancy(s, true) >= opts.expandAtOccupancy;

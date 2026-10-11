@@ -9,7 +9,7 @@ import { calculateGuestReviewBreakdown } from '../src/simulation/GuestManager.js
 import { processDailyCosts } from '../src/simulation/EconomyManager.js';
 import { getExpectedPrice } from '../src/simulation/StarRatingManager.js';
 import { calculateValuation } from '../src/simulation/ObjectivesManager.js';
-import { packIntoLayout, openFloorPlan } from '../src/simulation/SaveManager.js';
+import { packIntoLayout, openFloorPlan, addEntranceAndFacilityDoors } from '../src/simulation/SaveManager.js';
 import { simulate } from '../src/simulation/simulate.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
 import { FLOORS, ELEVATOR, GRID, NOISE, ROOM_CONFIG, STARTER_LAYOUT } from '../src/config/balance.js';
@@ -186,6 +186,17 @@ describe('Noise across floors', () => {
 });
 
 describe('Save migration into the open floor plan', () => {
+  it('v16 saves get a free street entrance by the template spot, and facilities get doors', () => {
+    const state: any = { ...createHotelState(), cash: 0, fixtures: [{ id: 'desk-0-3-0', type: 'desk', gridX: 3, gridY: 0, floor: 0 }] };
+    state.facilities = [{ id: 'facility-0-5-2', type: 'gym', gridX: 5, gridY: 2, floor: 0, condition: 100, decor: 100, level: 1 }];
+    addEntranceAndFacilityDoors(state);
+    expect(state.fixtures.map((f: any) => f.id)).toEqual(['desk-0-3-0', 'entrance-0-0-4']);
+    expect(state.facilities[0].door).toBe('up');
+    // Already has one: left alone
+    addEntranceAndFacilityDoors(state);
+    expect(state.fixtures).toHaveLength(2);
+  });
+
   it('drops the old hallway tiles and points each door at a side that was hallway', () => {
     const state: any = { ...createHotelState(), cash: 0 };
     state.rooms = [
@@ -197,7 +208,7 @@ describe('Save migration into the open floor plan', () => {
       { id: 'desk-0-3-0', type: 'desk', gridX: 3, gridY: 0, floor: 0 },
     ];
     openFloorPlan(state);
-    expect(state.fixtures.map((f: any) => f.id)).toEqual(['desk-0-3-0']);
+    expect(state.fixtures.map((f: any) => f.id)).toEqual(['desk-0-3-0', 'entrance-0-0-4']); // and a street entrance
     // Room a (row 2) had the hallway above it, room b (row 0) below it -- even
     // though the old empty tiles beside them are hallway now too
     expect(state.rooms.map((r: any) => r.door)).toEqual(['up', 'down']);
@@ -220,7 +231,8 @@ describe('Save migration into the open floor plan', () => {
     expect(state.fixtures.filter((f: any) => f.type === 'desk')).toHaveLength(1);
     expect(state.fixtures.filter((f: any) => f.type === 'hallway')).toHaveLength(0);
     for (let floor = 0; floor < 2; floor++) {
-      expect(STARTER_LAYOUT.hallwayTiles.every(([x, y]) => !isTileOccupied(state, x, y, floor))).toBe(true);
+      const built = [...state.rooms, ...state.facilities];
+      expect(STARTER_LAYOUT.hallwayTiles.every(([x, y]) => !built.some((t: any) => t.floor === floor && t.gridX === x && t.gridY === y))).toBe(true);
     }
 
     const items = [...state.rooms, ...state.facilities];

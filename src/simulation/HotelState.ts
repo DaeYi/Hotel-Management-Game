@@ -1,9 +1,16 @@
 import type { HotelState, Room, RoomType, Facility, FacilityType, TileType, Elevator, GameEvent, Fixture, FixtureType, Direction } from './types.js';
-import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS, FLOORS, ELEVATOR, DESK, CLOSET, BREAK_ROOM, STARTER_LAYOUT } from '../config/balance.js';
-import { isTileAccessible, findOpenDoor } from './Layout.js';
+import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS, FLOORS, ELEVATOR, DESK, CLOSET, BREAK_ROOM, ENTRANCE, STARTER_LAYOUT } from '../config/balance.js';
+import { isTileAccessible, findOpenDoor, isEdgeTile, isFacilityOpen, getOpenFacilities } from './Layout.js';
 import { createConstructionNoise } from './NoiseManager.js';
 import { getExpectedPrice, getPriceMultiplier } from './StarRatingManager.js';
 
+/** The free street entrance every hotel starts with. */
+function starterEntrance(): Fixture {
+  const [x, y] = STARTER_LAYOUT.entranceTile;
+  return { id: `entrance-0-${x}-${y}`, type: 'entrance', gridX: x, gridY: y, floor: 0 };
+}
+
+/** An empty lot: all open hallway, with the free street entrance. */
 export function createHotelState(): HotelState {
   return {
     cash: ECONOMY.startingCash,
@@ -48,15 +55,16 @@ export function createHotelState(): HotelState {
     daysAtFiveStars: 0,
     floorCount: 1,
     elevators: [],
-    fixtures: [],
+    fixtures: [starterEntrance()],
   };
 }
 
-/** A new game: the empty hotel (all open hallway) plus a free check-in desk. */
+/** A new game: the empty hotel (all open hallway, one street entrance) plus a free check-in desk. */
 export function createStarterHotel(): HotelState {
   const [deskX, deskY] = STARTER_LAYOUT.deskTiles[0];
   const desk: Fixture = { id: `desk-0-${deskX}-${deskY}`, type: 'desk', gridX: deskX, gridY: deskY, floor: 0 };
-  return { ...createHotelState(), fixtures: [desk] };
+  const state = createHotelState();
+  return { ...state, fixtures: [...state.fixtures, desk] };
 }
 
 /** Star rating a room or facility type unlocks at. */
@@ -159,6 +167,12 @@ export function setRoomPrice(
 /** Refund amount when demolishing a room or facility: a fixed fraction of build cost. */
 export function getDemolishRefund(buildCost: number): number {
   return Math.floor(buildCost * ECONOMY.demolishRefundRate);
+}
+
+/** Move a facility's door to another side (free). */
+export function setFacilityDoor(state: HotelState, facilityId: string, door: Direction): HotelState | null {
+  if (!state.facilities.some(f => f.id === facilityId)) return null;
+  return { ...state, facilities: state.facilities.map(f => f.id === facilityId ? { ...f, door } : f) };
 }
 
 /** Move a room's door to another side (free). */
@@ -291,16 +305,18 @@ export function isTileOccupied(state: HotelState, gridX: number, gridY: number, 
 }
 
 export const FIXTURE_COST: Record<FixtureType, number> = {
+  entrance: ENTRANCE.buildCost,
   desk: DESK.buildCost,
   closet: CLOSET.buildCost,
   breakroom: BREAK_ROOM.buildCost,
 };
 
-/** Build a check-in desk (ground floor only), staff closet, or staff break room on an open hallway tile. */
+/** Build a street entrance (ground floor edge only), check-in desk (ground floor only), staff closet, or staff break room on an open hallway tile. */
 export function addFixture(state: HotelState, type: FixtureType, gridX: number, gridY: number, floor: number): HotelState | null {
   if (!isValidTile(state, gridX, gridY, floor)) return null;
   if (isTileOccupied(state, gridX, gridY, floor)) return null;
   if (type === 'desk' && floor !== 0) return null;
+  if (type === 'entrance' && (floor !== 0 || !isEdgeTile(gridX, gridY))) return null;
   const cost = FIXTURE_COST[type];
   if (state.cash < cost) return null;
 
@@ -378,12 +394,14 @@ export function getElevatorWaitPenalty(state: HotelState, room: Room): number {
   return overload * ELEVATOR.maxWaitPenalty;
 }
 
+/** Build a facility on an open hallway tile, with its door on `door` (or, left out, the first open side -- see addRoom). */
 export function addFacility(
   state: HotelState,
   type: FacilityType,
   gridX: number,
   gridY: number,
-  floor = 0
+  floor = 0,
+  door?: Direction,
 ): HotelState | null {
   const config = FACILITY_CONFIG[type];
   if (!config) return null;
@@ -399,6 +417,7 @@ export function addFacility(
     gridX,
     gridY,
     floor,
+    door: door ?? findOpenDoor(state, { gridX, gridY, floor }) ?? 'down',
     condition: 100,
     decor: 100,
     level: 1,
@@ -438,9 +457,11 @@ export function formatRoomLabel(gridX: number, gridY: number, floor: number): st
   return `${floor + 1}${unit}`;
 }
 
-/** Get facilities adjacent to a room on the same floor (within 1 tile, all 8 directions) */
+export { isFacilityOpen, getOpenFacilities };
+
+/** Get open facilities adjacent to a room on the same floor (within 1 tile, all 8 directions) */
 export function getAdjacentFacilities(state: HotelState, gridX: number, gridY: number, floor: number): Facility[] {
-  return state.facilities.filter(f =>
+  return getOpenFacilities(state).filter(f =>
     f.floor === floor && Math.abs(f.gridX - gridX) <= 1 && Math.abs(f.gridY - gridY) <= 1
     && !(f.gridX === gridX && f.gridY === gridY)
   );

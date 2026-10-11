@@ -146,7 +146,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(16);
+    expect(loaded!.version).toBe(17);
     expect(loaded!.state.noiseSources).toEqual([]);
     expect(loaded!.state.facilities).toEqual([]); // added by the v8->v9 step
     expect(loaded!.state.activeIncidents).toEqual([]);
@@ -179,7 +179,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(16);
+    expect(loaded!.version).toBe(17);
     expect(loaded!.state.reviewScore).toBeCloseTo(7.2, 5); // 72 / 10
     expect((loaded!.state as any).reputationScore).toBeUndefined();
     expect(loaded!.state.bookings[0].reviewScore).toBe(8); // rating 4 * 2

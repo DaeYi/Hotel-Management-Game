@@ -18,7 +18,7 @@ import { loadGame } from '../src/simulation/SaveManager.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import { simulate } from '../src/simulation/simulate.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
-import { DECOR, RENOVATION, ROOM_CONFIG, FACILITY_CONFIG, MARKETING, OBJECTIVES, LEGACY, STAR_RATING, ECONOMY } from '../src/config/balance.js';
+import { DECOR, RENOVATION, ROOM_CONFIG, FACILITY_CONFIG, MARKETING, OBJECTIVES, LEGACY, STAR_RATING, ECONOMY, ENTRANCE } from '../src/config/balance.js';
 import type { Guest } from '../src/simulation/types.js';
 
 function unlockedState() {
@@ -208,7 +208,8 @@ describe('Valuation', () => {
     let state = createHotelState();
     state = addRoom(state, 'standard', 0, 0)!;
     // No revenue yet: property + cash - loan
-    expect(calculateValuation(state)).toBeCloseTo(ROOM_CONFIG.standard.buildCost + state.cash - state.loan.balance, 5);
+    // (the empty lot comes with its street entrance)
+    expect(calculateValuation(state)).toBeCloseTo(ROOM_CONFIG.standard.buildCost + ENTRANCE.buildCost + state.cash - state.loan.balance, 5);
 
     const earning = recordDailyStat({ ...state, totalRevenue: 1000 });
     expect(calculateValuation(earning)).toBeCloseTo(calculateValuation(state) + 1000 * 6, 5);
@@ -276,7 +277,7 @@ describe('SaveManager v11 -> current', () => {
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 11, prngState: 1, state: legacy, timestamp: 0 }));
 
     const loaded = loadGame()!;
-    expect(loaded.version).toBe(16);
+    expect(loaded.version).toBe(17);
     expect(loaded.state.rooms[0]).toMatchObject({ decor: 100, renovationHoursRemaining: 0 });
     expect(loaded.state.facilities[0]).toMatchObject({ decor: 100, level: 1 });
     expect(loaded.state.activeCampaign).toBeNull();

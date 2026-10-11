@@ -1,4 +1,4 @@
-import type { HotelState, Direction } from './types.js';
+import type { HotelState, Direction, Facility } from './types.js';
 import { GRID, DESK, STAFF, TRAVEL } from '../config/balance.js';
 
 /** A tile position anywhere in the building. */
@@ -98,7 +98,7 @@ function buildWalkableSet(state: HotelState): Set<string> {
   }
   for (const r of state.rooms) walkable.delete(key(r.gridX, r.gridY, r.floor));
   for (const f of state.facilities) walkable.delete(key(f.gridX, f.gridY, f.floor));
-  for (const f of state.fixtures) walkable.delete(key(f.gridX, f.gridY, f.floor));
+  for (const f of state.fixtures) if (f.type !== 'entrance') walkable.delete(key(f.gridX, f.gridY, f.floor));
   return walkable;
 }
 
@@ -111,19 +111,16 @@ export function isHallway(state: HotelState, gridX: number, gridY: number, floor
   return getWalkableSet(state).has(key(gridX, gridY, floor));
 }
 
-/** Street entrances: open hallway tiles on the ground floor's outer edge (not elevator shafts). */
+/** Whether a tile is on the outer edge of the floor plan (where a street entrance can go). */
+export function isEdgeTile(gridX: number, gridY: number): boolean {
+  return gridX === 0 || gridY === 0 || gridX === GRID.width - 1 || gridY === GRID.height - 1;
+}
+
+/** Street entrances: the only way in from the street. */
 export function getEntranceTiles(state: HotelState): Pos[] {
-  const walkable = getWalkableSet(state);
-  const out: Pos[] = [];
-  for (let y = 0; y < GRID.height; y++) {
-    for (let x = 0; x < GRID.width; x++) {
-      const edge = x === 0 || y === 0 || x === GRID.width - 1 || y === GRID.height - 1;
-      if (!edge || !walkable.has(key(x, y, 0))) continue;
-      if (state.elevators.some(e => e.gridX === x && e.gridY === y)) continue;
-      out.push({ gridX: x, gridY: y, floor: 0 });
-    }
-  }
-  return out;
+  return state.fixtures
+    .filter(f => f.type === 'entrance')
+    .map(f => ({ gridX: f.gridX, gridY: f.gridY, floor: f.floor }));
 }
 
 /** The entrance guests use: the one nearest a check-in desk (or the first, without a desk). */
@@ -199,6 +196,16 @@ export function findOpenDoor(state: HotelState, tile: Pos): Direction | null {
   return (['up', 'down', 'right', 'left'] as Direction[]).find(d => isReachableHallway(state, doorTile(tile, d))) ?? null;
 }
 
+/** Whether guests can get into a facility: its door opens onto hallway connected to the street. */
+export function isFacilityOpen(state: HotelState, facility: Facility): boolean {
+  return isTileAccessible(state, facility.gridX, facility.gridY, facility.floor, facility.door);
+}
+
+/** Facilities guests can get into. A facility with a blocked door earns no stars and no review bonus (but still costs upkeep). */
+export function getOpenFacilities(state: HotelState): Facility[] {
+  return state.facilities.filter(f => isFacilityOpen(state, f));
+}
+
 /** Check-in desks guests can actually walk up to. */
 export function getAccessibleDesks(state: HotelState) {
   return state.fixtures.filter(f => f.type === 'desk' && isTileAccessible(state, f.gridX, f.gridY, f.floor));
@@ -228,6 +235,7 @@ export function getStaffBases(state: HotelState): Pos[] {
   const reachable = getReachableSet(state);
   const bases: Pos[] = [];
   for (const f of state.fixtures) {
+    if (f.type === 'entrance') continue;
     for (const [dx, dy] of FRONT_FIRST) {
       const x = f.gridX + dx;
       const y = f.gridY + dy;

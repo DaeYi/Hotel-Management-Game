@@ -2,26 +2,28 @@ import { describe, it, expect } from 'vitest';
 import { PRNG } from '../src/simulation/prng.js';
 import {
   createHotelState, createStarterHotel, addRoom, addFixture, addElevator, buildFloor, demolishRoom, setRoomDoor,
-  isRoomReachable, getAvailableRooms,
+  isRoomReachable, getAvailableRooms, addFacility, setFacilityDoor, demolishFixture, getAdjacentFacilities,
 } from '../src/simulation/HotelState.js';
+import { calculateStarPoints } from '../src/simulation/StarRatingManager.js';
 import {
   getCheckInCapacity, getMannedDeskStaff, getAccessibleDesks, getEntranceTiles, findPath, isHallway, findOpenDoor,
 } from '../src/simulation/Layout.js';
 import { processArrivals } from '../src/simulation/GuestManager.js';
 import { calculateRoomNoise } from '../src/simulation/NoiseManager.js';
 import { tickSimulation } from '../src/simulation/tick.js';
-import { DESK, STAFF, GRID, ECONOMY } from '../src/config/balance.js';
+import { DESK, STAFF, GRID, ECONOMY, ENTRANCE, STARTER_LAYOUT } from '../src/config/balance.js';
 import type { HotelState } from '../src/simulation/types.js';
 
 const rich = (s: HotelState): HotelState => ({ ...s, cash: 1_000_000, peakStarRating: 5 });
 
 describe('Open floor plan and doors', () => {
-  it('every tile starts as hallway, on new floors too; the ground floor edge is the street', () => {
+  it('every tile starts as hallway, on new floors too, with one street entrance', () => {
     const state = buildFloor(rich(createHotelState()))!.state;
     for (const floor of [0, 1]) {
       for (let y = 0; y < GRID.height; y++) for (let x = 0; x < GRID.width; x++) expect(isHallway(state, x, y, floor)).toBe(true);
     }
-    expect(getEntranceTiles(state)).toHaveLength(2 * GRID.width + 2 * (GRID.height - 2));
+    const [x, y] = STARTER_LAYOUT.entranceTile;
+    expect(getEntranceTiles(state)).toEqual([{ gridX: x, gridY: y, floor: 0 }]);
   });
 
   it('a room takes its tile out of the hallway; demolishing it gives the tile back', () => {
@@ -90,6 +92,54 @@ describe('Open floor plan and doors', () => {
       rooms: state.rooms.map((r, i) => i === 1 ? { ...r, status: 'occupied' as const, guestId: 'g' } : r),
     };
     expect(calculateRoomNoise(state.rooms[0], state)).toBe(0);
+  });
+});
+
+describe('Street entrances', () => {
+  it('go on the ground floor\'s outer edge only, and cost money', () => {
+    const state = buildFloor(rich(createHotelState()))!.state;
+    expect(addFixture(state, 'entrance', 5, 2, 0)).toBeNull(); // interior
+    expect(addFixture(state, 'entrance', 5, 0, 1)).toBeNull(); // upstairs
+    const built = addFixture(state, 'entrance', 9, 3, 0)!;
+    expect(built.cash).toBe(state.cash - ENTRANCE.buildCost);
+    expect(getEntranceTiles(built)).toHaveLength(2);
+    expect(isHallway(built, 9, 3, 0)).toBe(true); // people walk through it
+    expect(addRoom(built, 'standard', 9, 3)).toBeNull(); // but nothing gets built on it
+  });
+
+  it('are the only way in: without one, nothing is reachable', () => {
+    let state = addRoom(rich(createHotelState()), 'standard', 5, 2, 0, 'up')!;
+    expect(isRoomReachable(state, state.rooms[0])).toBe(true);
+    state = demolishFixture(state, state.fixtures.find(f => f.type === 'entrance')!.id)!;
+    expect(getEntranceTiles(state)).toEqual([]);
+    expect(isRoomReachable(state, state.rooms[0])).toBe(false);
+  });
+
+  it('walling off the entrance cuts the hotel off; a second entrance opens another way in', () => {
+    let state = addRoom(rich(createHotelState()), 'standard', 5, 2, 0, 'up')!;
+    const [ex, ey] = STARTER_LAYOUT.entranceTile; // (0,4)
+    state = addRoom(state, 'standard', ex + 1, ey, 0, 'up')!;
+    state = addRoom(state, 'standard', ex, ey - 1, 0, 'up')!;
+    state = addRoom(state, 'standard', ex, ey + 1, 0, 'right')!;
+    expect(isRoomReachable(state, state.rooms[0])).toBe(false);
+    state = addFixture(state, 'entrance', 9, 0, 0)!;
+    expect(isRoomReachable(state, state.rooms[0])).toBe(true);
+  });
+});
+
+describe('Facility doors', () => {
+  it('a facility with a blocked door earns no stars and gives nearby rooms no bonus', () => {
+    let state = addFacility(rich(createHotelState()), 'gym', 5, 2, 0, 'up')!;
+    state = addRoom(state, 'standard', 6, 2, 0, 'up')!;
+    const open = calculateStarPoints(state);
+    expect(getAdjacentFacilities(state, 6, 2, 0)).toHaveLength(1);
+
+    state = addRoom(state, 'standard', 5, 1, 0, 'up')!; // right outside the gym's door
+    expect(getAdjacentFacilities(state, 6, 2, 0)).toHaveLength(0);
+    expect(calculateStarPoints(state)).toBeLessThan(open);
+
+    state = setFacilityDoor(state, state.facilities[0].id, 'down')!; // turn it to an open side
+    expect(getAdjacentFacilities(state, 6, 2, 0)).toHaveLength(1);
   });
 });
 

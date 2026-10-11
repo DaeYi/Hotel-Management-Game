@@ -571,9 +571,15 @@ export const GRID = {
 };
 
 // Every floor starts as open hallway; building on a tile takes it out of the
-// hallway. Hallways connect rooms to the street entrance (any open tile on the
-// ground floor's outer edge) and to elevators. A room's door must open onto a
-// connected hallway for it to be bookable -- keeping a path open is up to the player.
+// hallway. Hallways connect rooms and facilities to the street entrances and to
+// elevators. A room's or facility's door must open onto a connected hallway
+// for it to be usable -- keeping a path open is up to the player.
+
+// Guests (and staff) come in off the street only through a street entrance, a
+// walkable tile on the ground floor's outer edge. Every hotel starts with one.
+export const ENTRANCE = {
+  buildCost: 5000,
+};
 
 // Staff walk from their nearest base -- the lobby (in front of a check-in desk)
 // or a staff closet -- to every job, and that walk is part of the job's time.
@@ -618,6 +624,7 @@ export const STARTER_LAYOUT = {
     ...STARTER_HALLWAY_ROWS.flatMap(y => Array.from({ length: GRID.width }, (_, x): [number, number] => [x, y])),
     [GRID.width - 1, 2], [GRID.width - 1, 3],
   ] as Array<[number, number]>,
+  entranceTile: [0, 4] as [number, number], // ground floor, the free street entrance: the end of the second corridor
   deskTiles: [[3, 0], [4, 0]] as Array<[number, number]>, // ground floor; the first comes free
   closetTile: [3, 0] as [number, number], // upper floors (the desk spot downstairs)
   elevatorTiles: [[0, 0], [1, 0], [2, 0]] as Array<[number, number]>, // kept clear for shafts

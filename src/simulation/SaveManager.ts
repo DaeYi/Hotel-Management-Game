@@ -1,11 +1,12 @@
 import type { HotelState } from './types.js';
 import type { PRNG } from './prng.js';
 import { GUEST_NAMES, LOAN, GRID, STARTER_LAYOUT } from '../config/balance.js';
+import { isEdgeTile } from './Layout.js';
 import { DIRECTIONS, doorTile, isReachableHallway, findOpenDoor } from './Layout.js';
 import { calculateStarRating } from './StarRatingManager.js';
 
 const SAVE_KEY = 'hotel-game-save';
-const SAVE_VERSION = 16; // v16: every free tile is hallway; rooms have doors
+const SAVE_VERSION = 17; // v17: street entrances, and facilities have doors
 
 interface SaveData {
   version: number;
@@ -194,6 +195,12 @@ export function loadGame(): SaveData | null {
       console.log('Migrated save from v15 to v16');
     }
 
+    if (data.version === 16) {
+      addEntranceAndFacilityDoors(data.state);
+      data.version = 17;
+      console.log('Migrated save from v16 to v17');
+    }
+
     if (data.version !== SAVE_VERSION) {
       console.warn(`Save version mismatch: expected ${SAVE_VERSION}, got ${data.version}`);
       return null;
@@ -264,14 +271,51 @@ export function packIntoLayout(state: any): void {
 export function openFloorPlan(state: any): void {
   const wasHallway = new Set(state.fixtures.filter((f: any) => f.type === 'hallway').map((f: any) => `${f.floor},${f.gridX},${f.gridY}`));
   state.fixtures = state.fixtures.filter((f: any) => f.type !== 'hallway');
+  addStreetEntrance(state); // so reachability works below (entrances are v17, but doors need one)
   const open = state as HotelState;
-  state.rooms = state.rooms.map((room: any) => {
+  const withDoor = (item: any) => {
     const door = DIRECTIONS.find(d => {
-      const t = doorTile(room, d);
+      const t = doorTile(item, d);
       return wasHallway.has(`${t.floor},${t.gridX},${t.gridY}`) && isReachableHallway(open, t);
-    }) ?? findOpenDoor(open, room) ?? 'down';
-    return { ...room, door };
-  });
+    }) ?? findOpenDoor(open, item) ?? 'down';
+    return { ...item, door };
+  };
+  state.rooms = state.rooms.map(withDoor);
+  state.facilities = state.facilities.map(withDoor);
+}
+
+/**
+ * Give a hotel with no street entrance one, free: on the template's entrance
+ * tile if it's open, else the open ground-floor edge tile nearest the first
+ * desk (or the first open edge tile).
+ */
+function addStreetEntrance(state: any): void {
+  if (state.fixtures.some((f: any) => f.type === 'entrance')) return;
+  const taken = (x: number, y: number) =>
+    [...state.rooms, ...state.facilities, ...state.fixtures].some((t: any) => (t.floor ?? 0) === 0 && t.gridX === x && t.gridY === y)
+    || (state.elevators ?? []).some((e: any) => e.gridX === x && e.gridY === y);
+  const candidates: Array<[number, number]> = [];
+  for (let y = 0; y < GRID.height; y++) {
+    for (let x = 0; x < GRID.width; x++) if (isEdgeTile(x, y) && !taken(x, y)) candidates.push([x, y]);
+  }
+  if (candidates.length === 0) return;
+  const [tx, ty] = STARTER_LAYOUT.entranceTile;
+  const desk = state.fixtures.find((f: any) => f.type === 'desk');
+  const dist = ([x, y]: [number, number]) => desk ? Math.abs(x - desk.gridX) + Math.abs(y - desk.gridY) : 0;
+  const [x, y] = candidates.find(([x, y]) => x === tx && y === ty)
+    ?? candidates.reduce((best, c) => (dist(c) < dist(best) ? c : best));
+  state.fixtures = [...state.fixtures, { id: `entrance-0-${x}-${y}`, type: 'entrance', gridX: x, gridY: y, floor: 0 }];
+}
+
+/**
+ * v16 -> v17: guests now come in only through a street entrance, so every
+ * hotel gets one (free), and facilities get doors like rooms -- facing the
+ * first side that opens onto a connected hallway.
+ */
+export function addEntranceAndFacilityDoors(state: any): void {
+  addStreetEntrance(state);
+  const open = state as HotelState;
+  state.facilities = state.facilities.map((f: any) => ({ ...f, door: f.door ?? findOpenDoor(open, f) ?? 'down' }));
 }
 
 export function hasSavedGame(): boolean {

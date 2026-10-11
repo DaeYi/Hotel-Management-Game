@@ -99,14 +99,15 @@ export interface Facility {
   gridX: number;
   gridY: number;
   floor: number; // 0 = ground floor
+  door: Direction; // like a room's: must open onto a connected hallway for the facility to count
   condition: number; // 0-100
   decor: number; // 0-100, same meaning as Room.decor
   level: number; // 1-3, raised by upgradeFacility
 }
 
-export type FixtureType = 'desk' | 'closet' | 'breakroom';
+export type FixtureType = 'entrance' | 'desk' | 'closet' | 'breakroom';
 
-/** Single-tile staff and service fixtures: check-in desks (ground floor only), staff closets, and staff break rooms. */
+/** Single-tile fixtures: street entrances (ground floor edge, walkable), check-in desks (ground floor only), staff closets, and staff break rooms. */
 export interface Fixture {
   id: string;
   type: FixtureType;
@@ -158,7 +159,7 @@ export interface HotelState {
   activeCampaign: ActiveCampaign | null; // at most one marketing campaign runs at a time
   floorCount: number; // built floors, including the ground floor (>= 1)
   elevators: Elevator[];
-  fixtures: Fixture[]; // desks, closets, break rooms (every tile with nothing built on it is hallway)
+  fixtures: Fixture[]; // street entrances, desks, closets, break rooms (every tile with nothing built on it is hallway)
   daysAtFiveStars: number; // consecutive end-of-day snapshots at 5 stars (legacy goals)
 }
 

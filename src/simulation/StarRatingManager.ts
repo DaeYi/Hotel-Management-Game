@@ -1,6 +1,7 @@
 import type { HotelState, RoomType } from './types.js';
 import { STAR_RATING, AMENITIES, FACILITY_CONFIG, ROOM_CONFIG, FACILITY_LEVELS, FLOORS } from '../config/balance.js';
 import { getDecorStarPenalty } from './DecorManager.js';
+import { getOpenFacilities } from './Layout.js';
 
 /**
  * Accumulate the hotel's raw star points from everything it has: room type
@@ -50,9 +51,9 @@ export function calculateStarPoints(state: HotelState): number {
   }
 
   // Building facilities (gym, restaurant, pool, shop): each type counts once,
-  // at its best-upgraded instance
+  // at its best-upgraded instance that guests can get into
   const bestLevel = new Map<string, number>();
-  for (const facility of state.facilities) {
+  for (const facility of getOpenFacilities(state)) {
     bestLevel.set(facility.type, Math.max(bestLevel.get(facility.type) ?? 0, facility.level));
   }
   for (const [type, level] of bestLevel) {

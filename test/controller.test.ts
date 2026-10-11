@@ -111,6 +111,19 @@ describe('GameController: building', () => {
     expect(c.state.rooms[0].door).toBe('up');
   });
 
+  it('facilities get the chosen door too, and turn from their inspector', () => {
+    const c = freshController();
+    c.state = { ...c.state, cash: 1_000_000, peakStarRating: 5 };
+    c.selectTool('gym');
+    c.tileMove({ gridX: 5, gridY: 2 }, false);
+    expect(c.hover).toMatchObject({ door: 'down', doorOpen: true });
+    c.tileDown({ gridX: 5, gridY: 2 });
+    expect(c.state.facilities[0].door).toBe('down');
+    c.selectTool(null);
+    c.turnFacilityDoor(c.state.facilities[0].id);
+    expect(c.state.facilities[0].door).toBe('left');
+  });
+
   it('drag-bulldozes desks and the like back to hallway, and leaves rooms to their inspector', () => {
     const c = freshController();
     c.selectTool('standard');
