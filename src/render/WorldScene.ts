@@ -44,7 +44,7 @@ export class WorldScene extends Phaser.Scene {
     this.grid.renderRooms(state, floor);
     this.grid.renderFixtures(state, floor);
     this.grid.renderFacilities(state, floor);
-    this.actors.update(state, floor, delta, c.running ? c.speed : 0);
+    this.actors.update(state, floor, delta, c.running ? c.speed : 0, c.hourProgress);
     this.grid.renderGuests(state, floor, this.actors.walkingGuestIds());
     this.grid.renderNoise(state, floor);
     this.grid.renderConstruction(state, floor);

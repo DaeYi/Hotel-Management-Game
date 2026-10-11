@@ -14,7 +14,7 @@ const worldRef = createRef<HTMLDivElement>();
 
 render(<App controller={controller} worldRef={worldRef} />, document.getElementById('app')!);
 
-new Phaser.Game({
+const game = new Phaser.Game({
   type: Phaser.AUTO,
   width: WORLD_WIDTH,
   height: WORLD_HEIGHT,
@@ -34,5 +34,8 @@ window.addEventListener('keydown', event => {
     else controller.closePanel();
   }
 });
+
+// Development builds expose the controller for debugging in the browser console
+if (import.meta.env.DEV) Object.assign(window, { game: controller, phaser: game });
 
 controller.start();

@@ -4,31 +4,34 @@ import { getStaffTravelHours } from './Layout.js';
 import { getUpkeepMultiplier } from './StarRatingManager.js';
 
 /**
- * Process maintenance workers repairing rooms.
- * Workers automatically repair vacant rooms below the condition threshold.
+ * Which room each maintenance worker repairs during the coming hour (null =
+ * idle): vacant rooms below the condition threshold that staff can walk to,
+ * worst first, one per worker. processMaintenanceTick applies exactly this,
+ * and the walking-staff animation follows it.
+ */
+export function planMaintenance(state: HotelState): Array<string | null> {
+  const workers = state.staff.maintenanceWorkers;
+  if (workers <= 0) return [];
+  if (state.hour < STAFF.maintenance.workStartHour || state.hour >= STAFF.maintenance.workEndHour) {
+    return Array.from({ length: workers }, () => null);
+  }
+  const rooms = state.rooms
+    .filter(r => r.status === 'vacant' && r.condition < STAFF.maintenance.conditionThreshold)
+    .filter(r => Number.isFinite(getStaffTravelHours(state, r)))
+    .sort((a, b) => a.condition - b.condition); // worst condition first
+  return Array.from({ length: workers }, (_, i) => rooms[i]?.id ?? null);
+}
+
+/**
+ * Process maintenance workers repairing rooms: apply planMaintenance's plan.
  * Runs each game-hour during the work shift.
  */
 export function processMaintenanceTick(state: HotelState): { state: HotelState; events: GameEvent[] } {
   const events: GameEvent[] = [];
-  const workers = state.staff.maintenanceWorkers;
+  const plannedIds = planMaintenance(state).filter((id): id is string => id !== null);
+  if (plannedIds.length === 0) return { state, events };
 
-  if (workers <= 0) return { state, events };
-
-  // Only work during shift hours
-  if (state.hour < STAFF.maintenance.workStartHour || state.hour >= STAFF.maintenance.workEndHour) {
-    return { state, events };
-  }
-
-  // Find rooms that need repair: vacant, below threshold, and somewhere staff can walk to
-  const roomsNeedingRepair = state.rooms
-    .filter(r => r.status === 'vacant' && r.condition < STAFF.maintenance.conditionThreshold)
-    .filter(r => Number.isFinite(getStaffTravelHours(state, r)))
-    .sort((a, b) => a.condition - b.condition); // worst condition first
-
-  if (roomsNeedingRepair.length === 0) return { state, events };
-
-  // Each worker can service one room per hour
-  const roomsToRepair = roomsNeedingRepair.slice(0, workers);
+  const roomsToRepair = state.rooms.filter(r => plannedIds.includes(r.id));
   const repairAmount = STAFF.maintenance.repairPerHour;
 
   const repairedIds = new Set(roomsToRepair.map(r => r.id));

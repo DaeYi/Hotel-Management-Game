@@ -23,6 +23,18 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   const events: GameEvent[] = [];
   let current = { ...state };
 
+  // 0. Staff work the hour as planned from the state at its start
+  // (planHousekeeping / planMaintenance) -- the same plan the walking-staff
+  // animation shows during the hour. Rooms vacated later in this tick join
+  // the plan for the next hour.
+  const cleaningResult = processCleaningTick(current);
+  current = cleaningResult.state;
+  events.push(...cleaningResult.events);
+
+  const maintenanceResult = processMaintenanceTick(current);
+  current = maintenanceResult.state;
+  events.push(...maintenanceResult.events);
+
   // 1. Process guest arrivals
   const arrivals = processArrivals(current, current.hour, prng);
   events.push(...arrivals.events);
@@ -171,11 +183,6 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   // Tick down any active reputation penalty from a prior Review Semi-Viral incident
   current = tickReputationPenalties(current);
 
-  // 3. Process cleaning tick
-  const cleaningResult = processCleaningTick(current);
-  current = cleaningResult.state;
-  events.push(...cleaningResult.events);
-
   // 3.5. Daily housekeeping for occupied rooms
   const dailyResult = processDailyHousekeeping(current);
   current = dailyResult.state;
@@ -183,11 +190,6 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
 
   // 4. Hourly room condition degradation
   current = degradeRoomConditions(current);
-
-  // 4.5. Maintenance workers repair rooms
-  const maintenanceResult = processMaintenanceTick(current);
-  current = maintenanceResult.state;
-  events.push(...maintenanceResult.events);
 
   // 4.6. Tick down construction noise
   current = { ...current, noiseSources: tickNoiseSources(current.noiseSources) };

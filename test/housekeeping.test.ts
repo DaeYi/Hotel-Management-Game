@@ -3,7 +3,11 @@ import { createStarterHotel, addRoom } from '../src/simulation/HotelState.js';
 import {
   processCleaningTick, processDailyHousekeeping, startTurnoverCleaning, estimateHousekeepingHours,
   housekeepersNeeded, housekeepingHoursAvailable, getHousekeepingStatus, PLANNING_OCCUPANCY,
+  planHousekeeping, currentJob,
 } from '../src/simulation/HousekeepingManager.js';
+import { planMaintenance, processMaintenanceTick } from '../src/simulation/MaintenanceManager.js';
+import { tickSimulation } from '../src/simulation/tick.js';
+import { PRNG } from '../src/simulation/prng.js';
 import { processDailyCosts } from '../src/simulation/EconomyManager.js';
 import { simulate } from '../src/simulation/simulate.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
@@ -103,4 +107,70 @@ describe('Balance: there is a right amount of housekeeping', () => {
     expect(right).toBeGreaterThan(median('understaffed'));
     expect(right).toBeGreaterThan(median('overstaffed'));
   }, 240000);
+});
+
+describe('The work plan the animation shows is the work the simulation does', () => {
+  /** Two checkouts being turned over plus queued daily cleans, two housekeepers. */
+  function busyHotel(): HotelState {
+    let s = processDailyHousekeeping(hotel(6, 2)).state;
+    s = { ...s, hour: 12, rooms: s.rooms.map((r, i) => i < 2 ? startTurnoverCleaning(r, 'standard', 0.3 + i) : r) };
+    return s;
+  }
+
+  it('gives each housekeeper at most an hour, and each room at most an hour', () => {
+    const plan = planHousekeeping(busyHotel());
+    expect(plan).toHaveLength(2);
+    for (const jobs of plan) expect(jobs.reduce((sum, j) => sum + j.hours, 0)).toBeLessThanOrEqual(1 + 1e-9);
+    const perRoom = new Map<string, number>();
+    for (const job of plan.flat()) perRoom.set(job.roomId, (perRoom.get(job.roomId) ?? 0) + job.hours);
+    for (const hours of perRoom.values()) expect(hours).toBeLessThanOrEqual(1 + 1e-9);
+  });
+
+  it('the cleaning tick moves each room on by exactly its planned hours', () => {
+    const before = busyHotel();
+    const planned = new Map<string, number>();
+    for (const job of planHousekeeping(before).flat()) planned.set(job.roomId, (planned.get(job.roomId) ?? 0) + job.hours);
+    const after = processCleaningTick(before).state;
+
+    for (const room of before.rooms) {
+      const next = after.rooms.find(r => r.id === room.id)!;
+      const worked = room.status === 'cleaning'
+        ? room.cleaningHoursRemaining - next.cleaningHoursRemaining
+        : room.dailyCleanHoursRemaining - next.dailyCleanHoursRemaining;
+      expect(worked).toBeCloseTo(planned.get(room.id) ?? 0, 6);
+    }
+  });
+
+  it('within the hour, a housekeeper moves from job to job as each share of the hour is used up', () => {
+    const jobs = [
+      { roomId: 'a', hours: 0.25, kind: 'turnover' as const },
+      { roomId: 'b', hours: 0.5, kind: 'daily' as const },
+    ];
+    expect(currentJob(jobs, 0)?.roomId).toBe('a');
+    expect(currentJob(jobs, 0.3)?.roomId).toBe('b');
+    expect(currentJob(jobs, 0.8)).toBeNull(); // done for the hour
+    expect(currentJob([], 0.5)).toBeNull();
+  });
+
+  it('maintenance repairs exactly the planned rooms', () => {
+    let s = hotel(4, 1);
+    s = { ...s, hour: 12, staff: { ...s.staff, maintenanceWorkers: 2 },
+      rooms: s.rooms.map((r, i) => ({ ...r, status: 'vacant' as const, guestId: undefined, condition: 20 + i * 10 })) };
+    const plan = planMaintenance(s);
+    expect(plan).toEqual([s.rooms[0].id, s.rooms[1].id]); // worst two
+    const after = processMaintenanceTick(s).state;
+    const repaired = after.rooms.filter((r, i) => r.condition > s.rooms[i].condition).map(r => r.id);
+    expect(repaired).toEqual(plan);
+  });
+
+  it('a full simulation tick applies the plan made from the state at the start of the hour', () => {
+    const before = busyHotel();
+    const planned = new Set(planHousekeeping(before).flat().filter(j => j.kind === 'turnover').map(j => j.roomId));
+    const after = tickSimulation(before, new PRNG(1)).state;
+    for (const room of before.rooms.filter(r => r.status === 'cleaning')) {
+      const next = after.rooms.find(r => r.id === room.id)!;
+      const progressed = next.status !== 'cleaning' || next.cleaningHoursRemaining < room.cleaningHoursRemaining;
+      expect(progressed).toBe(planned.has(room.id));
+    }
+  });
 });

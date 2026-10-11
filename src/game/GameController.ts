@@ -39,6 +39,7 @@ export interface PlacementFeedback extends Tile {
 }
 
 export const TICK_INTERVAL_MS = 2000; // one game hour at 1x
+const MAX_FRAME_MS = 250; // longest real-time step one frame may advance
 const TUTORIAL_SEEN_KEY = 'hotel-game-tutorial-seen';
 
 export class GameController {
@@ -104,6 +105,11 @@ export class GameController {
     this.dirty = true;
   }
 
+  /** How far through the current game hour the clock is (0-1), for animating within the hour. */
+  get hourProgress(): number {
+    return Math.min(1, this.tickAccumulator / TICK_INTERVAL_MS);
+  }
+
   /** Whether the clock is actually running (not paused, and no dialog in the way). */
   get running(): boolean {
     return !this.paused && !this.tutorialOpen && !this.confirmingNewGame && !this.gameOver;
@@ -129,11 +135,15 @@ export class GameController {
     }
   }
 
-  /** Drive update() from requestAnimationFrame. */
+  /**
+   * Drive update() from requestAnimationFrame. Each frame's time step is
+   * capped, so returning to a backgrounded tab (where frames pause) resumes
+   * the game rather than fast-forwarding through the time away.
+   */
   start() {
     let last = performance.now();
     const frame = (now: number) => {
-      this.update(now - last, now);
+      this.update(Math.min(now - last, MAX_FRAME_MS), now);
       last = now;
       requestAnimationFrame(frame);
     };

@@ -1,7 +1,10 @@
 import Phaser from 'phaser';
 import type { HotelState, GameEvent, Room, GuestTrait } from '../simulation/types';
-import { STAFF } from '../config/balance';
 import { findPath, getEntranceTiles, getAccessibleDesks, getMannedDeskStaff, getStaffBases } from '../simulation/Layout';
+import { planHousekeeping, currentJob } from '../simulation/HousekeepingManager';
+import { planMaintenance } from '../simulation/MaintenanceManager';
+import { TRAVEL } from '../config/balance';
+import { TICK_INTERVAL_MS } from '../game/GameController';
 import type { Pos } from '../simulation/Layout';
 import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE, getGuestDotColor } from './GridRenderer';
 
@@ -10,9 +13,15 @@ import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE, getGuestDotColor } from './Gri
 // walking in to check in and up to their rooms, housekeepers and maintenance
 // heading to the rooms they're working on, front desk staff at the desks.
 
-const WALK_TILES_PER_SEC = 3; // at 1x speed
+// Guests stroll at a readable pace (their walk is decoration only).
+const GUEST_TILES_PER_SEC = 3; // at 1x speed
+const GUEST_ELEVATOR_RIDE_MS = 350; // per floor, at 1x speed
 const CHECK_IN_MS = 700; // pause at the desk, at 1x speed
-const ELEVATOR_RIDE_MS = 350; // per floor, at 1x speed
+
+// Staff walk at exactly the pace the simulation charges for (TRAVEL), so a
+// housekeeper reaches a room when the simulated walk there ends.
+const STAFF_TILES_PER_SEC = 1 / TRAVEL.hoursPerTile / (TICK_INTERVAL_MS / 1000); // at 1x speed
+const STAFF_ELEVATOR_RIDE_MS = TRAVEL.hoursPerFloor * TICK_INTERVAL_MS; // per floor, at 1x speed
 const MAX_GUEST_ACTORS = 40; // beyond this, arrivals skip the walk to keep the grid readable
 
 export const ACTOR_COLORS = {
@@ -38,6 +47,7 @@ interface Actor {
   roomId?: string;
   // Staff: the room they're heading to or working in (null = idle)
   targetId?: string | null;
+  pathed?: boolean; // a path to the current target has been computed
 }
 
 const tileOf = (a: Actor): Pos => ({ gridX: Math.round(a.x), gridY: Math.round(a.y), floor: a.floor });
@@ -112,10 +122,15 @@ export class ActorLayer {
     });
   }
 
-  /** Advance everyone and draw the ones on the floor being viewed. `speed` is the game speed (0 when paused). */
-  update(state: HotelState, currentFloor: number, deltaMs: number, speed: number) {
+  /**
+   * Advance everyone and draw the ones on the floor being viewed. `speed` is
+   * the game speed (0 when paused); `hourProgress` (0-1) is how far through
+   * the current game hour the clock is, which sets where each housekeeper is
+   * in their hour's job list.
+   */
+  update(state: HotelState, currentFloor: number, deltaMs: number, speed: number, hourProgress: number) {
     const dt = deltaMs * speed;
-    this.syncStaff(state);
+    this.syncStaff(state, hourProgress);
 
     for (const guest of this.guests) this.step(guest, dt, state);
     this.guests = this.guests.filter(g => !(g.path.length === 0 && g.waitMs <= 0 && g.then === 'despawn'));
@@ -131,7 +146,8 @@ export class ActorLayer {
       return;
     }
 
-    let budget = (dt / 1000) * WALK_TILES_PER_SEC;
+    const staff = actor.kind !== 'guest';
+    let budget = (dt / 1000) * (staff ? STAFF_TILES_PER_SEC : GUEST_TILES_PER_SEC);
     while (budget > 0 && actor.path.length > 0) {
       const next = actor.path[0];
       if (next.floor !== actor.floor) {
@@ -140,7 +156,7 @@ export class ActorLayer {
         actor.x = next.gridX;
         actor.y = next.gridY;
         actor.path.shift();
-        actor.waitMs = ELEVATOR_RIDE_MS;
+        actor.waitMs = staff ? STAFF_ELEVATOR_RIDE_MS : GUEST_ELEVATOR_RIDE_MS;
         return;
       }
       const dx = next.gridX - actor.x;
@@ -169,15 +185,19 @@ export class ActorLayer {
   }
 
   /**
-   * Keep one actor per housekeeper and maintenance worker, and point each at
-   * a room that needs them right now (or back to the lobby when idle).
+   * Keep one actor per housekeeper and maintenance worker, each following the
+   * same work plan the simulation applies (planHousekeeping / planMaintenance):
+   * housekeeper i works through their own job list over the hour, moving on
+   * when a job's share of the hour is up; idle staff wait at a staff base.
    */
-  private syncStaff(state: HotelState) {
+  private syncStaff(state: HotelState, hourProgress: number) {
     const counts: Record<StaffRole, number> = {
       housekeeper: state.staff.housekeepers,
       maintenance: state.staff.maintenanceWorkers,
     };
     const bases = getStaffBases(state);
+    const housekeeping = planHousekeeping(state);
+    const maintenance = planMaintenance(state);
 
     for (const role of ['housekeeper', 'maintenance'] as StaffRole[]) {
       const members = this.staff.filter(s => s.kind === role);
@@ -193,42 +213,28 @@ export class ActorLayer {
       }
       for (const extra of members.splice(counts[role])) this.staff = this.staff.filter(s => s !== extra);
 
-      const targets = role === 'housekeeper' ? this.housekeepingTargets(state) : this.maintenanceTargets(state);
-      const claimed = new Set(members.map(m => m.targetId).filter(id => id && targets.some(t => t.id === id)));
-      for (const member of members) {
-        const stillValid = member.targetId && targets.some(t => t.id === member.targetId);
-        if (stillValid) continue;
-        const next = targets.find(t => !claimed.has(t.id));
-        if (next) claimed.add(next.id);
+      members.forEach((member, i) => {
+        const roomId = role === 'housekeeper'
+          ? currentJob(housekeeping[i] ?? [], hourProgress)?.roomId ?? null
+          : maintenance[i] ?? null;
+        const room = roomId ? state.rooms.find(r => r.id === roomId) ?? null : null;
         // Idle staff head for a base on their own floor if there is one
         const home = bases.find(b => b.floor === member.floor) ?? bases[0] ?? null;
-        this.sendTo(member, state, next ?? null, home);
-      }
+        this.sendTo(member, state, room, home);
+      });
     }
   }
 
+  /** Point an actor at a room (or home when null); only re-paths when the target changes. */
   private sendTo(actor: Actor, state: HotelState, room: Room | null, home: Pos | null) {
+    const targetId = room?.id ?? null;
+    if (actor.targetId === targetId && actor.pathed) return;
+    actor.targetId = targetId;
+    actor.pathed = true;
     const goal: Pos | null = room ?? home;
-    if ((actor.targetId ?? null) === (room?.id ?? null) && actor.path.length > 0) return;
-    actor.targetId = room?.id ?? null;
     if (!goal) return;
     const path = findPath(state, tileOf(actor), goal);
     actor.path = path ? path.slice(1) : [];
-  }
-
-  /** Rooms being turned over, plus occupied rooms getting their daily clean this morning. */
-  private housekeepingTargets(state: HotelState): Room[] {
-    const turnover = state.rooms.filter(r => r.status === 'cleaning');
-    const daily = state.rooms.filter(r => r.status === 'occupied' && r.dailyCleanHoursRemaining > 0);
-    return [...turnover, ...daily];
-  }
-
-  /** Vacant rooms the maintenance crew is fixing during its shift. */
-  private maintenanceTargets(state: HotelState): Room[] {
-    if (state.hour < STAFF.maintenance.workStartHour || state.hour >= STAFF.maintenance.workEndHour) return [];
-    return state.rooms
-      .filter(r => r.status === 'vacant' && r.condition < STAFF.maintenance.conditionThreshold)
-      .sort((a, b) => a.condition - b.condition);
   }
 
   private draw(state: HotelState, currentFloor: number) {
