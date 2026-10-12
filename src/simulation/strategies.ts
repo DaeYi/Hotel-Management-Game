@@ -69,7 +69,14 @@ const isReservedTile = (x: number, y: number, floor: number) =>
   || (floor === 0 && STARTER_LAYOUT.deskTiles.some(([dx, dy]) => dx === x && dy === y))
   || (floor > 0 && STARTER_LAYOUT.closetTile[0] === x && STARTER_LAYOUT.closetTile[1] === y);
 
-const CLOSET_MIN_ROOMS = 6; // an upper floor gets its own staff closet once it has this many rooms
+const CLOSET_MIN_ROOMS = 6;
+
+/**
+ * How full the bots let the lifts get before they stop adding rooms upstairs
+ * (every shaft built): past full, each room adds to everyone's wait, but the
+ * wait only costs reviews gradually, so a little over full still pays.
+ */
+export const BOT_MAX_LIFT_LOAD = { value: 1.5 }; // an upper floor gets its own staff closet once it has this many rooms
 
 /** First free room tile, lowest floor first, row-major -- keeps the hotel compact, so facilities end up next to rooms. */
 function findFreeTile(state: HotelState): { x: number; y: number; floor: number } | null {
@@ -215,12 +222,14 @@ function managedStrategy(opts: ManagedOptions): Strategy {
       } else {
         const type = nextRoomType(s);
         const busy = rooms < 10 || demandOccupancy(s, true) >= opts.expandAtOccupancy;
-        if (busy && afford(s, getRoomBuildCost(type))) {
+        // Every lift shaft built and the lifts already full: another room upstairs only makes everyone wait longer
+        const liftsFull = tile.floor > 0 && s.elevators.length >= ELEVATOR_TILES.length && getElevatorLoad(s) >= BOT_MAX_LIFT_LOAD.value;
+        if (busy && !liftsFull && afford(s, getRoomBuildCost(type))) {
           s = addRoom(s, type, tile.x, tile.y, tile.floor, templateDoor(tile.x, tile.y)) ?? s;
         }
       }
-    } else if (demandOccupancy(s, true) >= opts.expandAtOccupancy) {
-      // Out of room and still busy: build upward (shaft first, so the new floor is reachable)
+    } else if (demandOccupancy(s, true) >= opts.expandAtOccupancy && !(s.elevators.length >= ELEVATOR_TILES.length && getElevatorLoad(s) >= BOT_MAX_LIFT_LOAD.value)) {
+      // Out of room and still busy: build upward (shaft first, so the new floor is reachable) -- unless the lifts can't take more
       if (s.elevators.length === 0) s = addReservedElevator(s, afford);
       const floorCost = getNextFloorCost(s);
       if (s.elevators.length > 0 && floorCost !== null && afford(s, floorCost, 2)) {
@@ -243,7 +252,9 @@ function managedStrategy(opts: ManagedOptions): Strategy {
     const best: RoomType = isUnlocked(s, 'suite') ? 'suite' : isUnlocked(s, 'deluxe') ? 'deluxe' : 'standard';
     const replaceable = s.rooms.find(r => r.status === 'vacant' && r.type !== best && (r.type === 'standard' || best === 'suite')
       && profileRoom(r).layoutClass === 'double');
-    if (replaceable && s.starRating < 5 && afford(s, ROOM_CONFIG[best].buildCost, 4)) {
+    // (And once the lifts can't take more rooms upstairs, upgrading is where the money goes.)
+    const builtOut = s.elevators.length >= ELEVATOR_TILES.length && getElevatorLoad(s) >= BOT_MAX_LIFT_LOAD.value;
+    if (replaceable && (s.starRating < 5 || builtOut) && afford(s, ROOM_CONFIG[best].buildCost, 4)) {
       const cleared = demolishRoom(s, replaceable.id);
       if (cleared) s = addRoom(cleared, best, replaceable.gridX, replaceable.gridY, replaceable.floor, replaceable.door) ?? s;
     }

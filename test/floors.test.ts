@@ -170,7 +170,7 @@ describe('Noise across floors', () => {
     state = addRoom(state, 'standard', 3, 2, 0)!;
     state = addRoom(state, 'standard', 4, 2, 0)!; // same-floor neighbor
     state = addRoom(state, 'standard', 3, 2, 1)!; // directly above
-    state = { ...state, noiseSources: [] };
+    state = { ...state, noiseSources: [], hour: 12 }; // midday: the neighbours are up (asleep, they'd make none)
     const [below, beside, above] = state.rooms;
 
     const fromBeside = calculateRoomNoise(below, occupy(state, beside.id, 'g1'));

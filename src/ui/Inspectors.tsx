@@ -5,7 +5,7 @@ import {
   formatRoomLabel, getDemolishRefund, isFacilityOpen, getRenovationCost, isRoomReachable, getFacilityUpgradeCost, getRoomInvestedCost, getRoomPriceRange,
 } from '../simulation/HotelState';
 import { getRoomExpectedPrice, getUpkeepMultiplier } from '../simulation/StarRatingManager';
-import { calculateRoomNoise } from '../simulation/NoiseManager';
+import { calculateRoomNoise, nightRoomNoise } from '../simulation/NoiseManager';
 import { DOOR_ARROWS } from './BuildPanel';
 import { RoomPlan } from './RoomPlan';
 import { profileRoom, profileFurnishing, furnishingOf, whoFits } from '../simulation/RoomProfile';
@@ -13,10 +13,12 @@ import { partyOf } from '../simulation/Party';
 import { describeGuest, awayActivity, popularWith } from '../simulation/Purpose';
 import { roomFit, listFeatures } from '../simulation/Preferences';
 import { RoomSuits } from './RoomSuits';
-import type { GuestTrait } from '../simulation/types';
 
-/** How a guest's trait reads (the loud trait is "rowdy": not to be confused with a party of people). */
-const TRAIT_LABELS: Record<GuestTrait, string> = { normal: '', light_sleeper: 'light sleeper', big_spender: 'big spender', party_guest: 'rowdy' };
+import { guestTags, describeRhythm, describeTemperament, isSleepHour, sleepHours } from '../simulation/Profile';
+import { PartyLabel } from '../simulation/Party';
+import { guestsInFacility } from '../simulation/FacilityManager';
+import { GUEST_PROFILE } from '../config/balance';
+import type { Tile } from '../game/GameController';
 import { getStaffTravelHours } from '../simulation/Layout';
 import { positionAt, legsEnd } from '../simulation/Movement';
 import { facilityCapacity, facilityLoad, peopleInFacility, openingHours } from '../simulation/FacilityManager';
@@ -33,6 +35,7 @@ export function Inspector() {
     const room = state.rooms.find(r => r.id === selection.id);
     return room ? <RoomInspector room={room} state={state} /> : null;
   }
+  if (selection.kind === 'guest') return <GuestInspector guestId={selection.id} anchor={selection.anchor} state={state} />;
   const facility = state.facilities.find(f => f.id === selection.id);
   return facility ? <FacilityInspector facility={facility} state={state} /> : null;
 }
@@ -78,7 +81,8 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
   let status: string;
   if (room.status === 'occupied') {
     const where = guest ? guestWhereabouts(guest, state, c.gameTime) : null;
-    status = `Occupied${guest ? `: ${describeGuest(partyOf(guest), guest.purpose)}${TRAIT_LABELS[guest.trait] ? ` (${TRAIT_LABELS[guest.trait]})` : ''}` : ''}${where ? `, ${where}` : ''}`;
+    const tags = guest ? guestTags(guest) : [];
+    status = `Occupied${guest ? `: ${describeGuest(partyOf(guest), guest.purpose)}${tags.length ? ` (${tags.join(', ')})` : ''}` : ''}${where ? `, ${where}` : ''}`;
   }
   else if (room.status === 'cleaning') status = turnoverStatus(cleaning);
   else if (room.status === 'renovating') status = `Renovating (${room.renovationHoursRemaining}h left)`;
@@ -93,7 +97,7 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
     `Cleanliness: ${formatBar(room.cleanliness)} ${room.cleanliness.toFixed(0)}%${cleaning?.job === 'daily' ? `, ${dailyStatus(cleaning)}` : ''}`,
     `Decor:       ${formatBar(room.decor)} ${room.decor.toFixed(0)}%${room.decor < DECOR.freshThreshold ? ' stale' : ''}`,
     `Amenities:   ${AMENITIES.tiers[state.amenities[room.type]]?.label ?? 'Basic'}`,
-    `Noise:       ${noiseLabel(calculateRoomNoise(room, state))}`,
+    GUEST_PROFILE.enabled ? `Night noise: ${noiseLabel(nightRoomNoise(room, state))}` : `Noise:       ${noiseLabel(calculateRoomNoise(room, state))}`,
     `Staff walk:  ${formatWalk(getStaffTravelHours(state, room))}`,
   ];
 
@@ -120,6 +124,9 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
           {fit.likes.length > 0 && <span class="good-text">Likes {listFeatures(fit.likes, profile.type)}. </span>}
           {fit.dislikes.length > 0 && <span class="warn-text">Doesn't like {listFeatures(fit.dislikes)}.</span>}
         </div>
+      )}
+      {guest && room.status === 'occupied' && (
+        <button class="link guest-link" onClick={() => c.selectGuest(guest.id, room)}>About {PartyLabel(guest)}{'\u2026'}</button>
       )}
       <label class="price-row">
         <span>Price/night (fair {formatMoney(fair)}):</span>
@@ -200,6 +207,68 @@ function guestWhereabouts(guest: Guest, state: HotelState, t: number): string | 
   return t < visit.start ? `off to the ${label}` : `back from the ${label}`;
 }
 
+/**
+ * A guest's card (picked on the floor plan, or from their room's card): who
+ * they are and why they're here, their rhythm, their pace, how they sleep and
+ * how loud they are, what they think of their room, their mood, and where they
+ * are now. It stays where it was opened while they move about, and closes once
+ * they've left the building.
+ */
+function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: Tile; state: HotelState }) {
+  const c = useController();
+  useLiveClock();
+  const guest = state.guests.find(g => g.id === guestId);
+  if (!guest) {
+    // Checked out: on their way out of the building
+    const walker = (state.walkers ?? []).find(w => w.guestId === guestId);
+    if (!walker) return null;
+    const booking = state.bookings.find(b => b.guestId === guestId);
+    return (
+      <TileCard tile={anchor} title={PartyLabel({ id: guestId, name: walker.name ?? 'Guest', party: walker.party })}>
+        <div class="small">{walker.reason === 'walked_out' ? 'Checked out early' : 'Checked out'}, on their way out.</div>
+        {booking && <div class="small">Their review: {booking.reviewScore.toFixed(1)}/10</div>}
+      </TileCard>
+    );
+  }
+  const party = partyOf(guest);
+  const room = state.rooms.find(r => r.guestId === guest.id);
+  const where = guestWhereabouts(guest, state, c.gameTime);
+  const roomLabel = room ? formatRoomLabel(room.gridX, room.gridY, room.floor) : null;
+  const asleep = GUEST_PROFILE.enabled && !where && isSleepHour(guest, state.hour);
+  // Which night of the stay: before they wake, they're still in the night that began yesterday
+  const night = Math.min(guest.stayLength, Math.max(1, state.day - guest.checkInDay + (state.hour < sleepHours(guest)[1] ? 0 : 1)));
+  const fit = room ? roomFit(profileRoom(room), guest) : null;
+  const elsewhere = room && room.floor !== c.currentFloor;
+  const lines = [
+    `${capitalize(describeGuest(party, guest.purpose))}${guest.isReturning ? ', back again' : ''}`,
+    `Night ${night} of ${guest.stayLength}`,
+    ...(guest.profile ? [describeRhythm(guest, state)] : []),
+    ...describeTemperament(guest),
+    // Without a profile (an older save), what the trait says
+    ...(guest.profile ? (guest.trait === 'big_spender' ? ['Big spender'] : []) : guestTags(guest).map(capitalize)),
+  ];
+  return (
+    <TileCard tile={anchor} title={PartyLabel(guest)}>
+      {lines.map(l => <div key={l} class="small">{l}</div>)}
+      {fit && (fit.likes.length > 0 || fit.dislikes.length > 0) && (
+        <div class="small guest-fit">
+          {fit.likes.length > 0 && <span class="good-text">Likes {listFeatures(fit.likes, room ? profileRoom(room).type : undefined)}. </span>}
+          {fit.dislikes.length > 0 && <span class="warn-text">Doesn't like {listFeatures(fit.dislikes)}.</span>}
+        </div>
+      )}
+      <pre class="stats">{`Mood:  ${formatBar(guest.satisfaction)} ${guest.satisfaction.toFixed(0)}%`}</pre>
+      <div class="small">
+        {where ? capitalize(where) : asleep ? 'Asleep in' : 'In'}{!where && roomLabel ? ` room ${roomLabel}` : ''}{' '}
+        {room && (
+          <button class="link" onClick={() => { c.setFloor(room.floor); c.tileDown({ gridX: room.gridX, gridY: room.gridY }); }}>
+            {elsewhere || where ? `(room ${roomLabel}${elsewhere ? ', another floor' : ''})` : '(show the room)'}
+          </button>
+        )}
+      </div>
+    </TileCard>
+  );
+}
+
 function FacilityInspector({ facility, state }: { facility: Facility; state: HotelState }) {
   const c = useController();
   useLiveClock();
@@ -208,6 +277,7 @@ function FacilityInspector({ facility, state }: { facility: Facility; state: Hot
   const inUse = facilityLoad(state, facility.id, c.gameTime);
   const people = peopleInFacility(state, facility.id, c.gameTime);
   const usedBy = state.guests.filter(g => g.facilitiesUsed?.[facility.type as FacilityType]).length;
+  const here = guestsInFacility(state, facility.id, c.gameTime);
   const config = FACILITY_CONFIG[facility.type];
   const level = FACILITY_LEVELS[facility.level - 1];
   const next = FACILITY_LEVELS[facility.level];
@@ -230,6 +300,14 @@ function FacilityInspector({ facility, state }: { facility: Facility; state: Hot
           ...(isFacilityOpen(state, facility) ? [] : ['Door blocked: guests can\'t get in!']),
         ].join('\n')}
       </pre>
+      {here.length > 0 && (
+        <div class="small here-now">
+          Here now:{' '}
+          {here.map((g, i) => (
+            <span key={g.id}>{i > 0 && ', '}<button class="link" onClick={() => c.selectGuest(g.id, facility)}>{PartyLabel(g)}</button></span>
+          ))}
+        </div>
+      )}
       <div class="actions">
         <button onClick={() => c.turnFacilityDoor(facility.id)} aria-label="Turn door">
           Door {DOOR_ARROWS[facility.door]} Turn

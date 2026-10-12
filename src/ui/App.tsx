@@ -1,7 +1,8 @@
 import type { Ref } from 'preact';
 import { PURPOSES, PURPOSE_LABELS } from '../simulation/Purpose';
 import { PURPOSE_COLORS, NO_PURPOSE_COLOR } from '../render/figures';
-import { GUEST_PURPOSES } from '../config/balance';
+import { GUEST_PURPOSES, GUEST_PROFILE } from '../config/balance';
+import { QUIRK_GLYPHS } from '../render/quirks';
 import type { GameController, PanelId } from '../game/GameController';
 import { GameContext, useController, useControllerVersion } from './context';
 import { calculateValuation } from '../simulation/ObjectivesManager';
@@ -163,6 +164,14 @@ function Legend() {
           <span><span class="swatch round" style={{ background: toCss(NO_PURPOSE_COLOR) }} />{GUEST_PURPOSES.enabled ? 'Other' : 'Guest'}</span>
         )}
       </span>
+      {GUEST_PROFILE.enabled && (
+        <span class="legend-group" role="group" aria-label="Guest marks">
+          <span class="legend-mark">{QUIRK_GLYPHS.moon}</span>Light sleeper
+          <span class="legend-mark">{QUIRK_GLYPHS.note}</span>Rowdy
+          <span class="legend-mark">{QUIRK_GLYPHS.asleep}</span>Asleep
+          <span class="dim">(click a guest for more)</span>
+        </span>
+      )}
       <span><span class="swatch" style={{ background: toCss(ACTOR_COLORS.frontDesk) }} />Front desk</span>
       <span><span class="swatch" style={{ background: toCss(ACTOR_COLORS.housekeeper) }} />Housekeeping</span>
       <span><span class="swatch" style={{ background: toCss(ACTOR_COLORS.maintenance) }} />Maintenance</span>

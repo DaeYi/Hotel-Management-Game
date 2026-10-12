@@ -1,5 +1,5 @@
 import type {
-  HotelState, RoomType, FacilityType, TileType, StaffConfig, AmenityTier, CleaningQuality, DailyCleaningCadence, GameEvent, FixtureType, Direction, Furnishing,
+  HotelState, RoomType, FacilityType, TileType, StaffConfig, AmenityTier, CleaningQuality, DailyCleaningCadence, GameEvent, FixtureType, Direction, Furnishing, LateCheckoutPolicy,
 } from '../simulation/types';
 import {
   createStarterHotel, addFixture, demolishFixture, demolishElevator, addRoom, setRoomPrice, repairRoom, demolishRoom,
@@ -39,7 +39,8 @@ export const PAINTABLE_TYPES = new Set<BuildType>(['bulldoze']);
 
 export type PanelId = 'staff' | 'housekeeping' | 'amenities' | 'marketing' | 'finance' | 'story' | 'goals' | 'furnish';
 
-export type Selection = { kind: 'room' | 'facility'; id: string } | null;
+/** What the inspector shows: a room or facility, or a guest (anchored where they were picked, so the card doesn't chase them). */
+export type Selection = { kind: 'room' | 'facility'; id: string } | { kind: 'guest'; id: string; anchor: Tile } | null;
 
 export interface Tile {
   gridX: number;
@@ -197,6 +198,11 @@ export class GameController {
 
     if (state.day !== prevDay) saveGame(state, this.prng);
     if (checkBankruptcy(state)) this.gameOver = true;
+    // A guest's card closes once they've gone (checked out and walked out of the building)
+    if (this.selection?.kind === 'guest') {
+      const id = this.selection.id;
+      if (!state.guests.some(g => g.id === id) && !(state.walkers ?? []).some(w => w.guestId === id)) this.selection = null;
+    }
     this.changed();
   }
 
@@ -282,7 +288,7 @@ export class GameController {
     const next = Math.max(0, Math.min(this.state.floorCount - 1, floor));
     if (next === this.currentFloor) return;
     this.currentFloor = next;
-    this.selection = null;
+    if (this.selection?.kind !== 'guest') this.selection = null; // a guest's card follows them up and down
     this.hover = null;
     this.changed();
   }
@@ -415,6 +421,19 @@ export class GameController {
   clearSelection() {
     this.selection = null;
     this.changed();
+  }
+
+  /** Show a guest's card (picked on the floor plan, or from a room's or facility's card), anchored at a tile. */
+  selectGuest(guestId: string, anchor: Tile) {
+    if (this.tutorialOpen || this.tool) return;
+    if (!this.state.guests.some(g => g.id === guestId) && !(this.state.walkers ?? []).some(w => w.guestId === guestId)) return;
+    this.selection = { kind: 'guest', id: guestId, anchor: { gridX: anchor.gridX, gridY: anchor.gridY } };
+    this.changed();
+  }
+
+  /** Whether night owls may stay till the late checkout: no, yes, or yes for a fee. */
+  setLateCheckout(policy: LateCheckoutPolicy) {
+    this.apply({ ...this.state, lateCheckout: policy });
   }
 
   // === Player actions ===

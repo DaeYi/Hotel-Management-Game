@@ -14,7 +14,7 @@ import { simulate } from '../src/simulation/simulate.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
 import { PRNG } from '../src/simulation/prng.js';
 import { hourStart, legsEnd } from '../src/simulation/Movement.js';
-import { GUEST_PURPOSES, ROOM_PREFERENCES, GUEST_OUTINGS, FACILITY_CONFIG, ECONOMY, REVIEW, PARTIES } from '../src/config/balance.js';
+import { GUEST_PURPOSES, ROOM_PREFERENCES, GUEST_OUTINGS, FACILITY_CONFIG, ECONOMY, REVIEW, PARTIES, GUEST_PROFILE } from '../src/config/balance.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import type { ActiveIncident } from '../src/simulation/types.js';
 import type { PresetId } from '../src/config/furniture.js';
@@ -271,7 +271,7 @@ describe('In the review and the mood', () => {
   });
 
   it('a guest\'s mood drifts toward a higher mark in a room they like', () => {
-    let s = hotel(['compact_deluxe', 'compact_deluxe']);
+    let s: HotelState = { ...hotel(['compact_deluxe', 'compact_deluxe']), noiseSources: [] }; // no building work going on
     s = staying(s, s.rooms[0], guest('biz', P('business', 1), 'business'));
     s = staying(s, s.rooms[1], guest('see', P('solo', 1), 'sightseeing'));
     let after = s;
@@ -381,6 +381,7 @@ describe('Balance', () => {
     // With both off, nothing new happens: no purposes, no room fit
     GUEST_PURPOSES.enabled = false;
     ROOM_PREFERENCES.enabled = false;
+    GUEST_PROFILE.enabled = false;
     try {
       const run = simulate(30, 9, undefined, STRATEGIES.balanced);
       // The same run before purposes and preferences existed (c0782c1). If an unrelated
@@ -393,12 +394,19 @@ describe('Balance', () => {
       expect(run.likedShare).toBe(0);
       expect(run.dislikedShare).toBe(0);
       expect(run.returningArrivals).toBe(0);
-    } finally { GUEST_PURPOSES.enabled = true; ROOM_PREFERENCES.enabled = true; }
+      // A run where staff meet guests walking out of rooms (overstaffed), from the same commit
+      const busy = simulate(45, 5, undefined, STRATEGIES.overstaffed);
+      expect(busy.finalCash).toBeCloseTo(14783.5, 6);
+      expect(busy.avgReviewScore).toBeCloseTo(7.651394734368281, 9);
+      expect(busy.totalRevenue).toBe(66779);
+      expect(busy.totalTurnedAway).toBe(317);
+    } finally { GUEST_PURPOSES.enabled = true; ROOM_PREFERENCES.enabled = true; GUEST_PROFILE.enabled = true; }
   }, 120000);
 
   it('on: some guests like their room, and the bot hotel still thrives', () => {
     const run = simulate(120, 9, undefined, STRATEGIES.balanced);
     expect(run.likedShare).toBeGreaterThan(0.05);
+    expect(run.avgNoisePenalty).toBeGreaterThan(0); // the night noise is tallied and reviewed
     expect(run.wentBankrupt).toBe(false);
   }, 120000);
 });

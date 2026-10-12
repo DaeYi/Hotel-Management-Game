@@ -13,6 +13,25 @@ export interface Party {
 }
 /** Why a booking is here: on business, to see the sights, or to get away (see Purpose.ts). */
 export type Purpose = 'business' | 'sightseeing' | 'getaway';
+
+/** A guest's daily rhythm: up early, regular, or up late (see Profile.ts). */
+export type Chronotype = 'early' | 'regular' | 'night';
+/** How fast a guest walks. */
+export type Mobility = 'brisk' | 'normal' | 'limited';
+/** How much night noise bothers a guest. */
+export type SleepSensitivity = 'heavy' | 'normal' | 'light';
+/** How much noise a guest makes. */
+export type Rowdiness = 'quiet' | 'normal' | 'rowdy';
+/** Who a guest is, beyond their trip: rolled once when they arrive and kept (see Profile.ts). */
+export interface GuestProfile {
+  chronotype: Chronotype;
+  mobility: Mobility;
+  sleep: SleepSensitivity;
+  rowdiness: Rowdiness;
+  checkoutHour: number; // when they'd like to leave on their last morning (an early bird's 07-10; 11 otherwise; a night owl asks for late checkout on top)
+}
+/** Whether a night owl may stay till the late checkout: no, yes, or yes for a fee. */
+export type LateCheckoutPolicy = 'deny' | 'free' | 'fee';
 export type RoomStatus = 'vacant' | 'occupied' | 'cleaning' | 'renovating';
 export type CleaningQuality = 'quick' | 'standard' | 'thorough';
 export type DailyCleaningCadence = 'daily' | 'every_other_day' | 'none';
@@ -98,6 +117,13 @@ export interface Guest {
   // Why they're here (see Purpose.ts; absent on older saves, or with purposes
   // off: no purpose, and nothing about them changes with it)
   purpose?: Purpose;
+  // Who they are, beyond the trip (see Profile.ts; absent on older saves, or with
+  // profiles off: they do what every guest did before)
+  profile?: GuestProfile;
+  // The night noise they've slept through (or not) this stay: the sum of the
+  // noise over the threshold in their sleep hours, how many nights it woke
+  // them, and the last of those nights (see NoiseManager.accrueNightNoise)
+  nightNoise?: { exposure: number; woken: number; lastWokenNight: number };
   // Where the guest is going (walking in from the street, out to a facility and
   // back, to a new room): absolute game-hour legs. Once the last leg ends -- or
   // with no trip -- the guest is in their room. See Movement.ts.
@@ -154,6 +180,9 @@ export interface Walker {
   trip: Leg[];
   party?: Party; // the whole party walks it (absent: one person)
   purpose?: Purpose; // why they came (for their colour)
+  profile?: GuestProfile; // who they are (their pace, their quirk icon)
+  guestId?: string; // the booking they were (someone checking out, not someone turned away)
+  name?: string;
 }
 
 export type StaffRole = 'housekeeper' | 'maintenance';
@@ -261,6 +290,7 @@ export interface NoiseSource {
 }
 
 export interface HotelState {
+  lateCheckout?: LateCheckoutPolicy; // absent: deny (see Profile.lateCheckoutPolicy)
   cash: number;
   day: number;
   hour: number; // 0-23
@@ -356,6 +386,7 @@ export interface SimulationSummary {
   likedShare: number;
   dislikedShare: number;
   returningArrivals: number; // guests who came back for another stay
+  avgNoisePenalty: number; // the mean noise part of a checkout's review
 }
 
 export interface TickResult {

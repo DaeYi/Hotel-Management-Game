@@ -1,11 +1,12 @@
 import type { HotelState, Guest, Facility, FacilityType, Leg } from './types.js';
-import { FACILITY_CONFIG, FACILITY_LEVELS, FACILITY_VISITS, TRAVEL } from '../config/balance.js';
+import { FACILITY_CONFIG, FACILITY_LEVELS, FACILITY_VISITS, TRAVEL, GUEST_PROFILE } from '../config/balance.js';
 import { findRoute, getOpenFacilities } from './Layout.js';
 import { getCurrentSeason } from './SeasonManager.js';
 import { hourStart, makeWalk, makeStay, isUnderway, hash01 } from './Movement.js';
 import { roomTile } from './GuestMovement.js';
 import { partyLoad, partySize, perPersonFactor } from './Party.js';
 import { facilityChanceMult } from './Purpose.js';
+import { activityHour, guestPace } from './Profile.js';
 
 // Guests use the hotel's facilities. Each hour boundary, guests who are in
 // their rooms may head out to a facility -- breakfast at the restaurant, a
@@ -19,7 +20,6 @@ import { facilityChanceMult } from './Purpose.js';
 // visit cut short on the way (the gym demolished, the guest checking out)
 // earns nothing.
 
-const PACE = TRAVEL.guestHoursPerTile;
 const LEAVE_SPREAD = 0.5; // guests set out over the first half of the hour
 
 /**
@@ -31,17 +31,38 @@ export function facilityCapacity(facility: Facility): number {
 }
 
 /** The chance a guest in their room heads to a type of facility during an hour of the day (by their purpose: business travellers to the gym, a getaway to the pool). */
-export function visitChance(type: FacilityType, hour: number, day: number, guest?: Pick<Guest, 'purpose'>): number {
+export function visitChance(type: FacilityType, hour: number, day: number, guest?: Pick<Guest, 'purpose' | 'profile'>): number {
   const config = FACILITY_CONFIG[type];
-  const window = config.visitChance.find(([from, to]) => hour >= from && hour < to);
+  // An early bird keeps a regular's hours two hours early, a night owl two hours late
+  const h = guest ? activityHour(guest, hour) : hour;
+  const window = config.visitChance.find(([from, to]) => h >= from && h < to);
   if (!window) return 0;
   const season = config.seasonalMultiplier ? FACILITY_VISITS.seasonalChanceMult[getCurrentSeason(day)] ?? 1 : 1;
   return Math.min(1, window[2] * season * (guest ? facilityChanceMult(guest, type) : 1));
 }
 
+/**
+ * The hours a type of facility is in use: its visiting windows, and with
+ * guest profiles on, two hours either side (early birds come two hours early,
+ * night owls stay two late). Overlapping hours merged.
+ */
+export function facilityHours(type: FacilityType): Array<[number, number]> {
+  const widen = GUEST_PROFILE.enabled ? 2 : 0;
+  const windows = FACILITY_CONFIG[type].visitChance
+    .map(([from, to]) => [Math.max(0, from - widen), Math.min(24, to + widen)] as [number, number])
+    .sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const [from, to] of windows) {
+    const last = merged[merged.length - 1];
+    if (last && from <= last[1]) last[1] = Math.max(last[1], to);
+    else merged.push([from, to]);
+  }
+  return merged;
+}
+
 /** Facility opening hours as text, e.g. "6-9, 17-22". */
 export function openingHours(type: FacilityType): string {
-  return FACILITY_CONFIG[type].visitChance.map(([from, to]) => `${from}-${to}`).join(', ');
+  return facilityHours(type).map(([from, to]) => `${from}-${to}`).join(', ');
 }
 
 /** The guests using a facility at time t (inside it, not walking there or back). */
@@ -104,11 +125,12 @@ export function planFacilityVisits(state: HotelState): HotelState {
     const room = current.rooms.find(r => r.guestId === guest.id);
     if (!room) continue;
     const from = roomTile(room);
+    const pace = guestPace(guest);
     const leave = T + hash01(`${guest.id}|${state.day}|${state.hour}|leave`) * LEAVE_SPREAD;
     // The nearest open facility of the type with room for them, within a short walk
     const options = open
       .filter(f => f.type === type)
-      .map(f => ({ f, route: findRoute(current, from, { gridX: f.gridX, gridY: f.gridY, floor: f.floor, door: f.door }, PACE) }))
+      .map(f => ({ f, route: findRoute(current, from, { gridX: f.gridX, gridY: f.gridY, floor: f.floor, door: f.door }, pace) }))
       .filter((o): o is { f: Facility; route: NonNullable<typeof o.route> } => !!o.route && o.route.hours <= FACILITY_VISITS.maxWalkHours)
       .sort((a, b) => a.route.hours - b.route.hours || (a.f.id < b.f.id ? -1 : 1));
     for (const { f, route } of options) {
@@ -116,12 +138,12 @@ export function planFacilityVisits(state: HotelState): HotelState {
       const done = arrive + FACILITY_CONFIG[type].visitHours;
       // The whole party goes, so it has to fit
       if (overlappingVisits(current, f.id, arrive, done) + partyLoad(partySize(guest)) > facilityCapacity(f) + 1e-9) continue;
-      const back = findRoute(current, route.path[route.path.length - 1], from, PACE);
+      const back = findRoute(current, route.path[route.path.length - 1], from, pace);
       if (!back) continue;
       const trip: Leg[] = [
-        makeWalk(route.path, leave, PACE),
+        makeWalk(route.path, leave, pace),
         makeStay(route.path[route.path.length - 1], arrive, done, 'visit', { placeId: f.id }),
-        makeWalk(back.path, done, PACE),
+        makeWalk(back.path, done, pace),
       ];
       current = { ...current, guests: current.guests.map(g => (g.id === guest.id ? { ...g, trip, tripKind: 'visit' as const } : g)) };
       break;
@@ -147,7 +169,8 @@ export function creditFacilityVisits(state: HotelState, t: number): HotelState {
       const f = state.facilities.find(x => x.id === l.placeId);
       if (f) {
         const used = facilitiesUsed?.[f.type];
-        facilitiesUsed = { ...facilitiesUsed, [f.type]: { level: Math.max(used?.level ?? 0, f.level), day: Math.floor(l.start / 24) + 1 } };
+        // The day the visit was planned (a night owl's 23:00 swim that starts after midnight is still today's)
+        facilitiesUsed = { ...facilitiesUsed, [f.type]: { level: Math.max(used?.level ?? 0, f.level), day: Math.floor(g.trip![0].start / 24) + 1 } };
         cash += FACILITY_CONFIG[f.type].spendPerVisit * FACILITY_LEVELS[f.level - 1].revenueMult * perPersonFactor(partySize(g));
       }
       return { ...l, credited: true };

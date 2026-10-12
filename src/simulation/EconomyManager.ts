@@ -27,7 +27,7 @@ export function processRevenue(
 
   // Revenue from checkouts
   for (const dep of departures.departed) {
-    const payment = dep.booking.nightRate * dep.guest.stayLength;
+    const payment = dep.booking.nightRate * dep.guest.stayLength + (dep.lateFee ?? 0); // and a late checkout, if they paid for one
     result.cashDelta += payment;
   }
 

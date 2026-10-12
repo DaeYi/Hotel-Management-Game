@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import type { HotelState, RoomType, FacilityType, GuestTrait, Direction, Room, StaffPlan } from '../simulation/types';
-import { GRID, ECONOMY, NOISE, FACILITY_CONFIG, DECOR } from '../config/balance';
-import { calculateRoomNoise } from '../simulation/NoiseManager';
+import { GRID, ECONOMY, NOISE, FACILITY_CONFIG, DECOR, GUEST_PROFILE } from '../config/balance';
+import { calculateRoomNoise, nightRoomNoise } from '../simulation/NoiseManager';
 import { formatRoomLabel, isRoomReachable, isFacilityOpen } from '../simulation/HotelState';
 import { profileRoom, profileFurnishing, defaultFurnishing, rectToWorld, bedSpot, sleepSpots, wallBar, pillowRect } from '../simulation/RoomProfile';
 import { FURNITURE, ROOM_CELLS, ROOM_PRESETS, type PresetId } from '../config/furniture';
@@ -10,6 +10,8 @@ import { getStaffPlan } from '../simulation/StaffManager';
 import { roomCleaningAt, GRUBBY_BELOW } from '../simulation/CleaningStatus';
 import { getGuestDotColor, isChild } from './figures';
 import { partyOf, sharesBeds } from '../simulation/Party';
+import { isSleepHour, quirkOf } from '../simulation/Profile';
+import { drawQuirk, drawSleepZ } from './quirks';
 
 /** Guest dot color by trait (see figures.ts). */
 export { getGuestDotColor };
@@ -57,6 +59,7 @@ export class GridRenderer {
   private gridGraphics: Phaser.GameObjects.Graphics;
   private roomGraphics: Phaser.GameObjects.Graphics;
   private guestGraphics: Phaser.GameObjects.Graphics;
+  private sleepGraphics: Phaser.GameObjects.Graphics; // rooms whose guests are asleep, dimmed (under the overlays and the dots)
   private hoverGraphics: Phaser.GameObjects.Graphics;
   private feedbackGraphics: Phaser.GameObjects.Graphics;
   private noiseGraphics: Phaser.GameObjects.Graphics;
@@ -75,6 +78,7 @@ export class GridRenderer {
     this.gridGraphics = scene.add.graphics();
     this.roomGraphics = scene.add.graphics();
     this.guestGraphics = scene.add.graphics().setDepth(5);
+    this.sleepGraphics = scene.add.graphics().setDepth(1);
     this.hoverGraphics = scene.add.graphics().setDepth(6);
     this.feedbackGraphics = scene.add.graphics().setDepth(7);
     this.noiseGraphics = scene.add.graphics().setDepth(3);
@@ -407,8 +411,9 @@ export class GridRenderer {
 
   /** Guest dots in their rooms. `walking` guests are drawn by the ActorLayer instead until they arrive. */
   /** Draw a dot in each guest's room while they're in it (not while they're on their way in, out at a facility, or moving rooms). */
-  renderGuests(state: HotelState, floor: number, away: Set<string> = new Set()) {
+  renderGuests(state: HotelState, floor: number, away: Set<string> = new Set(), selectedGuestId: string | null = null) {
     this.guestGraphics.clear();
+    this.sleepGraphics.clear();
 
     for (const guest of state.guests) {
       if (away.has(guest.id)) continue;
@@ -419,6 +424,13 @@ export class GridRenderer {
       const party = partyOf(guest);
       const spots = party.size > 1 ? sleepSpots(room, !sharesBeds(party)) : [];
       const dotColor = getGuestDotColor(guest.purpose);
+      // Asleep (in their sleep hours, and in): the room dims, and a "z" by them
+      const asleep = GUEST_PROFILE.enabled && room.status === 'occupied' && isSleepHour(guest, state.hour);
+      if (asleep) {
+        this.sleepGraphics.fillStyle(0x0b1030, 0.35);
+        this.sleepGraphics.fillRect(GRID_OFFSET_X + room.gridX * TILE_SIZE + 1, GRID_OFFSET_Y + room.gridY * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
+      }
+      const quirk = GUEST_PROFILE.enabled ? quirkOf(guest) : null;
       for (let m = 0; m < party.size; m++) {
         const [bx, by] = spots[m] ?? bedSpot(room);
         const x = GRID_OFFSET_X + room.gridX * TILE_SIZE + bx * (TILE_SIZE / ROOM_CELLS);
@@ -435,6 +447,19 @@ export class GridRenderer {
         if (m === 0 && guest.isReturning) {
           this.guestGraphics.lineStyle(1.5, 0xffffff, 0.9);
           this.guestGraphics.strokeCircle(x, y, 9);
+        }
+        if (guest.id === selectedGuestId) {
+          this.guestGraphics.lineStyle(2, 0xf1c40f, 1);
+          this.guestGraphics.strokeCircle(x, y, r + 5);
+        }
+        if (m === 0) {
+          // Kept inside the room's tile
+          const left = GRID_OFFSET_X + room.gridX * TILE_SIZE;
+          const top = GRID_OFFSET_Y + room.gridY * TILE_SIZE;
+          const clampX = (v: number) => Math.min(left + TILE_SIZE - 6, Math.max(left + 6, v));
+          const clampY = (v: number) => Math.min(top + TILE_SIZE - 6, Math.max(top + 6, v));
+          if (quirk) drawQuirk(this.guestGraphics, clampX(x + 8), clampY(y - 9), quirk);
+          if (asleep) drawSleepZ(this.guestGraphics, clampX(x - 13), clampY(y - 14));
         }
       }
     }
@@ -467,14 +492,14 @@ export class GridRenderer {
     if (!on) this.noiseGraphics.clear();
   }
 
-  /** Render noise levels as a color overlay on one floor's rooms */
+  /** Render noise levels as a color overlay on one floor's rooms (with guest profiles on: the noise at night, which is the noise that matters) */
   renderNoise(state: HotelState, floor: number) {
     this.noiseGraphics.clear();
     if (!this.showNoiseOverlay) return;
 
     for (const room of state.rooms) {
       if (room.floor !== floor) continue;
-      const noise = calculateRoomNoise(room, state);
+      const noise = GUEST_PROFILE.enabled ? nightRoomNoise(room, state) : calculateRoomNoise(room, state);
       if (noise <= 0) continue;
 
       const x = GRID_OFFSET_X + room.gridX * TILE_SIZE;

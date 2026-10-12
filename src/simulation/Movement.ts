@@ -102,7 +102,7 @@ export const PARTY_SPACING = 0.5;
  * (at the desk, the gym, their room), and is all in one place while stopped.
  * Pure: the drawing and the tests use the same positions.
  */
-export function memberPositionAt(legs: Leg[], t: number, index: number, hoursPerTile: number): Placement | null {
+export function memberPositionAt(legs: Leg[], t: number, index: number): Placement | null {
   if (index <= 0 || legs.length === 0) return positionAt(legs, t);
   if (t <= legs[0].start || t >= legsEnd(legs)) return positionAt(legs, t);
   // The stretch of walking t is in: back to the last stop, on to the next
@@ -130,7 +130,7 @@ export function memberPositionAt(legs: Leg[], t: number, index: number, hoursPer
       time += dt;
     }
   }
-  const lead = index * PARTY_SPACING * hoursPerTile;
+  const lead = index * PARTY_SPACING * (legs[k] as WalkLeg).hoursPerTile; // at the pace they're walking
   const ahead = Math.max(0, Math.min(lead, t - s, (e - t) / 2));
   return positionAt(legs, t + ahead);
 }

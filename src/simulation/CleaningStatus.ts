@@ -1,5 +1,6 @@
 import type { HotelState, Room, StaffPlan } from './types.js';
-import { HOUSEKEEPING, STAFF } from '../config/balance.js';
+import { HOUSEKEEPING, STAFF, ECONOMY } from '../config/balance.js';
+import { checkoutHour } from './Profile.js';
 import { isRoomReachable } from './HotelState.js';
 import { getStaffPlan, getRoster, isOnShift } from './StaffManager.js';
 import { hourStart } from './Movement.js';
@@ -145,4 +146,18 @@ export function summarizeCleaning(state: HotelState, t: number, plan?: StaffPlan
     if ((room.status === 'occupied' || room.status === 'vacant') && room.cleanliness < GRUBBY_BELOW) summary.grubby++;
   }
   return summary;
+}
+
+/** Guests still in who check out today (whose rooms will need turning over), and how many of those leave late. */
+export function checkoutsToday(state: HotelState): { total: number; late: number } {
+  let total = 0;
+  let late = 0;
+  for (const guest of state.guests) {
+    if (state.day - guest.checkInDay < guest.stayLength) continue;
+    const hour = checkoutHour(guest, state);
+    if (state.hour >= hour) continue; // gone already (leaving this hour)
+    total++;
+    if (hour > ECONOMY.checkOutHour) late++;
+  }
+  return { total, late };
 }

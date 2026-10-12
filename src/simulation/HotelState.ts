@@ -1,7 +1,7 @@
-import type { HotelState, Room, RoomType, Facility, FacilityType, TileType, Elevator, GameEvent, Fixture, FixtureType, Direction, Furnishing } from './types.js';
+import type { HotelState, Room, RoomType, Facility, FacilityType, TileType, Elevator, GameEvent, Fixture, FixtureType, Direction, Furnishing, Guest } from './types.js';
 import { PRESET_FOR_TYPE, ROOM_PRESETS, type PresetId } from '../config/furniture.js';
 import { defaultFurnishing, furnishingOf, quoteRefit, validateFurnishing, profileFurnishing, profileRoom, isBookable, classPriceFactor } from './RoomProfile.js';
-import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS, FLOORS, ELEVATOR, DESK, CLOSET, BREAK_ROOM, ENTRANCE, STARTER_LAYOUT } from '../config/balance.js';
+import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS, FLOORS, ELEVATOR, DESK, CLOSET, BREAK_ROOM, ENTRANCE, STARTER_LAYOUT, GUEST_PROFILE } from '../config/balance.js';
 import { isTileAccessible, findOpenDoor, isEdgeTile, isFacilityOpen, getOpenFacilities } from './Layout.js';
 import { createConstructionNoise } from './NoiseManager.js';
 import { getExpectedPrice, getRoomExpectedPrice, getPriceMultiplier } from './StarRatingManager.js';
@@ -527,10 +527,12 @@ export function getElevatorLoad(state: HotelState): number {
 }
 
 /** Review penalty (0-10 scale) for a guest staying on an upper floor of an overloaded hotel. */
-export function getElevatorWaitPenalty(state: HotelState, room: Room): number {
+export function getElevatorWaitPenalty(state: HotelState, room: Room, guest?: Pick<Guest, 'profile'>): number {
   if (room.floor === 0) return 0;
   const overload = Math.max(0, Math.min(1, getElevatorLoad(state) - 1));
-  return overload * ELEVATOR.maxWaitPenalty;
+  // A slow walker minds the wait more
+  const mind = guest?.profile?.mobility === 'limited' ? GUEST_PROFILE.limitedLiftMult : 1;
+  return overload * ELEVATOR.maxWaitPenalty * mind;
 }
 
 /** Build a facility on an open hallway tile, with its door on `door` (or, left out, the first open side -- see addRoom). */

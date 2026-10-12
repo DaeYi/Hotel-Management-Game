@@ -1,7 +1,7 @@
 # Design: Guest and Staff Personalities
 
 Date: 2026-10-11
-Status: PROPOSED. Purpose of stay (three values) and room preferences shipped first, as a slice: see guest-preferences.md.
+Status: IN PROGRESS. Purpose of stay (three values) and room preferences shipped first, as a slice: see guest-preferences.md. The remainder is being built in six phases (see "Build plan (2026-10-12)" at the end).
 Follows: aligned-movement.md, open-floor-plan.md, late-game-economy.md
 Builds on: the 11:00 checkout, guest day trips (`OutingManager.ts`, `GUEST_OUTINGS`) and presence-aware noise, which shipped together with this proposal (see aligned-movement.md).
 
@@ -9,6 +9,15 @@ Builds on: the 11:00 checkout, guest day trips (`OutingManager.ts`, `GUEST_OUTIN
 
 - **Staff hiring is a choice of specific people.** Each role gets a shortlist of candidates with names, traits and wages, and the player picks who to hire and who to let go. The +/- buttons stay as a "hire the best value" shortcut. This is open question 4.
 - **Parties are shown as several people walking together** (from the rooms decision). This settles Party size's on-screen form: N figures on one itinerary.
+
+## Owner decisions (2026-10-12)
+
+- **Figure colour is purpose** (open question 1): shipped with guest-preferences.md.
+- **Late checkout is a policy toggle** (open question 2): deny / free / fee, in the Cleaning panel. Early birds check out 07-10, regulars at 11:00, night owls ask for 13:00.
+- **Staff may quit** (open question 5): fed-up staff give 2 days' notice and walk out; raises and break rooms restore morale; the bots get a rehiring rule.
+- **Spotlight guests are always announced** (open question 6), 1-2 days ahead in the story log.
+- **Purpose shapes who arrives, not how many** (open question 8): the weekday and weekend demand multipliers stay.
+- Not asked, so the defaults stand: returning guests keep their Body, Temperament and Tastes and re-roll Purpose and Party (open question 3); no night shift until something happens overnight besides noise (open question 9).
 
 ## Request
 
@@ -704,3 +713,30 @@ In rough order:
 7. **Party size before the room redesign.** Should it wait for the redesign, or ship early with the interim rule (standard 2, deluxe 3, suite 4)?
 8. **Demand mix.** Should purpose eventually change how many guests arrive (busier business weekdays), or only who arrives?
 9. **Night shift.** Is a night desk or night maintenance worth having before the game models anything happening overnight besides noise?
+
+## Build plan (2026-10-12)
+
+Each phase ships on its own (tests, an adversarial review, a 12-seed 400-day balance sweep, deploy):
+
+1. **Guests' rhythms.** 1a: `Guest.profile`, Chronotype with the late-checkout policy, Mobility, Sleep sensitivity and Rowdiness with the nightly noise tally, quirk icons and a guest inspector. 1b: Favorite facility, Loyalty tier, Mood.
+2. **Guests and service.** Housekeeping preference, hosted nights and "keep it down", Patience and the desk queue, Voice and complaint trips.
+3. **Money and spotlight.** Spending style, the restaurant tab, Spotlight guests and the glowing write-up, event-goers.
+4. **Staff identity.** Serial ids, names, the 3-candidate hiring card and choosing who goes; Experience, Work style, Reliability.
+5. **Staff load and shifts.** Stamina and fatigue, Specialty, the front desk on the roster, Hospitality, Cross-trained, Shift pattern.
+6. **Morale and quitting,** with a rehiring rule for the bots.
+
+### Phase 1a as shipped (2026-10-12)
+
+`Guest.profile` (Profile.ts), rolled from the booking's id with `hash01` after its party and purpose, which lean it, and stored, so it never changes under a guest. `GUEST_PROFILE.enabled` off: no profiles, and the hotel runs exactly as before (two pinned runs in `test/preferences.test.ts` prove it, one of them a busy hotel where staff meet guests walking out).
+
+- **Chronotype.** Early bird 25 / regular 55 / night owl 20 (business travellers and families lean early, friends late). Facility and outing hours move by -2 / 0 / +2 (a regular's 08:00 is an early bird's 06:00); outings end by 19 / 21 / 23. Sleep hours: early 21-05, regular 23-07, night owl 01-09 (the doc's 02-10 moved to 01-09 so sleep and activity shift by the same two hours). Facility visits that start after midnight count for the day they were planned (a night owl's late swim used to block the next day's).
+- **Checkout and the late-checkout policy** (owner decision). Early birds leave at their own hour, 07-10; regulars at 11:00; night owls ask for 13:00, and the Cleaning panel decides: No (they leave at 11:00, 5 points of mood down), Free, or For a fee (30% of the nightly rate). The panel says how many are still to check out today and how many late. Bots keep the default, No.
+- **Mobility.** Brisk 0.045 / normal 0.06 / slow 0.09 hours a tile (business brisk, families slow), on every walk a guest takes, their party with them (party spacing follows each walk's pace). Slow walkers mind a full lift 1.5x. Check-in lanes now start once the slowest walker could have arrived, so mixed paces never overlap at the desk. Housekeepers wait at the door until whoever is walking out of a room has stepped out.
+- **Sleep sensitivity and rowdiness.** The legacy trait still makes light sleepers (20%) and rowdy guests (15%); the rest are rolled, so heavy / normal / light is 20 / 60 / 20 and quiet / normal / rowdy 20 / 65 / 15. Families are never rowdy.
+- **Night noise.** A guest makes noise only while they're in their room and awake (rowdy x2.5, x1.5 more 22-02); facilities only around their hours. Noise counts only while a guest is in their room in their sleep hours, added up night by night (`Guest.nightNoise`: the excess over the threshold times their sensitivity, and the nights it woke them). The review's noise is the average night (1.25 per unit, calibrated so the mean noise penalty matches the old one: 0.150 against 0.157), the mood drifts with it while it lasts, and noise complaints are filed, and judged, only in the complainer's sleep hours. The Noise overlay and the room card show the noise at night ("Night noise:").
+- **Bad reviews spread at most once a day** (with profiles on): checkouts now come at several hours, and each batch was another chance to go viral, stacking the 0.7x arrivals penalty.
+- **On screen.** A moon (light sleeper) or a note (rowdy) on the guest, at most one; a sleeping guest's room dims, with a "z"; the legend explains them. Click a guest (walking, or at a facility), or "About {name}..." on their room's card, for their card: who they are, night N of M, rhythm with sleep and checkout hours, pace, sleep and noise, what they like, mood, and where they are now; the card follows them between floors, says "Checked out, on their way out" with their review while they walk out, and closes once they've left. Facility cards list who's in, and their hours include the early birds' and night owls'.
+- **The bots** now stop adding rooms upstairs once every lift shaft is built and the lifts are 1.5x full (they used to keep building into ever-longer waits, which early checkouts made worse), and then spend on upgrading rooms instead.
+- **Balance** (12 seeds x 400 days, mean valuation, profiles off / on): balanced $4.95M / $4.74M, overstaffed $4.36M / $4.59M, understaffed $1.74M / $1.72M, hoarder $1.36M / $1.51M. The order holds. Mean review noise penalty 0.172 / 0.159. (Lower than guest-preferences.md's $5.76M because of the bots' lift limit; with the old bots, early checkouts let them overbuild into lift waits and lost about 18%.)
+- **Review:** an adversarial review (6 reviewers, each finding checked by a skeptic) confirmed 21 distinct problems, all fixed: the staff wait and the once-a-day viral limit changed the game with profiles off (now gated, with a second pinned run that would have caught it), quirk icons drawn with profiles off, facility hours ignoring early birds and night owls, walkouts missing from the noise average, noise complaints escalating over daytime noise (now paused while the guest is up), the noise overlay and room card showing daytime noise nobody minds, the guest card's night count (one ahead after midnight), a leaving family's card losing its name, an older guest's trait missing from their card, and eleven test gaps. Three findings were refuted. Every fix and behaviour has a test that fails without it (30 of 30 caught by reverting each).
+- **Not done from 1a:** mobility steering room choice (preferences are review-only, so is this).

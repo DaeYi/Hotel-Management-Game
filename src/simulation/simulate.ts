@@ -42,7 +42,7 @@ export function simulate(
   const partyTurnedAway = kinds();
   let partiesBookedSmaller = 0;
   let familiesSmaller = 0;
-  const fit = { checkouts: 0, total: 0, liked: 0, disliked: 0 };
+  const fit = { checkouts: 0, total: 0, liked: 0, disliked: 0, noise: 0 };
   let returningArrivals = 0;
   const totalHours = days * 24;
 
@@ -55,6 +55,7 @@ export function simulate(
       if (e.type === 'guest_departed' || e.type === 'guest_walked_out') {
         fit.checkouts++;
         fit.total += (e.data?.roomFit as number) ?? 0;
+        fit.noise += (e.data?.noisePenalty as number) ?? 0;
         if (e.data?.liked) fit.liked++;
         if (e.data?.disliked) fit.disliked++;
       }
@@ -114,6 +115,7 @@ export function simulate(
     likedShare: fit.liked / Math.max(1, fit.checkouts),
     dislikedShare: fit.disliked / Math.max(1, fit.checkouts),
     returningArrivals,
+    avgNoisePenalty: fit.noise / Math.max(1, fit.checkouts),
   };
 }
 

@@ -12,7 +12,7 @@ import { planArrivalTrips, departureWalker, tidyMovement } from './GuestMovement
 import { planFacilityVisits, creditFacilityVisits } from './FacilityManager.js';
 import { planOutings } from './OutingManager.js';
 import { hourEnd } from './Movement.js';
-import { tickNoiseSources } from './NoiseManager.js';
+import { tickNoiseSources, accrueNightNoise } from './NoiseManager.js';
 import { processCleaningTick, processDailyHousekeeping, degradeCleanliness, startTurnoverCleaning } from './HousekeepingManager.js';
 import { calculateStarRating } from './StarRatingManager.js';
 import { checkSeasonChange } from './SeasonManager.js';
@@ -82,8 +82,10 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   current = recordReturnGuestEntries(current, arrivals.events);
   current = recordPartyTurnAways(current, arrivals.events);
 
-  // 1.5 Ambient satisfaction drift (Satisfaction System Design point 1 / design-review D3)
+  // 1.5 Ambient satisfaction drift (Satisfaction System Design point 1 / design-review D3),
+  // and the night noise each sleeping guest is putting up with (for their review)
   current = driftSatisfaction(current);
+  current = accrueNightNoise(current);
 
   // 1.6 Advance in-progress incidents (resolve / escalate / room-move), then
   // select a new one if the pacing budget allows.
@@ -142,7 +144,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
     events.push({
       type: 'guest_walked_out',
       message: `${PartyLabel(guest)} checked out early ($${settlement.cashDelta.toFixed(0)})`,
-      data: { guestId: guest.id, roomId: room.id, reviewScore: score, cashDelta: settlement.cashDelta, roomFit: breakdown.roomFit, liked: !!breakdown.roomLikes, disliked: !!breakdown.roomDislikes },
+      data: { guestId: guest.id, roomId: room.id, reviewScore: score, cashDelta: settlement.cashDelta, roomFit: breakdown.roomFit, liked: !!breakdown.roomLikes, disliked: !!breakdown.roomDislikes, noisePenalty: breakdown.noisePenalty },
     });
   }
 

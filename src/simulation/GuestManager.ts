@@ -1,17 +1,18 @@
 import type { Guest, GuestTrait, Room, HotelState, Booking, GameEvent, ReturningGuestProfile } from './types.js';
 import type { PRNG } from './prng.js';
-import { ECONOMY, GUEST_TRAITS, REVIEW, HOUSEKEEPING, STAFF, AMENITIES, GUEST_NAMES, SATISFACTION, STORY, PARTIES } from '../config/balance.js';
+import { ECONOMY, GUEST_TRAITS, REVIEW, HOUSEKEEPING, STAFF, AMENITIES, GUEST_NAMES, SATISFACTION, STORY, PARTIES, GUEST_PROFILE } from '../config/balance.js';
 import { getDecorReviewPenalty } from './DecorManager.js';
 import { getCampaignDemandMultiplier } from './MarketingManager.js';
 import { getCheckInCapacity } from './Layout.js';
 import { getAvailableRooms, getElevatorWaitPenalty } from './HotelState.js';
 import { facilityReviewBonus } from './FacilityManager.js';
-import { calculateRoomNoise, noiseToRatingPenalty } from './NoiseManager.js';
+import { reviewNoisePenalty } from './NoiseManager.js';
 import { getExpectationMultiplier, getPartyFairPrice, getPriceMultiplier, getStarDemandMultiplier } from './StarRatingManager.js';
 import { profileRoom, fitsParty } from './RoomProfile.js';
 import { partyOf, rollParty, withParty, smallerParty, partyLabel, PartyLabel, describeParty, numberWord, sharesBeds } from './Party.js';
 import { hash01 } from './Movement.js';
 import { rollPurpose } from './Purpose.js';
+import { rollProfile, checkoutHour, wantsLateCheckout, lateCheckoutPolicy } from './Profile.js';
 import { roomFit, type RoomFeature } from './Preferences.js';
 import { getTotalDemandMultiplier } from './SeasonManager.js';
 import { getReputationPenaltyMultiplier } from './StoryGenerator.js';
@@ -190,6 +191,9 @@ export function processArrivals(
     guest = withParty(guest, rollParty(guest.id, state.day));
     const purpose = rollPurpose(guest.id, partyOf(guest));
     if (purpose) guest = { ...guest, purpose };
+    // Who they are, beyond the trip (their party and purpose lean it; a family is never rowdy)
+    const profile = rollProfile(guest.id, partyOf(guest), purpose, guest.trait);
+    if (profile) guest = { ...guest, profile };
 
     // Front desk at capacity: guest leaves impatiently
     if (checkedInThisHour >= checkInCapacity) {
@@ -271,8 +275,8 @@ export function processArrivals(
  * night is over and it's checkout time (ECONOMY.checkOutHour). The tick at
  * the end of hour 10 happens at 11:00, so that's when 11:00 checkouts leave.
  */
-export function isCheckoutDue(guest: Guest, state: Pick<HotelState, 'day' | 'hour'>): boolean {
-  return state.day - guest.checkInDay >= guest.stayLength && state.hour + 1 >= ECONOMY.checkOutHour;
+export function isCheckoutDue(guest: Guest, state: Pick<HotelState, 'day' | 'hour' | 'lateCheckout'>): boolean {
+  return state.day - guest.checkInDay >= guest.stayLength && state.hour + 1 >= checkoutHour(guest, state);
 }
 
 /** Whether a guest leaves today (their checkout time may not have come yet). */
@@ -281,7 +285,7 @@ export function isCheckoutDay(guest: Guest, day: number): boolean {
 }
 
 export interface DepartureResult {
-  departed: Array<{ guest: Guest; roomId: string; booking: Booking; breakdown: GuestReviewBreakdown }>;
+  departed: Array<{ guest: Guest; roomId: string; booking: Booking; breakdown: GuestReviewBreakdown; lateFee?: number }>;
   events: GameEvent[];
   returningGuestPool: ReturningGuestProfile[];
 }
@@ -293,14 +297,19 @@ export function processDepartures(
   const result: DepartureResult = { departed: [], events: [], returningGuestPool: state.returningGuestPool };
   let pool = [...state.returningGuestPool];
 
-  for (const guest of state.guests) {
-    if (isCheckoutDue(guest, state)) {
-      const room = state.rooms.find(r => r.status === 'occupied' && r.guestId === guest.id);
+  for (const stayed of state.guests) {
+    if (isCheckoutDue(stayed, state)) {
+      const room = state.rooms.find(r => r.status === 'occupied' && r.guestId === stayed.id);
       if (!room) continue;
+      // A night owl who asked for a late checkout: refused (a little put out), or granted (for a fee, maybe)
+      const policy = lateCheckoutPolicy(state);
+      const refused = wantsLateCheckout(stayed) && policy === 'deny';
+      const guest = refused ? { ...stayed, satisfaction: Math.max(0, stayed.satisfaction - GUEST_PROFILE.lateCheckoutRefused) } : stayed;
+      const lateFee = wantsLateCheckout(stayed) && policy === 'fee' ? Math.round(room.pricePerNight * GUEST_PROFILE.lateCheckoutFee) : 0;
 
       const breakdown = calculateGuestReviewBreakdown(room, state, guest, prng);
       const score = breakdown.finalScore;
-      const totalPaid = room.pricePerNight * guest.stayLength;
+      const totalPaid = room.pricePerNight * guest.stayLength + lateFee;
 
       const booking: Booking = {
         id: `booking-${guest.id}`,
@@ -311,13 +320,13 @@ export function processDepartures(
         satisfactionAtCheckout: guest.satisfaction,
       };
 
-      result.departed.push({ guest, roomId: room.id, booking, breakdown });
+      result.departed.push({ guest, roomId: room.id, booking, breakdown, ...(lateFee > 0 ? { lateFee } : {}) });
       result.events.push({
         type: 'guest_departed',
         message: `${partyOf(guest).size > 2 ? PartyLabel(guest) : 'Guest'} checked out (${score.toFixed(1)}/10, $${totalPaid})`,
         data: {
           guestId: guest.id, roomId: room.id, reviewScore: score, totalPaid, partyKind: partyOf(guest).kind, size: partyOf(guest).size,
-          roomFit: breakdown.roomFit, liked: !!breakdown.roomLikes, disliked: !!breakdown.roomDislikes,
+          roomFit: breakdown.roomFit, liked: !!breakdown.roomLikes, disliked: !!breakdown.roomDislikes, noisePenalty: breakdown.noisePenalty,
         },
       });
 
@@ -366,15 +375,14 @@ export function calculateGuestReviewBreakdown(
   const expectedPrice = getPartyFairPrice(room, partyOf(guest), state.starRating);
   const priceFairness = 1 - Math.abs(room.pricePerNight - expectedPrice) / expectedPrice;
 
-  // Proximity-based noise
-  const roomNoise = calculateRoomNoise(room, state);
-  const noisePenalty = noiseToRatingPenalty(roomNoise, guest);
+  // Noise: the nights they slept through (or, with profiles off, the noise now)
+  const noisePenalty = reviewNoisePenalty(room, state, guest);
 
   // Condition and cleanliness
   const conditionBonus = (room.condition - REVIEW.conditionMidpoint) / REVIEW.conditionScale * REVIEW.conditionWeight;
   const cleanlinessBonus = (room.cleanliness - HOUSEKEEPING.cleanlinessMidpoint) / HOUSEKEEPING.cleanlinessScale * HOUSEKEEPING.cleanlinessWeight;
   const decorPenalty = getDecorReviewPenalty(room.decor);
-  const elevatorPenalty = getElevatorWaitPenalty(state, room);
+  const elevatorPenalty = getElevatorWaitPenalty(state, room, guest);
 
   // Facilities the guest actually used this stay (gym, restaurant, pool, shop)
   const facilityBonus = facilityReviewBonus(guest, state.day);

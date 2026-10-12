@@ -1,5 +1,7 @@
-import type { CleaningQuality, DailyCleaningCadence } from '../../simulation/types';
-import { HOUSEKEEPING } from '../../config/balance';
+import type { CleaningQuality, DailyCleaningCadence, LateCheckoutPolicy } from '../../simulation/types';
+import { HOUSEKEEPING, GUEST_PROFILE, ECONOMY } from '../../config/balance';
+import { lateCheckoutPolicy } from '../../simulation/Profile';
+import { checkoutsToday } from '../../simulation/CleaningStatus';
 import { checkHousekeepingCompliance } from '../../simulation/HousekeepingManager';
 import { summarizeCleaning, describeWait, GRUBBY_BELOW, type CleaningWait } from '../../simulation/CleaningStatus';
 import { useController, useLiveClock } from '../context';
@@ -18,6 +20,12 @@ const CADENCES: Array<{ key: DailyCleaningCadence; label: string }> = [
   { key: 'none', label: 'None' },
 ];
 
+const LATE_POLICIES: Array<{ key: LateCheckoutPolicy; label: string }> = [
+  { key: 'deny', label: 'No' },
+  { key: 'free', label: 'Free' },
+  { key: 'fee', label: 'For a fee' },
+];
+
 const floorName = (floor: number) => (floor === 0 ? 'Ground' : `Floor ${floor + 1}`);
 
 /**
@@ -29,6 +37,7 @@ export function HousekeepingPanel() {
   useLiveClock(); // the counts follow the housekeepers through the hour, as the overlay does
   const { turnoverQuality, dailyCadence } = c.state.housekeeping;
   const warning = checkHousekeepingCompliance(c.state);
+  const due = checkoutsToday(c.state);
   const now = summarizeCleaning(c.state, c.gameTime);
   const { turnovers, daily } = now;
   const blocked = now.waits.unreachable ?? 0;
@@ -93,6 +102,27 @@ export function HousekeepingPanel() {
       <div class="dim tiny" style={{ marginTop: '4px' }}>
         Daily cleans are queued at {HOUSEKEEPING.dailyCleaningHour}:00 and done after checkout cleaning.
       </div>
+
+      {GUEST_PROFILE.enabled && (
+        <>
+          <div class="body small" style={{ marginTop: '10px' }}>Late checkout (night owls ask to stay till {GUEST_PROFILE.lateCheckoutHour}:00):</div>
+          <div class="row" style={{ marginTop: '4px' }} role="group" aria-label="Late checkout">
+            {LATE_POLICIES.map(p => (
+              <button key={p.key} class={lateCheckoutPolicy(c.state) === p.key ? 'chosen' : ''} aria-pressed={lateCheckoutPolicy(c.state) === p.key}
+                onClick={() => c.setLateCheckout(p.key)}>{p.label}</button>
+            ))}
+          </div>
+          <div class="dim tiny" style={{ marginTop: '4px' }}>
+            No: they leave at {ECONOMY.checkOutHour}:00, a little put out. Free: their room's ready for the next guest later.
+            For a fee: as free, and they pay {Math.round(GUEST_PROFILE.lateCheckoutFee * 100)}% of a night. Early birds leave before {ECONOMY.checkOutHour}:00 either way.
+          </div>
+          {due.total > 0 && (
+            <div class="tiny" style={{ marginTop: '4px' }}>
+              Still to check out today: {due.total}{due.late > 0 ? ` (${due.late} late, at ${GUEST_PROFILE.lateCheckoutHour}:00)` : ''}
+            </div>
+          )}
+        </>
+      )}
 
       {warning && <div class="bad tiny" style={{ marginTop: '8px' }}>{'⚠'} {warning}</div>}
     </PanelCard>

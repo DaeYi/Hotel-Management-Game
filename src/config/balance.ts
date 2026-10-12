@@ -107,6 +107,7 @@ export const STORY = {
   reviewSemiViralScoreThreshold: 3.0,
   reviewSemiViralPenaltyMultiplier: 0.7, // 30% arrival reduction while active
   reviewSemiViralPenaltyHours: 48, // 2 game-days
+  reviewSemiViralStacks: true, // a second bad review spreading while one already is: deepens the dip (true) or restarts it (false)
 };
 
 // Small hardcoded first-name pool (Satisfaction System Design, point 3). Known,
@@ -180,6 +181,58 @@ export const GUEST_PURPOSES = {
     getaway: { gym: 1.0, restaurant: 1.2, pool: 1.8, shop: 1.0 },
   } as Record<PurposeName, Record<'gym' | 'restaurant' | 'pool' | 'shop', number>>,
 };
+/**
+ * Who guests are, beyond their trip (docs/designs/guest-staff-personalities.md,
+ * Body and Temperament; Profile.ts). Rolled from the booking's id when they
+ * arrive, never from the shared random stream. With profiles off nobody has
+ * one, and the hotel runs exactly as before: noise judged at checkout,
+ * everyone out at 11:00, one walking pace.
+ */
+export const GUEST_PROFILE = {
+  enabled: true,
+  // Chronotype: up early (business travellers and families lean that way), regular, or up late (friends)
+  chronotype: {
+    base: [['early', 0.25], ['regular', 0.55], ['night', 0.2]],
+    business: [['early', 0.4], ['regular', 0.5], ['night', 0.1]],
+    family: [['early', 0.4], ['regular', 0.5], ['night', 0.1]],
+    friends: [['early', 0.15], ['regular', 0.45], ['night', 0.4]],
+  } as Record<string, Array<[ChronotypeName, number]>>,
+  activityOffset: { early: -2, regular: 0, night: 2 } as Record<ChronotypeName, number>, // facility and outing hours move by this
+  sleepHours: { early: [21, 5], regular: [23, 7], night: [1, 9] } as Record<ChronotypeName, [number, number]>,
+  earlyCheckoutHours: [7, 10] as [number, number], // an early bird leaves at one of these hours (inclusive)
+  lateCheckoutHour: 13, // what a night owl asks for
+  lateCheckoutFee: 0.3, // of the room's nightly rate, with the fee policy
+  lateCheckoutRefused: 5, // satisfaction a night owl loses when refused
+  // Mobility: brisk (business), normal, or slow (families lean that way). The paces are a fixed table:
+  // routes are cached per pace, so never compute one
+  mobility: {
+    base: [['brisk', 0.15], ['normal', 0.75], ['limited', 0.1]],
+    business: [['brisk', 0.3], ['normal', 0.65], ['limited', 0.05]],
+    family: [['brisk', 0.05], ['normal', 0.7], ['limited', 0.25]],
+  } as Record<string, Array<[MobilityName, number]>>,
+  pace: { brisk: 0.045, normal: 0.06, limited: 0.09 } as Record<MobilityName, number>, // hours per tile (normal = TRAVEL.guestHoursPerTile)
+  limitedLiftMult: 1.5, // a slow walker minds a wait for the lift more
+  // Sleep sensitivity and rowdiness: the legacy trait sets light sleepers (20%) and rowdy
+  // guests (15%); the rest are rolled, so the overall mix is heavy 20 / normal 60 / light 20
+  // and quiet 20 / normal 65 / rowdy 15
+  heavySleeperChance: 0.25, // of guests who aren't light sleepers
+  quietChance: 0.235, // of guests who aren't rowdy
+  sensitivity: { heavy: 0.5, normal: 1, light: 2 } as Record<SleepName, number>,
+  output: { quiet: 0.8, normal: 1, rowdy: 2.5 } as Record<RowdinessName, number>,
+  rowdyLateHours: [22, 2] as [number, number], // rowdy guests are louder still late at night
+  rowdyLateMult: 1.5,
+  // A night's noise: a guest's review loses this much per unit of noise over the
+  // threshold, summed over their sleep hours, averaged over the nights they stayed
+  // (calibrated so the mean noise penalty is about what it was when noise was judged at checkout)
+  nightPenaltyPerUnit: 1.25,
+  // How much an hour of night noise sours a guest's mood while it lasts, as a multiple of what it costs their review
+  nightDriftWeight: 8,
+  maxNightNoisePenalty: Infinity, // the most a stay's night noise can take off a review
+};
+type ChronotypeName = 'early' | 'regular' | 'night';
+type MobilityName = 'brisk' | 'normal' | 'limited';
+type SleepName = 'heavy' | 'normal' | 'light';
+type RowdinessName = 'quiet' | 'normal' | 'rowdy';
 type PartyKindName = 'solo' | 'business' | 'couple' | 'friends' | 'family';
 type PurposeName = 'business' | 'sightseeing' | 'getaway';
 

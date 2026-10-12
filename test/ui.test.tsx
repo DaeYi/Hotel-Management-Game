@@ -252,6 +252,97 @@ describe('Interface', () => {
     expect(screen.getByRole('group', { name: 'Guests' }).textContent).toBe('Guests:BusinessSightseeingGetawayOther');
   });
 
+  it('a guest card: who they are, their rhythm and quirks, their mood and where they are; it follows them and closes once they have gone', () => {
+    const { controller, flush } = setup();
+    controller.selectTool('standard');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.selectTool(null);
+    const room = { ...controller.state.rooms[0], status: 'occupied' as const, guestId: 'g1' };
+    controller.state = {
+      ...controller.state, day: 2, hour: 23, rooms: [room],
+      guests: [{
+        id: 'g1', name: 'Sam', budget: 300, stayLength: 3, trait: 'normal', satisfaction: 72, checkInDay: 1, isReturning: false, hadNoiseComplaint: false,
+        party: { kind: 'couple', size: 2 }, purpose: 'getaway',
+        profile: { chronotype: 'night', mobility: 'limited', sleep: 'light', rowdiness: 'normal', checkoutHour: 11 },
+        nightNoise: { exposure: 0.5, woken: 1, lastWokenNight: 0 },
+      }],
+    };
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    flush();
+    expect(screen.getByRole('dialog', { name: /Standard Queen/ }).textContent).toContain('Occupied: a couple on a getaway (light sleeper)');
+    fireEvent.click(screen.getByText(/About Sam/));
+    flush();
+    const card = () => screen.getByRole('dialog', { name: 'Sam' }).textContent!;
+    expect(card()).toContain('A couple on a getaway');
+    expect(card()).toContain('Night 2 of 3');
+    expect(card()).toContain('Night owl, sleeps 01:00-09:00, checks out 11:00 (asked for a late checkout: refused)');
+    expect(card()).toContain('Walks slowly');
+    expect(card()).toContain('Light sleeper, woken one night');
+    expect(card()).toContain('72%');
+    expect(card()).toMatch(/In room \d+/); // up at 23:00: a night owl isn't asleep yet
+    // Allowing late checkout shows on their card
+    controller.setLateCheckout('free');
+    flush();
+    expect(card()).toContain('checks out 13:00 (late checkout)');
+    // Up a floor and back: the card stays
+    controller.buildFloor();
+    controller.setFloor(1);
+    flush();
+    expect(screen.getByRole('dialog', { name: 'Sam' })).toBeTruthy();
+    controller.setFloor(0);
+    // Their checkout (the last hour of their stay): the card stays while they walk out, then closes
+    const tick = () => { act(() => (controller as unknown as { doTick(now: number): void }).doTick(0)); flush(); };
+    controller.state = { ...controller.state, day: 4, hour: 10, lateCheckout: 'deny' };
+    tick();
+    expect(controller.selection?.kind).toBe('guest');
+    expect((controller.state.walkers ?? []).some(w => w.guestId === 'g1')).toBe(true);
+    expect(card()).toContain('Checked out, on their way out');
+    expect(card()).toMatch(/Their review: \d/);
+    tick();
+    tick();
+    expect(controller.selection).toBeNull();
+  });
+
+  it('a guest card counts nights from the evening, keeps a party name as they leave, and shows an older guest trait', () => {
+    const { controller, flush } = setup();
+    controller.selectTool('standard');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.selectTool(null);
+    const room = { ...controller.state.rooms[0], status: 'occupied' as const, guestId: 'g1' };
+    const base = { id: 'g1', name: 'Sam', budget: 300, stayLength: 3, satisfaction: 60, checkInDay: 1, isReturning: false, hadNoiseComplaint: false };
+    // 02:00 after their first evening: still their first night. An older save's guest: no profile, a light sleeper by trait
+    controller.state = { ...controller.state, day: 2, hour: 2, rooms: [room], guests: [{ ...base, trait: 'light_sleeper' as const, party: { kind: 'solo' as const, size: 1 } }] };
+    controller.selectGuest('g1', { gridX: 5, gridY: 2 });
+    flush();
+    const card = (name: string | RegExp) => screen.getByRole('dialog', { name }).textContent!;
+    expect(card('Sam')).toContain('Night 1 of 3');
+    expect(card('Sam')).toContain('Light sleeper');
+    controller.state = { ...controller.state, hour: 9 };
+    controller.selectGuest('g1', { gridX: 5, gridY: 2 });
+    flush();
+    expect(card('Sam')).toContain('Night 2 of 3');
+    // A family walking out keeps its name on the card
+    controller.state = {
+      ...controller.state, guests: [],
+      walkers: [{ id: 'leave-g1-1', trait: 'normal', isReturning: false, reason: 'checked_out', trip: [], guestId: 'g1', name: 'Sam', party: { kind: 'family', size: 4 } }],
+    };
+    controller.selectGuest('g1', { gridX: 5, gridY: 2 });
+    flush();
+    expect(card(/family$/)).toContain('Checked out');
+  });
+
+  it('the cleaning panel sets the late checkout; the legend explains the marks on guests', () => {
+    const { controller, flush } = setup();
+    controller.togglePanel('housekeeping');
+    flush();
+    const group = screen.getByRole('group', { name: 'Late checkout' });
+    expect(group.textContent).toBe('NoFreeFor a fee');
+    fireEvent.click(screen.getByText('For a fee'));
+    flush();
+    expect(controller.state.lateCheckout).toBe('fee');
+    expect(screen.getByRole('group', { name: 'Guest marks' }).textContent).toContain('Light sleeper');
+  });
+
   it('a twin room warns that couples would not like separate beds; the gym is popular with business travellers', () => {
     const { controller, flush } = setup();
     controller.selectTool('twin');

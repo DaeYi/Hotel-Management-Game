@@ -1000,6 +1000,7 @@ describe('StoryGenerator', () => {
 
     state = {
       ...state,
+      hour: 12, // midday: both neighbours are up (asleep, they'd make none)
       guests: [
         makeGuest({ id: 'quiet', trait: 'normal' }),
         makeGuest({ id: 'loud', trait: 'party_guest' }),
@@ -1023,6 +1024,7 @@ describe('StoryGenerator', () => {
 
     state = {
       ...state,
+      hour: 12, // midday: both neighbours are up (asleep, they'd make none)
       guests: [makeGuest({ id: 'a', trait: 'normal' }), makeGuest({ id: 'b', trait: 'normal' })],
       rooms: state.rooms.map(r => {
         if (r.gridX === 2 && r.gridY === 1) return { ...r, status: 'occupied' as const, guestId: 'a' };

@@ -4,8 +4,9 @@ import { profileRoom, fitsParty } from './RoomProfile.js';
 import { roomFit, FEATURE_LABELS, type RoomFeature } from './Preferences.js';
 import type { PRNG } from './prng.js';
 import type { GuestReviewBreakdown } from './GuestManager.js';
-import { SATISFACTION, STORY, NOISE, ECONOMY, REVIEW, HOUSEKEEPING } from '../config/balance.js';
-import { calculateRoomNoise, noiseToRatingPenalty, getLoudestNeighborGuestId } from './NoiseManager.js';
+import { SATISFACTION, STORY, NOISE, ECONOMY, REVIEW, HOUSEKEEPING, GUEST_PROFILE } from '../config/balance.js';
+import { calculateRoomNoise, noiseToRatingPenalty, getLoudestNeighborGuestId, nightNoiseThisHour } from './NoiseManager.js';
+import { isSleepHour } from './Profile.js';
 import { formatRoomLabel, isRoomReachable } from './HotelState.js';
 import { roomMoveTrip, isGuestAway } from './GuestMovement.js';
 import { isCheckoutDue } from './GuestManager.js';
@@ -83,8 +84,11 @@ function appendStoryLogEntry(state: HotelState, input: NewEntryInput): { state: 
 // ============================================================================
 
 function deriveSatisfactionTarget(room: Room, state: HotelState, guest: Guest): number {
-  // Noise only bothers a guest who's in to hear it
-  const noisePenalty = isGuestAway(guest, hourStart(state) + 0.5) ? 0 : noiseToRatingPenalty(calculateRoomNoise(room, state), guest);
+  // Noise only bothers a guest who's in to hear it -- with profiles on, only while they're trying to sleep,
+  // an hour of it weighed as a night of it would be in their review
+  const noisePenalty = GUEST_PROFILE.enabled
+    ? nightNoiseThisHour(room, state, guest) * GUEST_PROFILE.nightPenaltyPerUnit * GUEST_PROFILE.nightDriftWeight
+    : isGuestAway(guest, hourStart(state) + 0.5) ? 0 : noiseToRatingPenalty(calculateRoomNoise(room, state), guest);
   const conditionBonus = (room.condition - REVIEW.conditionMidpoint) / REVIEW.conditionScale * REVIEW.conditionWeight;
   const cleanlinessBonus = (room.cleanliness - HOUSEKEEPING.cleanlinessMidpoint) / HOUSEKEEPING.cleanlinessScale * HOUSEKEEPING.cleanlinessWeight;
   // What they like (or don't) about the room: the same as in their review
@@ -156,6 +160,11 @@ export function advanceIncidents(state: HotelState, prng: PRNG, T = hourEnd(stat
     }
 
     if (incident.type === 'noise_complaint') {
+      // With profiles on, a complaint is about the night: while they're up (or out) it waits
+      if (GUEST_PROFILE.enabled && (!isSleepHour(guest, current.hour) || isGuestAway(guest, hourStart(current) + 0.5))) {
+        remaining.push(incident);
+        continue;
+      }
       const roomNoise = calculateRoomNoise(room, current);
       if (roomNoise <= NOISE.penaltyThreshold) {
         // Resolved on its own: noise dropped below the threshold.
@@ -303,7 +312,9 @@ function collectCandidates(state: HotelState): Candidate[] {
     const room = state.rooms.find(r => r.status === 'occupied' && r.guestId === guest.id);
     if (!room) continue;
 
-    if (!guest.hadNoiseComplaint && guest.satisfaction < SATISFACTION.incidentFuelThreshold && !isGuestAway(guest, hourStart(state) + 0.5)) {
+    // Kept awake: in their room, and (with profiles on) in their sleep hours
+    const tryingToSleep = !GUEST_PROFILE.enabled || isSleepHour(guest, state.hour);
+    if (!guest.hadNoiseComplaint && guest.satisfaction < SATISFACTION.incidentFuelThreshold && tryingToSleep && !isGuestAway(guest, hourStart(state) + 0.5)) {
       const roomNoise = calculateRoomNoise(room, state);
       if (roomNoise > NOISE.penaltyThreshold) {
         const culpritGuestId = getLoudestNeighborGuestId(room, state);
@@ -537,6 +548,11 @@ export function checkReviewSemiViral(
   if (todayCount >= STORY.incidentDailyBudget) {
     return { state, events: [] };
   }
+  // One bad review spreading a day: checkouts come at several hours now (early
+  // birds, late checkouts), and each batch mustn't be another chance to go viral
+  if (GUEST_PROFILE.enabled && state.storyLog.some(e => e.type === 'review_semi_viral' && e.day === state.day)) {
+    return { state, events: [] };
+  }
 
   const bad = departures.filter(d => d.booking.reviewScore < STORY.reviewSemiViralScoreThreshold);
   if (bad.length === 0) {
@@ -555,7 +571,7 @@ export function checkReviewSemiViral(
   const nextState: HotelState = {
     ...appended.state,
     activeReputationPenalties: [
-      ...appended.state.activeReputationPenalties,
+      ...(STORY.reviewSemiViralStacks ? appended.state.activeReputationPenalties : []),
       { multiplier: STORY.reviewSemiViralPenaltyMultiplier, hoursRemaining: STORY.reviewSemiViralPenaltyHours },
     ],
   };

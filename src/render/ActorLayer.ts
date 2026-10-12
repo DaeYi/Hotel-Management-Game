@@ -6,6 +6,7 @@ import { positionAt, legsEnd, hash01 } from '../simulation/Movement';
 import { guestFigures, type Figure } from './figures';
 import { BREAK_ROOM } from '../config/balance';
 import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE } from './GridRenderer';
+import { drawQuirk } from './quirks';
 
 // People in the building, drawn exactly where the simulation has them. Nothing
 // here moves anyone: guests' trips (arriving, out at a facility, moving rooms),
@@ -30,6 +31,8 @@ export class ActorLayer {
   private graphics: Phaser.GameObjects.Graphics;
   private planCache = new WeakMap<HotelState, StaffPlan>();
   private away = new Set<string>();
+  private drawn: Array<{ figure: Figure; x: number; y: number; r: number }> = []; // guests drawn last frame, for clicks
+  private selectedGuestId: string | null = null;
 
   constructor(scene: Phaser.Scene) {
     this.graphics = scene.add.graphics().setDepth(6);
@@ -40,8 +43,24 @@ export class ActorLayer {
     return this.away;
   }
 
-  /** Draw everyone on the floor being viewed, where they are at game time t (absolute hours). */
-  update(state: HotelState, currentFloor: number, t: number) {
+  /**
+   * The guest (booking) drawn under a point on the floor plan last frame, if
+   * any: the nearest figure within a few pixels of its dot. Staff aren't
+   * picked, nor people turned away (no booking).
+   */
+  guestAt(px: number, py: number): string | null {
+    let best: { id: string; d: number } | null = null;
+    for (const { figure, x, y, r } of this.drawn) {
+      if (!figure.guestId) continue;
+      const d = Math.hypot(px - x, py - y);
+      if (d <= r + 3 && (!best || d < best.d)) best = { id: figure.guestId, d };
+    }
+    return best?.id ?? null;
+  }
+
+  /** Draw everyone on the floor being viewed, where they are at game time t (absolute hours); the selected guest stands out. */
+  update(state: HotelState, currentFloor: number, t: number, selectedGuestId: string | null = null) {
+    this.selectedGuestId = selectedGuestId;
     // Guests on a trip (walking in, checking in, at a facility, moving rooms)
     // and people walking out: every member of every party
     const guests = guestFigures(state, t);
@@ -96,6 +115,7 @@ export class ActorLayer {
   private draw(state: HotelState, currentFloor: number, figures: Figure[]) {
     const g = this.graphics;
     g.clear();
+    this.drawn = [];
 
     // Front desk staff behind their counters (two per desk at most)
     let seated = getMannedDeskStaff(state);
@@ -104,7 +124,7 @@ export class ActorLayer {
         if (desk.floor !== currentFloor) continue;
         const cx = GRID_OFFSET_X + desk.gridX * TILE_SIZE + TILE_SIZE * (seat === 0 ? 0.33 : 0.67);
         const cy = GRID_OFFSET_Y + desk.gridY * TILE_SIZE + TILE_SIZE * 0.3;
-        this.drawFigure(cx, cy, 'staff', ACTOR_COLORS.frontDesk);
+        this.drawFigure(cx, cy, { id: 'desk', kind: 'staff', color: ACTOR_COLORS.frontDesk, x: 0, y: 0, floor: currentFloor, settled: true });
       }
     }
 
@@ -132,7 +152,7 @@ export class ActorLayer {
       group.sort((a, b) => (a.since ?? -Infinity) - (b.since ?? -Infinity) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
       if (group.length === 1 && !gatheringTiles.has(key)) {
         const f = group[0];
-        this.drawFigure(GRID_OFFSET_X + (Math.round(f.x) + 0.5) * TILE_SIZE, GRID_OFFSET_Y + (Math.round(f.y) + 0.5) * TILE_SIZE, f.kind, f.color, f.ring, f.small);
+        this.drawFigure(GRID_OFFSET_X + (Math.round(f.x) + 0.5) * TILE_SIZE, GRID_OFFSET_Y + (Math.round(f.y) + 0.5) * TILE_SIZE, f);
         continue;
       }
       const taken = new Map<number, number>(); // seat -> people in it
@@ -147,27 +167,34 @@ export class ActorLayer {
         const [sx, sy] = SEATS[seat];
         this.drawFigure(
           GRID_OFFSET_X + (Math.round(f.x) + sx) * TILE_SIZE + squeeze,
-          GRID_OFFSET_Y + (Math.round(f.y) + sy) * TILE_SIZE + squeeze, f.kind, f.color, f.ring, f.small);
+          GRID_OFFSET_Y + (Math.round(f.y) + sy) * TILE_SIZE + squeeze, f);
       }
     }
     for (const f of onFloor) {
       if (f.settled) continue;
       const ox = (hash01(f.id) - 0.5) * TILE_SIZE * 0.3;
       const oy = (hash01(`${f.id}y`) - 0.5) * TILE_SIZE * 0.3;
-      this.drawFigure(GRID_OFFSET_X + (f.x + 0.5) * TILE_SIZE + ox, GRID_OFFSET_Y + (f.y + 0.5) * TILE_SIZE + oy, f.kind, f.color, f.ring, f.small);
+      this.drawFigure(GRID_OFFSET_X + (f.x + 0.5) * TILE_SIZE + ox, GRID_OFFSET_Y + (f.y + 0.5) * TILE_SIZE + oy, f);
     }
+    // Quirk icons last, so a neighbour's dot never covers one
+    for (const { figure, x, y } of this.drawn) if (figure.quirk) drawQuirk(g, x + 6, y - 7, figure.quirk);
   }
 
-  /** Guests are dots (children smaller) and staff are squares, both outlined in white. */
-  private drawFigure(cx: number, cy: number, kind: Figure['kind'], color: number, ring = false, small = false) {
+  /** Guests are dots (children smaller) and staff are squares, both outlined in white; the selected guest's party is circled in gold. */
+  private drawFigure(cx: number, cy: number, f: Figure) {
     const g = this.graphics;
-    g.fillStyle(color, 1);
+    g.fillStyle(f.color, 1);
     g.lineStyle(1.5, 0xffffff, 0.9);
-    if (kind === 'guest') {
-      const r = small ? 3.5 : 5;
+    if (f.kind === 'guest') {
+      const r = f.small ? 3.5 : 5;
       g.fillCircle(cx, cy, r);
       g.strokeCircle(cx, cy, r);
-      if (ring) g.strokeCircle(cx, cy, 8);
+      if (f.ring) g.strokeCircle(cx, cy, 8);
+      if (f.guestId && f.guestId === this.selectedGuestId) {
+        g.lineStyle(2, 0xf1c40f, 1);
+        g.strokeCircle(cx, cy, r + 5);
+      }
+      this.drawn.push({ figure: f, x: cx, y: cy, r });
     } else {
       g.fillRect(cx - 5, cy - 5, 10, 10);
       g.strokeRect(cx - 5, cy - 5, 10, 10);

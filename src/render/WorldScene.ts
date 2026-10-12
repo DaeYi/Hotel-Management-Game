@@ -25,7 +25,10 @@ export class WorldScene extends Phaser.Scene {
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       const tile = this.grid.pointerToGrid(pointer);
-      if (tile) c.tileDown(tile);
+      // A guest walking about (or at a facility): their card; anything else, the tile
+      const guestId = !c.tool && tile ? this.actors.guestAt(pointer.x, pointer.y) : null;
+      if (guestId && tile) c.selectGuest(guestId, tile);
+      else if (tile) c.tileDown(tile);
     });
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       c.tileMove(this.grid.pointerToGrid(pointer), pointer.isDown);
@@ -42,8 +45,9 @@ export class WorldScene extends Phaser.Scene {
     this.grid.renderRooms(state, floor);
     this.grid.renderFixtures(state, floor);
     this.grid.renderFacilities(state, floor);
-    this.actors.update(state, floor, c.gameTime);
-    this.grid.renderGuests(state, floor, this.actors.awayGuestIds());
+    const selectedGuest = c.selection?.kind === 'guest' ? c.selection.id : null;
+    this.actors.update(state, floor, c.gameTime, selectedGuest);
+    this.grid.renderGuests(state, floor, this.actors.awayGuestIds(), selectedGuest);
     this.grid.renderNoise(state, floor);
     this.grid.renderCleaning(state, floor, c.gameTime, c.cleaningOverlay);
     this.grid.renderConstruction(state, floor);

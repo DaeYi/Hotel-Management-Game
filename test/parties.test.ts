@@ -226,6 +226,7 @@ describe('Bigger parties, more of everything', () => {
     let s = hotel(['standard', 'standard', 'standard']);
     s = {
       ...s,
+      hour: 12, // midday: everyone's up (asleep, they'd make none)
       guests: [guest('quiet', SOLO), guest('big', FAMILY4), guest('me', SOLO)],
       rooms: s.rooms.map((r, i) => ({ ...r, status: 'occupied' as const, guestId: ['quiet', 'me', 'big'][i] })),
     };
@@ -361,16 +362,16 @@ describe('Parties walk together', () => {
     const walk = legs[1];
     for (const t of [10.1, walk.start, walk.end, walk.end + 0.2]) {
       const lead = positionAt(legs, t)!;
-      for (let m = 1; m < 4; m++) expect(memberPositionAt(legs, t, m, pace)).toMatchObject({ x: lead.x, y: lead.y, floor: lead.floor });
+      for (let m = 1; m < 4; m++) expect(memberPositionAt(legs, t, m)).toMatchObject({ x: lead.x, y: lead.y, floor: lead.floor });
     }
     const mid = (walk.start + walk.end) / 2;
     const lead = positionAt(legs, mid)!;
-    for (let m = 1; m < 4; m++) expect(memberPositionAt(legs, mid, m, pace)!.x - lead.x).toBeCloseTo(m * PARTY_SPACING, 6);
+    for (let m = 1; m < 4; m++) expect(memberPositionAt(legs, mid, m)!.x - lead.x).toBeCloseTo(m * PARTY_SPACING, 6);
     // No jumps: everyone moves smoothly, and nobody is ever behind the first member
     for (let m = 0; m < 4; m++) {
-      let prev = memberPositionAt(legs, walk.start, m, pace)!;
+      let prev = memberPositionAt(legs, walk.start, m)!;
       for (let t = walk.start; t <= walk.end; t += 0.005) {
-        const at = memberPositionAt(legs, t, m, pace)!;
+        const at = memberPositionAt(legs, t, m)!;
         expect(Math.abs(at.x - prev.x)).toBeLessThan(0.25);
         expect(at.x).toBeGreaterThanOrEqual(positionAt(legs, t)!.x - 1e-9);
         prev = at;
@@ -382,7 +383,7 @@ describe('Parties walk together', () => {
     const route = [tile(3), tile(2), tile(1), tile(0), { gridX: 0, gridY: 1, floor: 1 }, { gridX: 1, gridY: 1, floor: 1 }, { gridX: 2, gridY: 1, floor: 1 }];
     const trip: Leg[] = [makeWalk(route, 20, pace)];
     for (let t = 20; t <= legsEnd(trip); t += 0.005) {
-      const floors = [0, 1, 2, 3].map(m => memberPositionAt(trip, t, m, pace)!.floor);
+      const floors = [0, 1, 2, 3].map(m => memberPositionAt(trip, t, m)!.floor);
       expect(new Set(floors).size, `split across floors at ${t}`).toBe(1);
     }
   });

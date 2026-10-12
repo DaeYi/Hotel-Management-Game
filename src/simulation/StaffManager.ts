@@ -1,6 +1,6 @@
 import type { HotelState, Room, StaffMember, StaffPlan, StaffItinerary, StaffRole, Leg, WalkLeg, TilePos } from './types.js';
-import { STAFF, TRAVEL } from '../config/balance.js';
-import { findRoute, routeFromStreet, routeToStreet, getStaffBases, getAccessibleBreakRooms, isEntranceTile } from './Layout.js';
+import { STAFF, TRAVEL, GUEST_PROFILE } from '../config/balance.js';
+import { findRoute, routeFromStreet, routeToStreet, getStaffBases, getAccessibleBreakRooms, isEntranceTile, stepHours } from './Layout.js';
 import { isRoomReachable } from './HotelState.js';
 import { isGuestAway } from './GuestMovement.js';
 import { hourStart, makeWalk, makeStay, truncateLegs, sameTile, finalTile, positionAt, walkProgress, stepStillOpen } from './Movement.js';
@@ -130,6 +130,24 @@ function jobQueues(state: HotelState, done: { turnover: Map<string, number>; dai
 const roomTile = (room: Room): TilePos => ({ gridX: room.gridX, gridY: room.gridY, floor: room.floor, door: room.door });
 
 /**
+ * When the last of whoever is walking out of a room (a guest who checked
+ * out, one moving rooms) has stepped out of it: the end of their first step
+ * (the others in a party are ahead of the first). The start of the hour if
+ * nobody is.
+ */
+function roomClearAt(state: HotelState, room: Room): number {
+  const T = hourStart(state);
+  let clear = T;
+  const tile = roomTile(room);
+  for (const legs of [...state.guests.map(g => g.trip ?? []), ...(state.walkers ?? []).map(w => w.trip)]) {
+    const first = legs[0];
+    if (!first || first.kind !== 'walk' || first.path.length < 2 || first.start < T - 1e-9 || !sameTile(first.path[0], tile)) continue;
+    clear = Math.max(clear, first.start + stepHours(first.path[0], first.path[1], first.hoursPerTile));
+  }
+  return clear;
+}
+
+/**
  * Plan every housekeeper's and maintenance worker's coming hour from the
  * state at its start. Each worker keeps at the room they were on (if it still
  * needs them), then takes the most urgent unclaimed job; one worker per room.
@@ -248,6 +266,19 @@ export function planStaff(
         }
       }
       claimed.add(job.room.id);
+      // Whoever's leaving the room (checked out, moved) gets out of the way first
+      if (job.kind !== 'daily' && GUEST_PROFILE.enabled) {
+        const clear = roomClearAt(state, job.room);
+        if (clear > t + 1e-9) {
+          const until = Math.min(clear, end);
+          legs.push(makeStay(target, t, until, 'wait'));
+          t = until;
+          if (t >= end - 1e-9) {
+            roomId = job.room.id;
+            break;
+          }
+        }
+      }
       const work = Math.min(job.hours, end - t);
       legs.push(makeStay(target, t, t + work, job.kind === 'repair' ? 'repair' : 'clean', { placeId: job.room.id, job: job.kind }));
       t += work;

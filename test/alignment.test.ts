@@ -14,6 +14,7 @@ import { partyOf, partyLoad } from '../src/simulation/Party.js';
 import { guestFigures } from '../src/render/figures.js';
 import { STAFF, TRAVEL } from '../src/config/balance.js';
 import type { HotelState, Leg } from '../src/simulation/types.js';
+import { guestPace } from '../src/simulation/Profile.js';
 
 function contiguous(legs: Leg[]): boolean {
   for (let i = 1; i < legs.length; i++) if (Math.abs(legs[i].start - legs[i - 1].end) > 1e-6) return false;
@@ -120,6 +121,9 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
         const end = last.kind === 'walk' ? last.path[last.path.length - 1] : last.at;
         if (room && (end.gridX !== room.gridX || end.gridY !== room.gridY || end.floor !== room.floor)) bad('guest trip does not end in their room', g.id);
       }
+      // K: everyone walks at their own pace (a slow walker slowly, a party with them)
+      for (const g of after.guests) for (const l of g.trip ?? []) if (l.kind === 'walk' && Math.abs(l.hoursPerTile - guestPace(g)) > 1e-12) bad('guest walking at the wrong pace', g.id);
+      for (const w of after.walkers ?? []) for (const l of w.trip) if (l.kind === 'walk' && Math.abs(l.hoursPerTile - guestPace(w)) > 1e-12) bad('walker walking at the wrong pace', w.id);
       // per desk, check-ins overlap at most staffPerDesk at once
       for (const c of checkIns) {
         const overlap = checkIns.filter(d => d.desk === c.desk && d.a < c.b - 1e-9 && c.a < d.b - 1e-9).length;
@@ -131,7 +135,7 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
           const n = after.guests.filter(g => g.trip?.some(l => l.kind === 'stay' && l.placeId === f.id && l.start <= t && t < l.end))
             .reduce((sum, g) => sum + partyLoad(partyOf(g).size), 0);
           if (n > facilityCapacity(f) + 1e-9) bad('facility over capacity', f.id);
-          const inside = after.guests.filter(g => g.trip && Array.from({ length: partyOf(g).size }, (_, m) => memberPositionAt(g.trip!, t, m, TRAVEL.guestHoursPerTile))
+          const inside = after.guests.filter(g => g.trip && Array.from({ length: partyOf(g).size }, (_, m) => memberPositionAt(g.trip!, t, m))
             .some(at => at && at.leg.kind === 'stay' && at.leg.placeId === f.id))
             .reduce((sum, g) => sum + partyLoad(partyOf(g).size), 0);
           if (inside > facilityCapacity(f) + 1e-9) bad('more people drawn in a facility than it holds', f.id);
@@ -173,7 +177,7 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
           for (const p of people) {
             if (!p.legs.length || tt < p.legs[0].start || tt >= legsEnd(p.legs)) continue;
             for (let m = 0; m < p.size; m++) {
-              const at = memberPositionAt(p.legs, tt, m, TRAVEL.guestHoursPerTile)!;
+              const at = memberPositionAt(p.legs, tt, m)!;
               if (Math.round(at.x) === room.gridX && Math.round(at.y) === room.gridY && at.floor === room.floor) bad('someone in a room while staff work it', `${p.id}#${m} in ${room.id} (${st.job}) at ${tt}`);
             }
           }
