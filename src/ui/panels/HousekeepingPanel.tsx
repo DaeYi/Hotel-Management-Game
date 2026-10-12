@@ -1,5 +1,5 @@
 import type { CleaningQuality, DailyCleaningCadence, LateCheckoutPolicy } from '../../simulation/types';
-import { HOUSEKEEPING, GUEST_PROFILE, ECONOMY } from '../../config/balance';
+import { HOUSEKEEPING, GUEST_PROFILE, ECONOMY, GUEST_HOUSEKEEPING } from '../../config/balance';
 import { lateCheckoutPolicy } from '../../simulation/Profile';
 import { checkoutsToday } from '../../simulation/CleaningStatus';
 import { checkHousekeepingCompliance } from '../../simulation/HousekeepingManager';
@@ -65,7 +65,8 @@ export function HousekeepingPanel() {
           {why.length > 0 && <span class="dim"> ({why.join('; ')})</span>}
         </li>
         {blocked > 0 && <li class="bad"><CleaningSwatch kind="blocked" />Dirty, housekeepers can't reach: {blocked}</li>}
-        <li><CleaningSwatch kind="due" />Daily cleans due: {daily.due}{daily.cleaning > 0 && <span class="dim"> ({daily.cleaning} being done)</span>}</li>
+        <li><CleaningSwatch kind="due" />Daily cleans due: {daily.due - daily.guestIn}{daily.cleaning > 0 && <span class="dim"> ({daily.cleaning} being done)</span>}</li>
+        {GUEST_HOUSEKEEPING.enabled && GUEST_PROFILE.enabled && <li><CleaningSwatch kind="guest_in" />Daily cleans waiting for guests to go out: {daily.guestIn}</li>}
         <li><CleaningSwatch kind="grubby" />Grubby rooms (under {GRUBBY_BELOW}% clean): {now.grubby}</li>
       </ul>
       {elsewhere.length > 0 && (
@@ -101,6 +102,7 @@ export function HousekeepingPanel() {
       </div>
       <div class="dim tiny" style={{ marginTop: '4px' }}>
         Daily cleans are queued at {HOUSEKEEPING.dailyCleaningHour}:00 and done after checkout cleaning.
+        {GUEST_HOUSEKEEPING.enabled && GUEST_PROFILE.enabled && <> Hangers on the doors: green, make up the room every day (first, and on the off days too); red, do not disturb (only while they're out).</>}
       </div>
 
       {GUEST_PROFILE.enabled && (

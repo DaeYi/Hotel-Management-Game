@@ -1,6 +1,7 @@
 import type { Guest, GuestTrait, Room, HotelState, Booking, GameEvent, ReturningGuestProfile } from './types.js';
 import type { PRNG } from './prng.js';
-import { ECONOMY, GUEST_TRAITS, REVIEW, HOUSEKEEPING, STAFF, AMENITIES, GUEST_NAMES, SATISFACTION, STORY, PARTIES, GUEST_PROFILE, LOYALTY, GUEST_FAVORITES, FACILITY_CONFIG } from '../config/balance.js';
+import { cleanlinessTerm } from './CleaningPreference.js';
+import { ECONOMY, GUEST_TRAITS, REVIEW, STAFF, AMENITIES, GUEST_NAMES, SATISFACTION, STORY, PARTIES, GUEST_PROFILE, LOYALTY, GUEST_FAVORITES, FACILITY_CONFIG } from '../config/balance.js';
 import { getDecorReviewPenalty } from './DecorManager.js';
 import { getCampaignDemandMultiplier } from './MarketingManager.js';
 import { getCheckInCapacity } from './Layout.js';
@@ -215,7 +216,9 @@ export function processArrivals(
     if (pulled?.profile && LOYALTY.enabled && guest.profile) {
       // ...but with the family this time, never rowdy (the fresh roll knows)
       const rowdiness = partyOf(guest).kind === 'family' ? guest.profile.rowdiness : pulled.profile.rowdiness;
-      guest = { ...guest, profile: { ...pulled.profile, rowdiness } };
+      // (someone first here before housekeeping preferences has one now)
+      const housekeeping = pulled.profile.housekeeping ?? guest.profile.housekeeping;
+      guest = { ...guest, profile: { ...pulled.profile, rowdiness, ...(housekeeping ? { housekeeping } : {}) } };
     }
     // Turned away (desk, room, price): with loyalty on, they'll try again another day
     const requeue = () => {
@@ -428,7 +431,7 @@ export function calculateGuestReviewBreakdown(
 
   // Condition and cleanliness
   const conditionBonus = (room.condition - REVIEW.conditionMidpoint) / REVIEW.conditionScale * REVIEW.conditionWeight;
-  const cleanlinessBonus = (room.cleanliness - HOUSEKEEPING.cleanlinessMidpoint) / HOUSEKEEPING.cleanlinessScale * HOUSEKEEPING.cleanlinessWeight;
+  const cleanlinessBonus = cleanlinessTerm(room.cleanliness, guest); // (a guest who wants the room made up daily minds more)
   const decorPenalty = getDecorReviewPenalty(room.decor);
   const elevatorPenalty = getElevatorWaitPenalty(state, room, guest);
 

@@ -9,6 +9,7 @@ import { facilityChanceMult } from './Purpose.js';
 import { activityHour, guestPace, favoriteOf, favoriteChanceMult } from './Profile.js';
 import { guestMood } from './Mood.js';
 import { fallbackOuting } from './OutingManager.js';
+import { isHosting } from './Visitors.js';
 
 // Guests use the hotel's facilities. Each hour boundary, guests who are in
 // their rooms may head out to a facility -- breakfast at the restaurant, a
@@ -131,6 +132,7 @@ export function planFacilityVisits(state: HotelState): HotelState {
   const wants: Array<{ guest: Guest; type: FacilityType; score: number }> = [];
   for (const guest of state.guests) {
     if (isUnderway(guest.trip, T)) continue; // still arriving, or already out (and not yet credited)
+    if (isHosting(state, guest.id, T)) continue; // friends round: staying in
     if (!state.rooms.some(r => r.guestId === guest.id && r.status === 'occupied')) continue;
     if (MOOD.enabled && guestMood(guest) === 'angry') continue; // too cross to enjoy anything
     // A fan wants their favourite whether or not the hotel has one

@@ -231,6 +231,8 @@ function stayStillValid(state: HotelState, stay: StayLeg): boolean {
   }
   if (stay.activity === 'visit') return getOpenFacilities(state).some(f => f.id === stay.placeId && f.door === stay.at.door);
   if (stay.activity === 'away') return isEntranceTile(state, stay.at); // out through a street entrance
+  // A visitor in their host's room: while it's occupied (through its door as it is now: see continueTrip)
+  if (stay.activity === 'in_room') return state.rooms.some(r => r.id === stay.placeId && r.status === 'occupied');
   return true;
 }
 
@@ -294,6 +296,11 @@ function continueTrip(state: HotelState, legs: Leg[], t: number, destination: Ti
       if (!exit) continue;
       leg = { ...leg, at: exit.path[exit.path.length - 1] };
     }
+    // A visitor in their host's room: the room's door may have turned
+    if (leg.kind === 'stay' && leg.activity === 'in_room') {
+      const room = state.rooms.find(r => r.id === (leg as StayLeg).placeId);
+      if (room) leg = { ...leg, at: roomTile(room) };
+    }
     if (leg.kind !== 'stay' || leg.end <= t || !stayStillValid(state, leg)) continue;
     if (leg.activity === 'away' && !notStarted && leg.start < t) {
       // Already out in town: they come back in by this entrance at the same time
@@ -308,8 +315,16 @@ function continueTrip(state: HotelState, legs: Leg[], t: number, destination: Ti
     const start = Math.max(time, leg.start);
     if (start > time && leg.activity === 'check_in') out.push(makeStay(leg.at, time, start, 'wait', { placeId: leg.placeId }));
     const begin = leg.activity === 'check_in' ? start : time;
-    out.push({ ...leg, start: begin, end: begin + length });
+    // A visitor carrying on in their host's room: one stay, not two halves (the visit is one stay for
+    // the noise and the desk). Other stops are left as they always were.
+    const last = out[out.length - 1];
+    if (ongoing && leg.activity === 'in_room' && last && last.kind === 'stay' && last.activity === leg.activity && last.placeId === leg.placeId && Math.abs(last.end - begin) < 1e-9) {
+      out[out.length - 1] = { ...leg, start: last.start, end: begin + length };
+    } else {
+      out.push({ ...leg, start: begin, end: begin + length });
+    }
     time = begin + length;
+    pos = leg.at;
   }
   if (destination === 'street') {
     if (pos) {
@@ -341,7 +356,7 @@ export function rerouteTrips(state: HotelState, t: number): HotelState {
   const walkers = (state.walkers ?? []).map(w => {
     const end = w.trip[w.trip.length - 1];
     const exitsByEntrance = !!end && end.kind === 'walk' && isEntranceTile(state, end.path[end.path.length - 1]);
-    const walkIn = w.reason === 'turned_away' || w.reason === 'impatient';
+    const walkIn = w.reason === 'turned_away' || w.reason === 'impatient' || w.reason === 'visitor';
     if (w.trip.length === 0 || t >= legsEnd(w.trip) || (exitsByEntrance && tripStillWalkable(state, w.trip, t, walkIn))) return w;
     changed = true;
     return { ...w, trip: continueTrip(state, w.trip, t, 'street', walkIn, guestPace(w)) };

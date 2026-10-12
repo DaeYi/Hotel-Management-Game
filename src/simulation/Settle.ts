@@ -2,6 +2,7 @@ import type { HotelState } from './types.js';
 import { layoutKey } from './Layout.js';
 import { replanStaff, staffWorkKey } from './StaffManager.js';
 import { rerouteTrips, checkInLanes } from './GuestMovement.js';
+import { GUEST_HOUSEKEEPING } from '../config/balance.js';
 
 /** Who's checking guests in, and where. */
 function lanesKey(state: HotelState): string {
@@ -22,7 +23,11 @@ export function settleChanges(before: HotelState, after: HotelState, t: number):
   const workChanged = layoutChanged || staffWorkKey(before) !== staffWorkKey(after);
   const lanesChanged = layoutChanged || lanesKey(before) !== lanesKey(after);
   let state = after;
+  // Guests first, so the staff plan around where they'll really be (a do-not-disturb room is
+  // cleaned only while they're out); with housekeeping preferences off, the old order
+  const guestsFirst = GUEST_HOUSEKEEPING.enabled;
+  if (lanesChanged && guestsFirst) state = rerouteTrips(state, t);
   if (workChanged) state = replanStaff(state, t);
-  if (lanesChanged) state = rerouteTrips(state, t);
+  if (lanesChanged && !guestsFirst) state = rerouteTrips(state, t);
   return state;
 }

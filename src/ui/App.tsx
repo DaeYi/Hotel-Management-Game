@@ -1,8 +1,8 @@
 import type { Ref } from 'preact';
 import { PURPOSES, PURPOSE_LABELS } from '../simulation/Purpose';
 import { PURPOSE_COLORS, NO_PURPOSE_COLOR } from '../render/figures';
-import { GUEST_PURPOSES, GUEST_PROFILE, MOOD, LOYALTY } from '../config/balance';
-import { QUIRK_GLYPHS, MOOD_COLORS, RING_COLORS } from '../render/quirks';
+import { GUEST_PURPOSES, GUEST_PROFILE, MOOD, LOYALTY, GUEST_HOUSEKEEPING, HOSTED_NIGHTS } from '../config/balance';
+import { QUIRK_GLYPHS, MOOD_COLORS, RING_COLORS, HANGER_COLORS, VISITORS_COLOR } from '../render/quirks';
 import type { GameController, PanelId } from '../game/GameController';
 import { GameContext, useController, useControllerVersion } from './context';
 import { calculateValuation } from '../simulation/ObjectivesManager';
@@ -197,6 +197,13 @@ function Legend() {
               <span class="swatch ring" style={{ borderColor: toCss(RING_COLORS.vip) }} />VIP
             </>
           )}
+          {GUEST_HOUSEKEEPING.enabled && (
+            <>
+              <span class="swatch hanger" style={{ background: toCss(HANGER_COLORS.makeup) }} />Make up the room
+              <span class="swatch hanger" style={{ background: toCss(HANGER_COLORS.dnd) }} />Do not disturb
+            </>
+          )}
+          {HOSTED_NIGHTS.enabled && <><span class="swatch ring" style={{ borderColor: toCss(VISITORS_COLOR) }} />Friends round (noisy)</>}
           <span class="dim">(click a guest for more)</span>
         </span>
       )}

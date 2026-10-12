@@ -1,5 +1,6 @@
-import type { HotelState, StaffConfig } from '../../simulation/types';
-import { STAFF } from '../../config/balance';
+import type { HotelState, StaffConfig, VisitorPolicy } from '../../simulation/types';
+import { STAFF, HOSTED_NIGHTS, GUEST_PROFILE } from '../../config/balance';
+import { visitorPolicy } from '../../simulation/Visitors';
 import { getMaintenanceStatus, getStaffDailyCost } from '../../simulation/MaintenanceManager';
 import { getUpkeepMultiplier } from '../../simulation/StarRatingManager';
 import { getHousekeepingStatus } from '../../simulation/HousekeepingManager';
@@ -40,8 +41,14 @@ function farthestFloorWithoutCloset(state: HotelState): number | null {
   return worst?.floor ?? null;
 }
 
+const VISITOR_POLICIES: Array<{ key: VisitorPolicy; label: string }> = [
+  { key: 'ask', label: 'Ask them to leave' },
+  { key: 'allow', label: 'Let them stay' },
+];
+
 export function StaffPanel() {
-  const { state } = useController();
+  const c = useController();
+  const { state } = c;
 
   const desks = getAccessibleDesks(state).length;
   const seated = getMannedDeskStaff(state);
@@ -67,6 +74,22 @@ export function StaffPanel() {
     <PanelCard title="STAFF">
       <StaffRow label={`Front Desk (${formatMoney(STAFF.frontDesk.dailyWage)}/day)`} staffKey="frontDesk"
         status={`Check-in: ${getCheckInCapacity(state)}/hr at ${desks} desk${desks === 1 ? '' : 's'}${deskWarning}`} />
+      {HOSTED_NIGHTS.enabled && GUEST_PROFILE.enabled && (
+        <div class="stack" style={{ marginTop: '6px' }}>
+          <div class="body small">When a neighbour complains about a guest's visitors at night:</div>
+          <div class="row" role="group" aria-label="Visitors">
+            {VISITOR_POLICIES.map(p => (
+              <button key={p.key} class={visitorPolicy(state) === p.key ? 'chosen' : ''} aria-pressed={visitorPolicy(state) === p.key}
+                onClick={() => c.setVisitorPolicy(p.key)}>{p.label}</button>
+            ))}
+          </div>
+          <div class="dim tiny">
+            Ask: the front desk sends them home, and the host minds ({HOSTED_NIGHTS.hostPenalty} points of mood). Let them stay: they go
+            by {String(HOSTED_NIGHTS.leaveHours[1]).padStart(2, '0')}:00, but a neighbour still kept awake {HOSTED_NIGHTS.complaintGraceHours} hours on checks out early.
+            You can also ask from the room's card at any time.
+          </div>
+        </div>
+      )}
       <hr class="divider" />
       <StaffRow label={`Housekeepers (${formatMoney(STAFF.housekeeping.dailyWage)}/day)`} staffKey="housekeepers"
         status={`Cleaning: ${hk.roomsBeingCleaned}${hk.roomsWaiting > 0 ? ` (${hk.roomsWaiting} waiting!)` : ''}  |  Busy day: ${Math.round(hk.hoursNeeded)}h of ${hk.hoursAvailable}h`} />

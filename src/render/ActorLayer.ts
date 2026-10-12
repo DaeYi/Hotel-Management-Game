@@ -51,9 +51,10 @@ export class ActorLayer {
   guestAt(px: number, py: number): string | null {
     let best: { id: string; d: number } | null = null;
     for (const { figure, x, y, r } of this.drawn) {
-      if (!figure.guestId) continue;
+      const id = figure.guestId ?? figure.opens; // a visitor: their host
+      if (!id) continue;
       const d = Math.hypot(px - x, py - y);
-      if (d <= r + 3 && (!best || d < best.d)) best = { id: figure.guestId, d };
+      if (d <= r + 3 && (!best || d < best.d)) best = { id, d };
     }
     return best?.id ?? null;
   }

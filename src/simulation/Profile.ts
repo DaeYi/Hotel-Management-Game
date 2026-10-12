@@ -1,5 +1,5 @@
 import type { Chronotype, FacilityType, Guest, GuestProfile, GuestTrait, HotelState, LateCheckoutPolicy, Mobility, Party, Purpose, Rowdiness, SleepSensitivity } from './types.js';
-import { ECONOMY, GUEST_PROFILE, NOISE, TRAVEL, GUEST_FAVORITES } from '../config/balance.js';
+import { ECONOMY, GUEST_PROFILE, NOISE, TRAVEL, GUEST_FAVORITES, GUEST_HOUSEKEEPING } from '../config/balance.js';
 import { hash01 } from './Movement.js';
 import { pick } from './Party.js';
 
@@ -26,7 +26,10 @@ export function rollProfile(id: string, party: Party, purpose: Purpose | undefin
   // The facility they seek out (business travellers the gym, families and getaways the pool)
   const favoriteLean = lean === 'business' || lean === 'family' ? lean : purpose === 'getaway' ? 'getaway' : 'base';
   const favorite = GUEST_FAVORITES.enabled ? pick(GUEST_FAVORITES.byLean[favoriteLean], hash01(`${id}#favorite`)) : undefined;
-  return { chronotype, mobility, sleep, rowdiness, checkoutHour, ...(favorite ? { favorite } : {}) };
+  // When they want their room cleaned (a business traveller made up daily, a getaway left alone)
+  const housekeepingLean = lean === 'business' ? 'business' : purpose === 'getaway' ? 'getaway' : 'base';
+  const housekeeping = GUEST_HOUSEKEEPING.enabled ? pick(GUEST_HOUSEKEEPING.byLean[housekeepingLean], hash01(`${id}#housekeeping`)) : undefined;
+  return { chronotype, mobility, sleep, rowdiness, checkoutHour, ...(favorite ? { favorite } : {}), ...(housekeeping ? { housekeeping } : {}) };
 }
 
 /** A guest's favourite facility (none: no favourite, or favourites off). */
@@ -116,10 +119,17 @@ export function noiseSensitivity(guest: Pick<Guest, 'profile' | 'trait'>): numbe
   return guest.profile ? GUEST_PROFILE.sensitivity[guest.profile.sleep] : NOISE.traitNoiseSensitivity[guest.trait] ?? 1;
 }
 
-/** How loud a guest is, as a multiple of the usual, at an hour of the day (by their legacy trait, without a profile). */
-export function noiseOutputMult(guest: Pick<Guest, 'profile' | 'trait'>, hour: number): number {
+/**
+ * How loud a guest is, as a multiple of the usual, at an hour of the day (by
+ * their legacy trait, without a profile). A rowdy guest is louder still late
+ * at night -- unless the front desk asked their visitors to leave (at time t
+ * or before, that night): then they keep it down.
+ */
+export function noiseOutputMult(guest: Pick<Guest, 'profile' | 'trait' | 'hostedNight'>, hour: number, t?: number): number {
   if (!guest.profile) return NOISE.traitNoiseOutput[guest.trait] ?? 1;
-  const late = guest.profile.rowdiness === 'rowdy' && inHours(hour, GUEST_PROFILE.rowdyLateHours) ? GUEST_PROFILE.rowdyLateMult : 1;
+  const asked = guest.hostedNight?.keptDownAt;
+  const keptDown = asked !== undefined && t !== undefined && t >= asked && t < guest.hostedNight!.day * 24 + GUEST_PROFILE.rowdyLateHours[1];
+  const late = guest.profile.rowdiness === 'rowdy' && inHours(hour, GUEST_PROFILE.rowdyLateHours) && !keptDown ? GUEST_PROFILE.rowdyLateMult : 1;
   return GUEST_PROFILE.output[guest.profile.rowdiness] * late;
 }
 

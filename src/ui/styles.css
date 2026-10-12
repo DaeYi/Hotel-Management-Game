@@ -104,6 +104,7 @@ button.warn { color: #e67e22; background: #3a2a1a; }
 .legend .swatch.round { border-radius: 50%; }
 .legend-face { display: inline-block; margin: 0 3px 0 6px; vertical-align: -1px; }
 .legend .swatch.ring { border-radius: 50%; border: 2px solid; box-sizing: border-box; margin-left: 6px; }
+.legend .swatch.hanger { width: 5px; height: 9px; border: 1px solid #1b1b2b; margin-left: 6px; }
 
 /* ---------- Cards ---------- */
 

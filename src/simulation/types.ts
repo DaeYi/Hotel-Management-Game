@@ -22,6 +22,8 @@ export type Mobility = 'brisk' | 'normal' | 'limited';
 export type SleepSensitivity = 'heavy' | 'normal' | 'light';
 /** How much noise a guest makes. */
 export type Rowdiness = 'quiet' | 'normal' | 'rowdy';
+/** When a guest wants their room cleaned: only while they're out (do not disturb), as the hotel does it, or every day (see CleaningPreference.ts). */
+export type HousekeepingPreference = 'dnd' | 'standard' | 'makeup';
 /** Who a guest is, beyond their trip: rolled once when they arrive and kept (see Profile.ts). */
 export interface GuestProfile {
   chronotype: Chronotype;
@@ -30,6 +32,7 @@ export interface GuestProfile {
   rowdiness: Rowdiness;
   checkoutHour: number; // when they'd like to leave on their last morning (an early bird's 07-10; 11 otherwise; a night owl asks for late checkout on top)
   favorite?: FacilityType | 'none'; // the facility they seek out (absent on 1a-era profiles: no preference either way)
+  housekeeping?: HousekeepingPreference; // when they want their room cleaned (absent on older profiles: standard)
 }
 /** How a guest feels right now, from their satisfaction (see Mood.ts). */
 export type Mood = 'delighted' | 'content' | 'irritated' | 'angry';
@@ -42,6 +45,8 @@ export interface GuestLoyalty {
   lastReview?: number;
   oldRoom?: boolean; // they got their old room back this stay
 }
+/** What the front desk does when a neighbour complains about a guest's visitors: ask them to leave, or let them stay. */
+export type VisitorPolicy = 'ask' | 'allow';
 /** Whether a night owl may stay till the late checkout: no, yes, or yes for a fee. */
 export type LateCheckoutPolicy = 'deny' | 'free' | 'fee';
 export type RoomStatus = 'vacant' | 'occupied' | 'cleaning' | 'renovating';
@@ -150,6 +155,10 @@ export interface Guest {
   // Facilities this guest actually used this stay (best level used, and the
   // day of the last visit): the facility part of their review. See FacilityManager.ts.
   facilitiesUsed?: Partial<Record<FacilityType, { level: number; day: number; today?: number; visits?: number; lastAt?: number }>>; // (today/visits/lastAt: their favourite only)
+  // Daily cleans this stay: done, and missed (still waiting when the housekeepers went home). See CleaningPreference.ts.
+  cleans?: { done: number; missed: number };
+  // The night they have friends round (see Visitors.ts): the day it began, how many came, and when the front desk asked them to leave
+  hostedNight?: { day: number; visitors: number; keptDownAt?: number; complainedBy?: string };
 }
 
 /** A tile in the building: (gridX, gridY) on a floor. A `door` means the tile is entered through that side only (a room or facility). */
@@ -195,7 +204,7 @@ export interface Walker {
   id: string;
   trait: GuestTrait;
   isReturning: boolean;
-  reason: 'checked_out' | 'walked_out' | 'turned_away' | 'impatient';
+  reason: 'checked_out' | 'walked_out' | 'turned_away' | 'impatient' | 'visitor'; // visitor: a hosted night's friends (see Visitors.ts)
   trip: Leg[];
   party?: Party; // the whole party walks it (absent: one person)
   purpose?: Purpose; // why they came (for their colour)
@@ -204,6 +213,7 @@ export interface Walker {
   name?: string;
   stays?: number; // their stays with the hotel (the ring's colour)
   mood?: Mood; // how they left
+  hostId?: string; // a visitor: the guest they've come to see
 }
 
 export type StaffRole = 'housekeeper' | 'maintenance';
@@ -266,6 +276,7 @@ export interface ActiveIncident {
   stage: IncidentStage;
   hoursRemaining: number; // grace period countdown before escalation
   chainId: string; // links this incident's stages to their StoryLogEntry thread
+  about?: 'visitors'; // a noise complaint about a hosted night's visitors (see Visitors.ts)
 }
 
 export interface StoryLogEntry {
@@ -320,6 +331,7 @@ export interface NoiseSource {
 
 export interface HotelState {
   lateCheckout?: LateCheckoutPolicy; // absent: deny (see Profile.lateCheckoutPolicy)
+  visitorPolicy?: VisitorPolicy; // absent: ask (see Visitors.visitorPolicy)
   // Today's let-downs at facilities, so far (recorded in dailyStats at the end of the day)
   facilityDemand?: { day: number; wanted: Partial<Record<FacilityType, number>>; full: Partial<Record<FacilityType, number>>; tooFar: Partial<Record<FacilityType, number>>; fullAt?: Record<string, number> };
   cash: number;
@@ -434,7 +446,7 @@ export interface TickResult {
 }
 
 export interface GameEvent {
-  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'party_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked' | 'renovation_complete' | 'campaign_ended' | 'floor_built' | 'regular_lost';
+  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'party_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked' | 'renovation_complete' | 'campaign_ended' | 'floor_built' | 'regular_lost' | 'visitors_asked_to_leave' | 'dnd_rooms_left';
   message: string;
   data?: Record<string, unknown>;
 }

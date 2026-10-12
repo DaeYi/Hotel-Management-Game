@@ -1,9 +1,11 @@
 import type { HotelState, Room, StaffMember, StaffPlan, StaffItinerary, StaffRole, Leg, WalkLeg, TilePos } from './types.js';
-import { STAFF, TRAVEL, GUEST_PROFILE } from '../config/balance.js';
-import { findRoute, routeFromStreet, routeToStreet, getStaffBases, getAccessibleBreakRooms, isEntranceTile, stepHours } from './Layout.js';
+import { STAFF, TRAVEL, GUEST_PROFILE, GUEST_HOUSEKEEPING } from '../config/balance.js';
+import { findRoute, routeFromStreet, routeToStreet, getStaffBases, getAccessibleBreakRooms, isEntranceTile, stepHours, doorTile } from './Layout.js';
 import { isRoomReachable } from './HotelState.js';
 import { isGuestAway } from './GuestMovement.js';
-import { hourStart, makeWalk, makeStay, truncateLegs, sameTile, finalTile, positionAt, walkProgress, stepStillOpen } from './Movement.js';
+import { hourStart, makeWalk, makeStay, truncateLegs, sameTile, finalTile, positionAt, walkProgress, stepStillOpen, legsEnd } from './Movement.js';
+import { guestsById } from './Party.js';
+import { housekeepingPrefOf, dndOpening, dndCleanStart, dndSetOff } from './CleaningPreference.js';
 
 // Housekeepers and maintenance workers are people with a place in the
 // building. Each hour boundary, every one of them gets an itinerary for the
@@ -109,6 +111,7 @@ function jobQueues(state: HotelState, done: { turnover: Map<string, number>; dai
   const guestOut = (r: Room) => state.guests.some(g => g.id === r.guestId && isGuestAway(g, T));
   const left = (r: Room, kind: 'turnover' | 'daily') =>
     (kind === 'turnover' ? r.cleaningHoursRemaining : r.dailyCleanHoursRemaining) - (done[kind].get(r.id) ?? 0);
+  const dailyRooms = state.rooms.filter(r => r.status === 'occupied' && left(r, 'daily') > 1e-9 && reachable(r));
   const housekeeping: Job[] = [
     // Turnovers first (they block bookings), soonest-finished first
     ...state.rooms.filter(r => r.status === 'cleaning' && left(r, 'turnover') > 1e-9 && reachable(r))
@@ -116,8 +119,8 @@ function jobQueues(state: HotelState, done: { turnover: Map<string, number>; dai
       .map(room => ({ room, kind: 'turnover' as const, hours: left(room, 'turnover') })),
     // Then the daily cleans queued at HOUSEKEEPING.dailyCleaningHour: rooms
     // whose guest is out first (nobody to disturb), then dirtiest first
-    ...state.rooms.filter(r => r.status === 'occupied' && left(r, 'daily') > 1e-9 && reachable(r))
-      .sort((a, b) => Number(!guestOut(a)) - Number(!guestOut(b)) || a.cleanliness - b.cleanliness)
+    ...(GUEST_HOUSEKEEPING.enabled ? dailyByPreference(state, dailyRooms, r => left(r, 'daily')) : dailyRooms
+      .sort((a, b) => Number(!guestOut(a)) - Number(!guestOut(b)) || a.cleanliness - b.cleanliness))
       .map(room => ({ room, kind: 'daily' as const, hours: left(room, 'daily') })),
   ];
   const maintenance: Job[] = state.rooms
@@ -125,6 +128,30 @@ function jobQueues(state: HotelState, done: { turnover: Map<string, number>; dai
     .sort((a, b) => a.condition - b.condition) // worst condition first
     .map(room => ({ room, kind: 'repair' as const, hours: Infinity }));
   return { housekeeper: housekeeping, maintenance };
+}
+
+/**
+ * The daily cleans in order, with housekeeping preferences on: do-not-disturb
+ * rooms whose guests are out (or going out) this hour first, the soonest back
+ * first -- the chance passes; then the rooms whose guests want them made up
+ * daily; then the rest. Among those, rooms whose guests are out halfway
+ * through the hour first (about when a housekeeper gets there), then the
+ * dirtiest. A do-not-disturb room with nobody going out this hour isn't on
+ * the list.
+ */
+function dailyByPreference(state: HotelState, rooms: Room[], hours: (r: Room) => number): Room[] {
+  const T = hourStart(state);
+  const guests = guestsById(state);
+  const ranked = rooms.map(room => {
+    const guest = guests.get(room.guestId ?? '');
+    const pref = housekeepingPrefOf(guest);
+    const closes = pref === 'dnd' && guest ? dndOpening(guest, room, T, T + 1, hours(room) + TRAVEL.hoursPerTile) : null; // (stepping out; the planner checks exactly)
+    const rank = pref === 'dnd' ? (closes === null ? -1 : 0) : pref === 'makeup' ? 1 : 2;
+    const out = !!guest && isGuestAway(guest, T + 0.5);
+    return { room, rank, closes: closes ?? Infinity, out };
+  }).filter(r => r.rank >= 0);
+  ranked.sort((a, b) => a.rank - b.rank || a.closes - b.closes || Number(!a.out) - Number(!b.out) || a.room.cleanliness - b.room.cleanliness);
+  return ranked.map(r => r.room);
 }
 
 const roomTile = (room: Room): TilePos => ({ gridX: room.gridX, gridY: room.gridY, floor: room.floor, door: room.door });
@@ -241,41 +268,141 @@ export function planStaff(
     // a way to it from here, so a worker who's cut off doesn't hog the queue.
     const queue = queues[m.role];
     const unreachable = new Set<string>();
+    // Do-not-disturb rooms turned down at a moment (their guests not out yet, or back too soon): tried again once time moves on
+    const notNow = new Map<string, number>();
+    const turnDown = (id: string) => {
+      notNow.set(id, t);
+      claimed.delete(id);
+    };
+    const dndGuestOf = (j: Job) => (j.kind === 'daily' && GUEST_HOUSEKEEPING.enabled ? state.guests.find(g => g.id === j.room.guestId) : undefined);
+    const isDnd = (j: Job) => j.kind === 'daily' && GUEST_HOUSEKEEPING.enabled && housekeepingPrefOf(dndGuestOf(j)) === 'dnd';
+    /** The way to a room: up to the hallway tile at its door, and the step in (none when already there). A do-not-disturb clean also allows for the step back out (out: the room to themselves till then). */
+    const approachTo = (from: TilePos, j: Job) => {
+      const target = roomTile(j.room);
+      if (sameTile(from, target)) return { route: null, approach: 0, step: 0 };
+      const route = findRoute(state, from, target, pace);
+      if (!route) return null;
+      const step = stepHours(route.path[route.path.length - 2], target, pace);
+      return { route, approach: route.hours - step, step };
+    };
+    /**
+     * The soonest do-not-disturb room whose party goes out (for long enough)
+     * later this hour: when to set off to be at its door as they go. From the
+     * resting place if there's time to get there and wait, else from here.
+     */
+    const nextDndSetOff = (): { at: number; home: boolean; rest?: { path: TilePos[] }; restPlaceId?: string } | null => {
+      if (!pos || !GUEST_HOUSEKEEPING.enabled) return null;
+      const home = restingPlace(state, pos.floor);
+      const toRest = home && !sameTile(pos, home.at) ? findRoute(state, pos, home.at, pace) : null;
+      let best: { at: number; home: boolean; rest?: { path: TilePos[] }; restPlaceId?: string } | null = null;
+      // In a room (one just cleaned): never wait in it -- step out into the hallway first
+      const inRoom = state.rooms.find(r => sameTile(r, pos));
+      const outside = inRoom ? { ...doorTile(inRoom, inRoom.door) } : null;
+      const stepOut = outside ? { path: [pos, outside] } : null;
+      const waitAt = outside ?? pos;
+      const waitFrom = t + (stepOut ? stepHours(pos, outside!, pace) : 0);
+      for (const j of queue) {
+        if (claimed.has(j.room.id) || unreachable.has(j.room.id) || !isDnd(j)) continue;
+        const guest = dndGuestOf(j)!;
+        const here = approachTo(waitAt, j);
+        if (!here) continue;
+        const fromHere = dndSetOff(guest, j.room, waitFrom, here.approach, j.hours + here.step + pace, end);
+        if (fromHere === null) continue;
+        let option: { at: number; home: boolean; rest?: { path: TilePos[] }; restPlaceId?: string } = { at: fromHere, home: false, ...(stepOut ? { rest: stepOut } : {}) };
+        if (home && (toRest || sameTile(pos, home.at))) {
+          const fromHome = approachTo(home.at, j);
+          const arrive = t + (toRest ? toRest.hours : 0);
+          const setOff = fromHome ? dndSetOff(guest, j.room, arrive, fromHome.approach, j.hours + fromHome.step + pace, end) : null;
+          if (setOff !== null) option = { at: setOff, home: true, ...(toRest ? { rest: toRest } : {}), ...(home.breakRoomId ? { restPlaceId: home.breakRoomId } : {}) };
+        }
+        if (!best || option.at < best.at) best = option;
+      }
+      return best;
+    };
     let job: Job | undefined = sticky.get(m.id);
     // Still walking to it all hour (a long way up): it stays theirs into the next hour
     if (job && t >= end - 1e-9) roomId = job.room.id;
     while (t < end - 1e-9) {
       if (!job) {
-        job = queue.find(j => !claimed.has(j.room.id) && !unreachable.has(j.room.id));
-        if (!job) break;
+        job = queue.find(j => !claimed.has(j.room.id) && !unreachable.has(j.room.id) && notNow.get(j.room.id) !== t);
+        if (!job) {
+          // Nothing to do now, but a do-not-disturb party going out later this hour: be at their door as they go
+          const later = nextDndSetOff();
+          if (later === null) break;
+          // (resting, if they can get to the resting place in time; else waiting where they are)
+          if (later.rest) walk(later.rest);
+          legs.push(later.home ? makeStay(pos!, t, later.at, 'rest', later.restPlaceId ? { placeId: later.restPlaceId } : {}) : makeStay(pos!, t, later.at, 'wait'));
+          t = later.at;
+          continue;
+        }
       }
       const target = roomTile(job.room);
-      if (!sameTile(pos, target)) {
-        const route = findRoute(state, pos!, target, pace);
-        if (!route) {
-          unreachable.add(job.room.id);
-          claimed.delete(job.room.id); // let someone who can get there have it
+      const way = approachTo(pos!, job);
+      if (!way) {
+        unreachable.add(job.room.id);
+        claimed.delete(job.room.id); // let someone who can get there have it
+        job = undefined;
+        continue;
+      }
+      if (isDnd(job)) {
+        // Do not disturb: wait outside the door, step in only once the whole party is out,
+        // and only if they'll stay out till it's done
+        const guest = dndGuestOf(job)!;
+        if (!guest || dndCleanStart(guest, job.room, t + way.approach, job.hours + way.step + pace) === null) {
+          turnDown(job.room.id);
           job = undefined;
           continue;
         }
         claimed.add(job.room.id);
-        walk(route);
-        if (t >= end) {
+        if (way.route) walk({ path: way.route.path.slice(0, -1) });
+        if (t >= end - 1e-9) {
           roomId = job.room.id; // still on the way: keep at it next hour
           break;
         }
-      }
-      claimed.add(job.room.id);
-      // Whoever's leaving the room (checked out, moved) gets out of the way first
-      if (job.kind !== 'daily' && GUEST_PROFILE.enabled) {
-        const clear = roomClearAt(state, job.room);
-        if (clear > t + 1e-9) {
-          const until = Math.min(clear, end);
-          legs.push(makeStay(target, t, until, 'wait'));
+        // (timed from when they're actually at the door)
+        const enter = dndCleanStart(guest, job.room, t, job.hours + way.step + pace);
+        if (enter === null) {
+          turnDown(job.room.id);
+          job = undefined;
+          continue;
+        }
+        if (enter > t + 1e-9) {
+          const until = Math.min(enter, end);
+          legs.push(makeStay(pos!, t, until, 'wait'));
           t = until;
           if (t >= end - 1e-9) {
             roomId = job.room.id;
             break;
+          }
+        }
+        if (way.route) {
+          walk({ path: [pos!, target] });
+          if (t >= end - 1e-9) {
+            roomId = job.room.id;
+            break;
+          }
+        }
+      } else {
+        if (way.route) {
+          claimed.add(job.room.id);
+          walk(way.route);
+          if (t >= end) {
+            roomId = job.room.id; // still on the way: keep at it next hour
+            break;
+          }
+        }
+        claimed.add(job.room.id);
+        // Whoever's leaving the room (checked out, moved) gets out of the way first
+        if (job.kind !== 'daily' && GUEST_PROFILE.enabled) {
+          const clear = roomClearAt(state, job.room);
+          if (clear > t + 1e-9) {
+            const until = Math.min(clear, end);
+            legs.push(makeStay(target, t, until, 'wait'));
+            t = until;
+            if (t >= end - 1e-9) {
+              roomId = job.room.id;
+              break;
+            }
           }
         }
       }
@@ -365,7 +492,9 @@ export function replanStaff(state: HotelState, t: number): HotelState {
       }
     }
     const cut = truncateLegs(it.legs, t);
-    done.set(m.id, cut.legs);
+    // Stood where they'd got to since: say so, so the hour has no holes
+    const reached = cut.legs.length > 0 ? legsEnd(cut.legs) : it.legs[0].start;
+    done.set(m.id, cut.at && t > reached + 1e-12 ? [...cut.legs, makeStay(cut.at, reached, t, 'wait')] : cut.legs);
     return { ...m, at: cut.at ?? finalTile(it.legs), carry: undefined, roomId };
   });
   const sofar: StaffPlan = { start: plan.start, itineraries: [...done].map(([staffId, legs]) => ({ staffId, legs, end: { at: null } })) };

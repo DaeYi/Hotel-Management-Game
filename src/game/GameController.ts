@@ -1,6 +1,8 @@
 import type {
   HotelState, RoomType, FacilityType, TileType, StaffConfig, AmenityTier, CleaningQuality, DailyCleaningCadence, GameEvent, FixtureType, Direction, Furnishing, LateCheckoutPolicy,
+  VisitorPolicy,
 } from '../simulation/types';
+import { askToKeepItDown } from '../simulation/HostedNights';
 import {
   createStarterHotel, addFixture, demolishFixture, demolishElevator, addRoom, setRoomPrice, repairRoom, demolishRoom,
   addFacility, demolishFacility, renovateRoom, renovateFacility, upgradeFacility, addElevator, buildFloor, setRoomDoor, setFacilityDoor,
@@ -434,6 +436,19 @@ export class GameController {
   /** Whether night owls may stay till the late checkout: no, yes, or yes for a fee. */
   setLateCheckout(policy: LateCheckoutPolicy) {
     this.apply({ ...this.state, lateCheckout: policy });
+  }
+
+  /** What the front desk does when a neighbour complains about a guest's visitors. */
+  setVisitorPolicy(policy: VisitorPolicy) {
+    this.apply({ ...this.state, visitorPolicy: policy });
+  }
+
+  /** The front desk asks a guest's visitors to leave, now. */
+  askVisitorsToLeave(hostId: string) {
+    const result = askToKeepItDown(this.state, hostId, this.gameTime);
+    if (!result) return;
+    this.apply(result.state);
+    this.toasts.add(result.events, performance.now(), this.storyLogVisible);
   }
 
   // === Player actions ===

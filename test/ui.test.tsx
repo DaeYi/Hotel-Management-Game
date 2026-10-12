@@ -551,3 +551,79 @@ describe('Interface', () => {
     expect(screen.queryByRole('dialog', { name: 'Start a new game' })).toBeNull();
   });
 });
+
+describe('Guests and service', () => {
+  /** One standard room at (5, 2) with this guest in it, at 23:00 on day 3, with someone at the desk and a housekeeper. */
+  function oneRoom(guest: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+    const { controller, flush } = setup();
+    controller.selectTool('standard');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.selectTool(null);
+    const room = { ...controller.state.rooms[0], status: 'occupied' as const, guestId: 'h' };
+    controller.state = {
+      ...controller.state, day: 3, hour: 23, rooms: [room], staff: { ...controller.state.staff, frontDesk: 1, housekeepers: 1 },
+      guests: [{
+        id: 'h', name: 'Kit', budget: 300, stayLength: 3, trait: 'normal', satisfaction: 60, checkInDay: 2, isReturning: false, hadNoiseComplaint: false,
+        profile: { chronotype: 'regular', mobility: 'normal', sleep: 'normal', rowdiness: 'rowdy', checkoutHour: 11 }, ...guest,
+      }] as never,
+      ...extra,
+    };
+    return { controller, flush, room };
+  }
+
+  it('friends round: the room and guest cards say so, and the front desk can ask them to leave (once)', () => {
+    const T = 2 * 24 + 23;
+    const { controller, flush, room } = oneRoom({ hostedNight: { day: 3, visitors: 2 } });
+    const tile = { gridX: room.gridX, gridY: room.gridY, floor: 0, door: room.door };
+    controller.state = {
+      ...controller.state,
+      walkers: [{
+        id: 'visit-h', trait: 'normal', isReturning: false, reason: 'visitor', hostId: 'h', party: { kind: 'friends', size: 2 },
+        trip: [{ kind: 'stay', at: tile, start: T - 0.5, end: T + 2, activity: 'in_room', placeId: room.id }, { kind: 'walk', start: T + 2, end: T + 2.5, path: [tile, { gridX: 5, gridY: 1, floor: 0 }], hoursPerTile: 0.5 }],
+      }],
+    };
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    flush();
+    const roomCard = () => screen.getByRole('dialog', { name: /Standard Queen/ }).textContent!;
+    expect(roomCard()).toContain('Visitors:    2 visitors since 22:30, leaving about 01:00');
+    fireEvent.click(screen.getByText(/About Kit/));
+    flush();
+    expect(screen.getByRole('dialog', { name: 'Kit' }).textContent).toContain('2 visitors since 22:30, leaving about 01:00');
+    fireEvent.click(screen.getByText('Ask the visitors to leave'));
+    flush();
+    expect(controller.state.walkers![0].trip[0].end).toBeCloseTo(T + 0.1, 9);
+    expect(controller.state.guests[0].satisfaction).toBeCloseTo(50, 9);
+    expect(screen.queryByText('Ask the visitors to leave')).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'Kit' }).textContent).toContain('asked to leave');
+  });
+
+  it('the staff panel sets what the desk does about complaints; the legend explains the hangers and the ring', () => {
+    const { controller, flush } = setup();
+    controller.togglePanel('staff');
+    flush();
+    expect(screen.getByRole('group', { name: 'Visitors' }).textContent).toBe('Ask them to leaveLet them stay');
+    fireEvent.click(screen.getByText('Let them stay'));
+    flush();
+    expect(controller.state.visitorPolicy).toBe('allow');
+    const marks = screen.getByRole('group', { name: 'Guest marks' }).textContent!;
+    expect(marks).toContain('Make up the room');
+    expect(marks).toContain('Do not disturb');
+    expect(marks).toContain('Friends round (noisy)');
+  });
+
+  it('a do-not-disturb room: the hanger on its card, its guest’s wishes, and the cleaning panel counts it waiting', () => {
+    const { controller, flush } = oneRoom({ profile: { chronotype: 'regular', mobility: 'normal', sleep: 'normal', rowdiness: 'normal', checkoutHour: 11, housekeeping: 'dnd' } }, { hour: 13 });
+    controller.state = { ...controller.state, rooms: controller.state.rooms.map(r => ({ ...r, dailyCleanHoursRemaining: 0.5 })) };
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.togglePanel('housekeeping');
+    flush();
+    const roomCard = screen.getByRole('dialog', { name: /Standard Queen/ }).textContent!;
+    expect(roomCard).toContain('Hanger:      Do not disturb');
+    expect(roomCard).toContain('do not disturb: waiting for the guests to be out long enough');
+    expect(screen.getByText(/Daily cleans waiting for guests to go out: 1/)).toBeTruthy();
+    expect(screen.getByText(/Daily cleans due: 0/)).toBeTruthy();
+    fireEvent.click(screen.getByText(/About Kit/));
+    flush();
+    expect(screen.getByRole('dialog', { name: 'Kit' }).textContent).toContain('Do not disturb (cleaned only while out)');
+  });
+});

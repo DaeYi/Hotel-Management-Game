@@ -1,4 +1,5 @@
 import { CLEANING_COLORS } from '../render/GridRenderer';
+import { GUEST_HOUSEKEEPING, GUEST_PROFILE } from '../config/balance';
 
 // The cleaning overlay's key: little swatches drawn the way the floor plan
 // draws each state, from the same colors.
@@ -10,7 +11,7 @@ const css = (color: number, alpha = 1) => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
-export type CleaningKeyKind = 'cleaning' | 'on_the_way' | 'waiting' | 'blocked' | 'due' | 'grubby';
+export type CleaningKeyKind = 'cleaning' | 'on_the_way' | 'waiting' | 'blocked' | 'due' | 'guest_in' | 'grubby';
 
 const hatch = (edge: number, stripes: number = CLEANING_COLORS.hatch) => ({
   background: `repeating-linear-gradient(45deg, ${css(stripes, 0.9)} 0 2px, ${css(CLEANING_COLORS.dirty, 0.75)} 2px 5px)`,
@@ -23,6 +24,7 @@ const STYLES: Record<CleaningKeyKind, Record<string, string>> = {
   waiting: hatch(CLEANING_COLORS.dirty),
   blocked: hatch(CLEANING_COLORS.blocked, CLEANING_COLORS.blocked),
   due: { background: css(CLEANING_COLORS.due), borderRadius: '50%', border: `1px solid ${css(CLEANING_COLORS.track)}` },
+  guest_in: { background: css(CLEANING_COLORS.track), borderRadius: '50%', border: `2px solid ${css(CLEANING_COLORS.due)}` },
   grubby: { background: css(CLEANING_COLORS.grubby, 0.6), border: '2px solid transparent' },
 };
 
@@ -36,6 +38,7 @@ const LABELS: Record<CleaningKeyKind, string> = {
   waiting: 'Dirty, waiting',
   blocked: "Dirty, can't be reached",
   due: 'Daily clean due',
+  guest_in: 'Daily clean due, guests in (do not disturb)',
   grubby: 'Grubby: under 50% clean (hurts reviews)',
 };
 
@@ -43,7 +46,7 @@ const LABELS: Record<CleaningKeyKind, string> = {
 export function CleaningLegend() {
   return (
     <>
-      {(Object.keys(LABELS) as CleaningKeyKind[]).map(kind => (
+      {(Object.keys(LABELS) as CleaningKeyKind[]).filter(kind => kind !== 'guest_in' || (GUEST_HOUSEKEEPING.enabled && GUEST_PROFILE.enabled)).map(kind => (
         <span key={kind}><CleaningSwatch kind={kind} />{LABELS[kind]}</span>
       ))}
       <span><span class="cleaning-bar" aria-hidden="true"><span style={{ background: css(CLEANING_COLORS.housekeeper) }} /></span>How far along</span>

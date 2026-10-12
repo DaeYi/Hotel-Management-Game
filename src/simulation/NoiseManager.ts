@@ -5,6 +5,7 @@ import { hourStart } from './Movement.js';
 import { perPersonFactor, partySize } from './Party.js';
 import { isSleepHour, noiseSensitivity, noiseOutputMult, nightOf, sleepHours } from './Profile.js';
 import { facilityHours } from './FacilityManager.js';
+import { visitorsAt, isAsleepAt } from './Visitors.js';
 
 // Noise (docs/designs/guest-staff-personalities.md, Sleep sensitivity and
 // Rowdiness). With guest profiles on, noise is a night-time thing: a guest
@@ -25,13 +26,14 @@ const hourOf = (t: number) => ((Math.floor(t) % 24) + 24) % 24;
  * How much noise a guest in their room makes at time t: the base, times how
  * loud they are (rowdy guests more, late at night more still; by their trait
  * without a profile), times how many of them there are beyond two
- * (perPersonFactor) -- nothing while they're asleep. One function for the
+ * (perPersonFactor), friends visiting included -- nothing while they're
+ * asleep (and they're up while they've visitors in). One function for the
  * noise heard and for who's blamed for it, so the two always agree.
  */
-export function occupantNoiseOutput(guest: Guest, t?: number): number {
+export function occupantNoiseOutput(guest: Guest, t?: number, visitors = 0): number {
   const hour = t === undefined ? 12 : hourOf(t);
-  if (nightModel() && t !== undefined && isSleepHour(guest, hour)) return 0;
-  return NOISE.baseOccupiedNoise * noiseOutputMult(guest, hour) * perPersonFactor(partySize(guest));
+  if (visitors <= 0 && nightModel() && t !== undefined && isSleepHour(guest, hour)) return 0;
+  return NOISE.baseOccupiedNoise * noiseOutputMult(guest, hour, t) * perPersonFactor(partySize(guest) + Math.max(0, visitors));
 }
 
 /** Whether a facility makes noise at an hour: while it's in use (facilityHours), or always, the old way. */
@@ -70,7 +72,7 @@ export function calculateRoomNoise(
     if (neighborRoom && neighborRoom.status === 'occupied' && neighborRoom.guestId) {
       // Noise from an occupied neighbor, if they're in: their trait and party size set how much
       const guest = state.guests.find(g => g.id === neighborRoom.guestId);
-      const neighborNoise = !guest ? NOISE.baseOccupiedNoise : isGuestAway(guest, t) ? 0 : occupantNoiseOutput(guest, t);
+      const neighborNoise = !guest ? NOISE.baseOccupiedNoise : isGuestAway(guest, t) ? 0 : occupantNoiseOutput(guest, t, visitorsAt(state, guest.id, t));
 
       totalNoise += neighborNoise * weight;
     }
@@ -122,7 +124,7 @@ export function getLoudestNeighborGuestId(room: Room, state: HotelState, t = mid
     const guest = state.guests.find(g => g.id === neighborRoom.guestId);
     if (!guest || isGuestAway(guest, t)) continue; // not there: can't be the culprit
 
-    const neighborNoise = occupantNoiseOutput(guest, t) * weight;
+    const neighborNoise = occupantNoiseOutput(guest, t, visitorsAt(state, guest.id, t)) * weight;
 
     if (neighborNoise <= 0) continue;
 
@@ -154,10 +156,10 @@ export function noiseToRatingPenalty(noise: number, guest: Guest): number {
   return penalty;
 }
 
-/** How much a night's noise is over the threshold for a guest, this hour (0 unless they're in their room asleep). */
+/** How much a night's noise is over the threshold for a guest, this hour (0 unless they're in their room asleep: not up with visitors). */
 export function nightNoiseThisHour(room: Room, state: HotelState, guest: Guest): number {
   const t = midHour(state);
-  if (isGuestAway(guest, t) || !isSleepHour(guest, state.hour)) return 0;
+  if (isGuestAway(guest, t) || !isAsleepAt(state, guest, t)) return 0;
   return Math.max(0, calculateRoomNoise(room, state, t) - NOISE.penaltyThreshold) * noiseSensitivity(guest);
 }
 

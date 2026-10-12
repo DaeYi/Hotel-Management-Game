@@ -4,9 +4,10 @@ import { profileRoom, fitsParty } from './RoomProfile.js';
 import { roomFit, FEATURE_LABELS, type RoomFeature } from './Preferences.js';
 import type { PRNG } from './prng.js';
 import type { GuestReviewBreakdown } from './GuestManager.js';
-import { SATISFACTION, STORY, NOISE, ECONOMY, REVIEW, HOUSEKEEPING, GUEST_PROFILE, LOYALTY } from '../config/balance.js';
+import { SATISFACTION, STORY, NOISE, ECONOMY, REVIEW, GUEST_PROFILE, LOYALTY } from '../config/balance.js';
 import { calculateRoomNoise, noiseToRatingPenalty, getLoudestNeighborGuestId, nightNoiseThisHour } from './NoiseManager.js';
-import { isSleepHour } from './Profile.js';
+import { isAsleepAt, theVisitors } from './Visitors.js';
+import { cleanlinessTerm } from './CleaningPreference.js';
 import { personIdOf } from './Loyalty.js';
 import { formatRoomLabel, isRoomReachable } from './HotelState.js';
 import { roomMoveTrip, isGuestAway } from './GuestMovement.js';
@@ -64,7 +65,7 @@ interface NewEntryInput {
   chainId?: string; // omit for a standalone entry or a new chain's origin (defaults to its own id)
 }
 
-function appendStoryLogEntry(state: HotelState, input: NewEntryInput): { state: HotelState; entry: StoryLogEntry } {
+export function appendStoryLogEntry(state: HotelState, input: NewEntryInput): { state: HotelState; entry: StoryLogEntry } {
   const id = nextLogId(state);
   const entry: StoryLogEntry = {
     id,
@@ -80,6 +81,8 @@ function appendStoryLogEntry(state: HotelState, input: NewEntryInput): { state: 
   return { state: { ...state, storyLog }, entry };
 }
 
+const capitalizeFirst = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
 // ============================================================================
 // Ambient satisfaction drift (D3).
 // ============================================================================
@@ -91,7 +94,7 @@ function deriveSatisfactionTarget(room: Room, state: HotelState, guest: Guest): 
     ? nightNoiseThisHour(room, state, guest) * GUEST_PROFILE.nightPenaltyPerUnit * GUEST_PROFILE.nightDriftWeight
     : isGuestAway(guest, hourStart(state) + 0.5) ? 0 : noiseToRatingPenalty(calculateRoomNoise(room, state), guest);
   const conditionBonus = (room.condition - REVIEW.conditionMidpoint) / REVIEW.conditionScale * REVIEW.conditionWeight;
-  const cleanlinessBonus = (room.cleanliness - HOUSEKEEPING.cleanlinessMidpoint) / HOUSEKEEPING.cleanlinessScale * HOUSEKEEPING.cleanlinessWeight;
+  const cleanlinessBonus = cleanlinessTerm(room.cleanliness, guest);
   // What they like (or don't) about the room: the same as in their review
   const fit = roomFit(profileRoom(room), guest).score;
   const raw = conditionBonus + cleanlinessBonus - noisePenalty + fit;
@@ -162,7 +165,7 @@ export function advanceIncidents(state: HotelState, prng: PRNG, T = hourEnd(stat
 
     if (incident.type === 'noise_complaint') {
       // With profiles on, a complaint is about the night: while they're up (or out) it waits
-      if (GUEST_PROFILE.enabled && (!isSleepHour(guest, current.hour) || isGuestAway(guest, hourStart(current) + 0.5))) {
+      if (GUEST_PROFILE.enabled && (!isAsleepAt(current, guest, hourStart(current) + 0.5) || isGuestAway(guest, hourStart(current) + 0.5))) {
         remaining.push(incident);
         continue;
       }
@@ -173,11 +176,16 @@ export function advanceIncidents(state: HotelState, prng: PRNG, T = hourEnd(stat
           ? { ...g, satisfaction: Math.min(100, g.satisfaction + SATISFACTION.noiseComplaintResolvedBonus) }
           : g);
         const roomLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
+        // (about visitors: they've gone)
+        const hostRoom = incident.about === 'visitors' ? rooms.find(r => r.guestId === incident.culpritGuestId) : undefined;
+        const visitors = guests.find(g => g.id === incident.culpritGuestId)?.hostedNight?.visitors ?? 2;
         const appended = appendStoryLogEntry(current, {
           type: 'noise_complaint_resolved',
           guestName: partyLabel(guest),
           roomId: room.id,
-          message: `The noise around Room ${roomLabel} died down -- ${partyLabel(guest)}'s complaint resolved.`,
+          message: incident.about === 'visitors'
+            ? `${capitalizeFirst(theVisitors(visitors))}${hostRoom ? ` in Room ${formatRoomLabel(hostRoom.gridX, hostRoom.gridY, hostRoom.floor)}` : ''} left, and ${partyLabel(guest)} got back to sleep.`
+            : `The noise around Room ${roomLabel} died down -- ${partyLabel(guest)}'s complaint resolved.`,
           chainId: incident.chainId,
         });
         current = appended.state;
@@ -313,8 +321,8 @@ function collectCandidates(state: HotelState): Candidate[] {
     const room = state.rooms.find(r => r.status === 'occupied' && r.guestId === guest.id);
     if (!room) continue;
 
-    // Kept awake: in their room, and (with profiles on) in their sleep hours
-    const tryingToSleep = !GUEST_PROFILE.enabled || isSleepHour(guest, state.hour);
+    // Kept awake: in their room, and (with profiles on) in their sleep hours (not up with visitors)
+    const tryingToSleep = !GUEST_PROFILE.enabled || isAsleepAt(state, guest, hourStart(state) + 0.5);
     if (!guest.hadNoiseComplaint && guest.satisfaction < SATISFACTION.incidentFuelThreshold && tryingToSleep && !isGuestAway(guest, hourStart(state) + 0.5)) {
       const roomNoise = calculateRoomNoise(room, state);
       if (roomNoise > NOISE.penaltyThreshold) {

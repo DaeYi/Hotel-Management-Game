@@ -11,6 +11,7 @@ import { getStaffPlan, rosterAfter, syncRoster, planStaff } from './StaffManager
 import { planArrivalTrips, departureWalker, tidyMovement } from './GuestMovement.js';
 import { planFacilityVisits, creditFacilityVisits } from './FacilityManager.js';
 import { planOutings } from './OutingManager.js';
+import { planVisitors, fileVisitorComplaints, sendOrphanedVisitorsHome } from './HostedNights.js';
 import { hourEnd } from './Movement.js';
 import { tickNoiseSources, accrueNightNoise } from './NoiseManager.js';
 import { processCleaningTick, processDailyHousekeeping, degradeCleanliness, startTurnoverCleaning } from './HousekeepingManager.js';
@@ -97,6 +98,12 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   const incidentSelection = selectNewIncident(current, prng);
   current = incidentSelection.state;
   events.push(...incidentSelection.events);
+
+  // 1.7 Neighbours kept awake by a guest's visitors complain (and the desk may ask them to leave)
+  const leavingNow = new Set([...advance.earlyDepartureGuestIds, ...current.guests.filter(g => isCheckoutDue(g, current)).map(g => g.id)]);
+  const visitorComplaints = fileVisitorComplaints(current, T, leavingNow);
+  current = visitorComplaints.state;
+  events.push(...visitorComplaints.events);
 
   // 2. Early departures (eng-review D1/D7): runs immediately before the normal
   // departure check below, folded into the SAME accumulation (departedGuestIds/
@@ -351,12 +358,14 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   current = { ...current, hour: nextHour, day: nextDay };
 
   // 11. Plan the coming hour: staff hired or let go join or leave, finished
-  // trips end, guests head out to facilities or out for the day, and the
-  // staff get their hour.
+  // trips end, guests head out to facilities or out for the day (or have
+  // friends round), and the staff get their hour.
   current = { ...current, staffRoster: syncRoster(current) };
   current = tidyMovement(current, T);
+  current = sendOrphanedVisitorsHome(current, T); // their host checked out early, or moved rooms
   current = planFacilityVisits(current);
   current = planOutings(current);
+  current = planVisitors(current); // a rowdy guest's friends round, at 22:00
   current = { ...current, staffPlan: planStaff(current) };
 
   return { state: current, events };

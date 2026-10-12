@@ -132,7 +132,7 @@ describe('Where each room\'s cleaning stands', () => {
     const daily = { ...s, rooms: s.rooms.map(r => ({ ...r, status: 'occupied' as const, guestId: `g-${r.id}`, cleaningHoursRemaining: 0, dailyCleanHoursRemaining: 0.4 })) };
     const T = hourStart(daily);
     expect([...roomCleaningAt(daily, T).values()].map(c => c.phase)).toContain('on_the_way');
-    expect(summarizeCleaning(daily, T).daily).toEqual({ cleaning: 0, due: 2 });
+    expect(summarizeCleaning(daily, T).daily).toEqual({ cleaning: 0, due: 2, guestIn: 0 });
   });
 
   it('counts the hotel by phase, reason and floor', () => {

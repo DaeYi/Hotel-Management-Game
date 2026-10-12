@@ -14,7 +14,7 @@ import { simulate } from '../src/simulation/simulate.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
 import { PRNG } from '../src/simulation/prng.js';
 import { hourStart, legsEnd } from '../src/simulation/Movement.js';
-import { GUEST_PURPOSES, ROOM_PREFERENCES, GUEST_OUTINGS, FACILITY_CONFIG, ECONOMY, REVIEW, PARTIES, GUEST_PROFILE, GUEST_FAVORITES, LOYALTY, MOOD } from '../src/config/balance.js';
+import { GUEST_PURPOSES, ROOM_PREFERENCES, GUEST_OUTINGS, FACILITY_CONFIG, ECONOMY, REVIEW, PARTIES, GUEST_PROFILE, GUEST_FAVORITES, LOYALTY, MOOD, GUEST_HOUSEKEEPING, HOSTED_NIGHTS } from '../src/config/balance.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import type { ActiveIncident } from '../src/simulation/types.js';
 import type { PresetId } from '../src/config/furniture.js';
@@ -385,6 +385,8 @@ describe('Balance', () => {
     GUEST_FAVORITES.enabled = false;
     LOYALTY.enabled = false;
     MOOD.enabled = false;
+    GUEST_HOUSEKEEPING.enabled = false;
+    HOSTED_NIGHTS.enabled = false;
     try {
       const run = simulate(30, 9, undefined, STRATEGIES.balanced);
       // The same run before purposes and preferences existed (c0782c1). If an unrelated
@@ -406,6 +408,7 @@ describe('Balance', () => {
     } finally {
       GUEST_PURPOSES.enabled = true; ROOM_PREFERENCES.enabled = true; GUEST_PROFILE.enabled = true;
       GUEST_FAVORITES.enabled = true; LOYALTY.enabled = true; MOOD.enabled = true;
+      GUEST_HOUSEKEEPING.enabled = true; HOSTED_NIGHTS.enabled = true;
     }
   }, 120000);
 

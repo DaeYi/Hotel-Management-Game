@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { HotelState, RoomType, FacilityType, GuestTrait, Direction, Room, StaffPlan } from '../simulation/types';
-import { GRID, ECONOMY, NOISE, FACILITY_CONFIG, DECOR, GUEST_PROFILE } from '../config/balance';
+import { GRID, ECONOMY, NOISE, FACILITY_CONFIG, DECOR, GUEST_PROFILE, GUEST_HOUSEKEEPING } from '../config/balance';
 import { calculateRoomNoise, nightRoomNoise } from '../simulation/NoiseManager';
 import { formatRoomLabel, isRoomReachable, isFacilityOpen } from '../simulation/HotelState';
 import { profileRoom, profileFurnishing, defaultFurnishing, rectToWorld, bedSpot, sleepSpots, wallBar, pillowRect } from '../simulation/RoomProfile';
@@ -9,9 +9,11 @@ import { isHallway } from '../simulation/Layout';
 import { getStaffPlan } from '../simulation/StaffManager';
 import { roomCleaningAt, GRUBBY_BELOW } from '../simulation/CleaningStatus';
 import { getGuestDotColor, isChild } from './figures';
-import { partyOf, sharesBeds } from '../simulation/Party';
+import { partyOf, sharesBeds, guestsById } from '../simulation/Party';
 import { isSleepHour, quirkOf } from '../simulation/Profile';
-import { drawQuirk, drawSleepZ, drawMoodFace, RING_COLORS, SELECTED_COLOR } from './quirks';
+import { drawQuirk, drawSleepZ, drawMoodFace, drawHanger, RING_COLORS, SELECTED_COLOR, VISITORS_COLOR } from './quirks';
+import { housekeepingPrefOf } from '../simulation/CleaningPreference';
+import { isAsleepAt, visitorsAt } from '../simulation/Visitors';
 import { ringTierOf } from './figures';
 import { staysOf } from '../simulation/Loyalty';
 import { guestMood, moodFace } from '../simulation/Mood';
@@ -244,6 +246,7 @@ export class GridRenderer {
   renderRooms(state: HotelState, floor: number) {
     this.roomGraphics.clear();
     const seenRoomIds = new Set<string>();
+    const guests = GUEST_HOUSEKEEPING.enabled ? guestsById(state) : null;
 
     for (const room of state.rooms) {
       if (room.floor !== floor) continue;
@@ -261,6 +264,11 @@ export class GridRenderer {
       this.drawFurniture(room, x, y, usable ? 0.95 : 0.4);
       // The door: hallway-colored where it opens onto a connected hallway, red where it's blocked
       this.drawDoor(this.roomGraphics, x, y, room.door, isRoomReachable(state, room) ? 0xd8d8e8 : 0xe74c3c, 0.95);
+      // A hanger on it: do not disturb, or please make up the room
+      if (guests && room.status === 'occupied') {
+        const pref = housekeepingPrefOf(guests.get(room.guestId ?? ''));
+        if (pref !== 'standard') drawHanger(this.roomGraphics, x, y, room.door, pref, TILE_SIZE);
+      }
 
       // Brown strip along the top once decor goes stale (renovate to clear it)
       if (room.decor < DECOR.freshThreshold && room.status !== 'renovating') {
@@ -414,7 +422,7 @@ export class GridRenderer {
 
   /** Guest dots in their rooms. `walking` guests are drawn by the ActorLayer instead until they arrive. */
   /** Draw a dot in each guest's room while they're in it (not while they're on their way in, out at a facility, or moving rooms). */
-  renderGuests(state: HotelState, floor: number, away: Set<string> = new Set(), selectedGuestId: string | null = null) {
+  renderGuests(state: HotelState, floor: number, away: Set<string> = new Set(), selectedGuestId: string | null = null, t?: number) {
     this.guestGraphics.clear();
     this.sleepGraphics.clear();
 
@@ -427,8 +435,14 @@ export class GridRenderer {
       const party = partyOf(guest);
       const spots = party.size > 1 ? sleepSpots(room, !sharesBeds(party)) : [];
       const dotColor = getGuestDotColor(guest.purpose);
-      // Asleep (in their sleep hours, and in): the room dims, and a "z" by them
-      const asleep = GUEST_PROFILE.enabled && room.status === 'occupied' && isSleepHour(guest, state.hour);
+      // Asleep (in their sleep hours, and in -- not up with friends round): the room dims, and a "z" by them
+      const asleep = GUEST_PROFILE.enabled && room.status === 'occupied' && (t === undefined ? isSleepHour(guest, state.hour) : isAsleepAt(state, guest, t));
+      // Friends round: a ring round the room, pulsing with the noise
+      if (t !== undefined && visitorsAt(state, guest.id, t) > 0) {
+        const pulse = (Math.sin(Date.now() / 220) + 1) / 2;
+        this.guestGraphics.lineStyle(2, VISITORS_COLOR, 0.45 + 0.45 * pulse);
+        this.guestGraphics.strokeCircle(GRID_OFFSET_X + (room.gridX + 0.5) * TILE_SIZE, GRID_OFFSET_Y + (room.gridY + 0.5) * TILE_SIZE, TILE_SIZE * 0.38 + pulse * 3);
+      }
       if (asleep) {
         this.sleepGraphics.fillStyle(0x0b1030, 0.35);
         this.sleepGraphics.fillRect(GRID_OFFSET_X + room.gridX * TILE_SIZE + 1, GRID_OFFSET_Y + room.gridY * TILE_SIZE + 1, TILE_SIZE - 2, TILE_SIZE - 2);
@@ -576,10 +590,12 @@ export class GridRenderer {
       }
 
       if (job.job === 'daily' && job.phase !== 'cleaning') {
-        g.fillStyle(C.due, 1);
+        // Hollow while a do-not-disturb room's guests are in
+        const guestIn = job.wait === 'guest_in';
+        g.fillStyle(guestIn ? C.track : C.due, 1);
         g.fillCircle(x + S - 9, y + 9, 5);
-        g.lineStyle(1.5, C.track, 1);
-        g.strokeCircle(x + S - 9, y + 9, 5);
+        g.lineStyle(guestIn ? 2 : 1.5, guestIn ? C.due : C.track, 1);
+        g.strokeCircle(x + S - 9, y + 9, guestIn ? 4 : 5);
       }
 
       // How far the clean has got (a turnover always; a daily clean once it's begun)

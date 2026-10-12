@@ -751,3 +751,57 @@ Three switches, `GUEST_FAVORITES`, `LOYALTY` and `MOOD`; with them off (and the 
 - **Mood.** Delighted 62+, content, irritated under 47, angry under 42 (at checkout about 14 / 82 / 4 / 0.5%). An irritated or angry guest shows a face (in their room it replaces the "z": lying awake); angry guests skip the facilities; delighted ones spend x1.5 at the shop and are likelier to come back. The guest card shows the mood word, their stays and their favourite.
 - **Balance** (12 seeds x 400 days, mean valuation, these three off / on): balanced $4.74M / $4.81M, overstaffed $4.59M / $4.58M, understaffed $1.72M / $1.74M, hoarder $1.51M / $1.54M. The order holds. The balanced bot sees about 232 returning guests a run (101 regulars, 17 VIPs).
 - **Review:** an adversarial review (5 reviewers, each finding checked by a skeptic) confirmed 13 distinct problems, all fixed: restaurant fans went "out to dinner" at breakfast; fallback outings weren't limited like visits; the build panel's count read as guests; a rowdy guest came back rowdy with the family; a regular who walked out wasn't lost; a regular turned away walked out with a white ring; a second stay's return vanished with the story log open; a refused night owl walked out showing their mood before the refusal; the card's rounded mood could contradict its word; a blocked favourite read as "there isn't one"; full counts showed on every facility of the type; the legend's irritated face didn't match the floor plan's; and the four-hour revisit gap was really five. Seven findings were refuted. 30 of 30 mutations caught.
+
+### Phase 2a as shipped (2026-10-12)
+
+Housekeeping preference and hosted nights, behind two switches, `GUEST_HOUSEKEEPING` and `HOSTED_NIGHTS`. With both off the game is the committed game exactly: the two pinned runs, and 12-seed 400-day runs of all four bots, match seed for seed. Patience, the desk queue and Voice follow as 2b.
+
+- **Housekeeping preference.** Do not disturb 25 / standard 55 / make up daily 20, rolled with the profile (business travellers lean make-up, 30%; getaways leave-alone, 35%). A returning guest keeps theirs; someone first here before preferences gets one now. A hanger on the door says which: red with a white bar for do not disturb, green for make up.
+  - **Do not disturb.** A housekeeper goes in only while the whole party is out: from when the last of them has stepped out of the door to when the first steps back in, with time to step in, clean and step out again. They wait in the hallway at the door, never inside, and for at most 15 minutes. Otherwise they come back after other work, or rest and set off in time for a party going out later in the hour. A party out for less than a clean isn't disturbed. In a bot hotel these rooms are cleaned on about 29% of days (standard 38-46%). One left at the end of the shift is reported as left alone, not as a staffing problem. Their review judges the room as everyone's does: the doc's "cost only below 50" is already the rule.
+  - **Make up daily.** These rooms are queued on the off days of every-other-day too, and cleaned before the other daily cleans (64-72% of days). Their cleanliness counts 1.6x, measured from a well-kept room (92, a thorough turnover a night on) rather than from 50. So a missed clean costs them and a kept one barely pays: at 1.6x around 50, every make-up guest would review higher in any decent room. The staffing estimate counts them on the off days.
+  - **All daily cleans.** Rooms whose guests are out halfway through the hour go first (the doc's "out at the planned time"). Rowdy guests' rooms get dirty 1.5x faster (from Rowdiness, missed in 1a).
+  - **On screen.** The hanger. The room card's "Hanger:" line. The guest card ("Do not disturb (cleaned only while out): cleaned 1 of 2 days"). The cleaning overlay's hollow dot, and the panel line "Daily cleans waiting for guests to go out: N" (this counts parties not out long enough, too).
+  - **Mid-hour changes.** After a change to the building, guests now find their way before the staff re-plan, so housekeepers plan around where guests will really be. With the switch off, the old order stands.
+- **Hosted nights.** Half of rowdy guests (not all, as the doc had it) have 1-3 friends round on one night of their stay, if they're in and up at 22:00 (so not early birds). The friends walk in from the street, stay in the room till 01:00-02:00 and walk out. That is about one party every three nights in a bot hotel. With every rowdy guest hosting, the mean review noise penalty rose about 40%.
+  - While they're in, the host is up and the room is louder: the friends count in the party size. The host stays in, a pulsing ring marks the room, and a click on a friend opens the host's card. There is no hallway noise: sampled at mid-hour, it barely registered.
+  - **Complaints.** A neighbour asleep in their room and kept awake, with the host the loudest thing they hear, may complain once that night: light sleepers 60%, normal 25%, heavy 5%, from their booking. Nobody complains twice in a stay, and nobody leaving that hour complains. There is one complaint per party, on a thread of its own in the story log ("Room 1-24 has 2 visitors (since 22:40)" > "Ingrid in Room 1-25 complained about the noise"). It isn't a new story, so the day's incident budget doesn't stop it. About 45% of parties draw one.
+  - **"Ask the visitors to leave."** The doc made this an incident action. At two real seconds a game hour, nobody could react in time, so it is a front desk policy in the Staff panel ("ask them to leave", the default, or "let them stay"), plus a button on the room and guest cards for any time the friends are there or on their way up (those still on the way turn round).
+    - Asking needs someone at the desk. The friends are out of the room six minutes later. The host loses 10 points of mood and keeps it down for the rest of the night.
+    - The complaint is answered: "You asked Room 1-24 to keep it down; the visitors left at 00:40", and the neighbour gets +10.
+    - Left alone, the complaint resolves once the friends go. But a neighbour still kept awake two sleep-hours on checks out early: 22-40% of complaints in measured runs, against none with "ask".
+    - The bots keep the default, which beats "let them stay" for every bot.
+- **Balance** (12 seeds x 400 days, mean valuation, 2a off / on with the default policy):
+
+  | Bot | 2a off | 2a on, default |
+  |---|---|---|
+  | Balanced | $4.56M | $4.44M |
+  | Overstaffed | $4.63M | $4.41M |
+  | Understaffed | $1.82M | $1.71M |
+  | Hoarder | $1.50M | $1.43M |
+
+  - With 2a on, the order holds and nobody goes bankrupt. With "let them stay": $4.27M / $4.35M / $1.64M / $1.44M.
+  - Mean review noise penalty: 0.196 with "ask", 0.226 with "let them stay".
+  - The 2a-off baseline was re-measured at c37f7e3. It gives $4.56M for the balanced bot, not the $4.81M recorded above for 1b, which doesn't reproduce.
+- **Housekeeping staffing.** A staffing curve showed that 1.0x to 1.6x of the estimated housekeepers all land within about 3% of each other, with 2a off as well as on: understaffing costs dearly, overstaffing buys nothing. So the test that staffing to the workload beats overstaffing was a coin flip even at c37f7e3. It now asserts only that overstaffing buys nothing (within 5%). Making the estimate a real optimum is left as a follow-up.
+- **Review.** Two adversarial rounds, each reviewer's finding checked by a skeptic.
+  - **The first** (5 reviewers) confirmed 12 distinct problems, all fixed:
+    - a do-not-disturb room turned down once was never retried that hour;
+    - the housekeeper waited inside a do-not-disturb room with the guests;
+    - a room whose party was out, but not for long enough, read "all housekeepers busy";
+    - a reroute split a visit into two stays, so the simulation lost the visitors still drawn in the room;
+    - turning the host's door ended the visit for free and walked the friends out through a wall;
+    - the host could lose 10 twice;
+    - a guest walking out that hour could still complain;
+    - the do-not-disturb notice was swallowed by the "rooms cleaned" toast;
+    - a hand ask showed nothing with the story log open;
+    - messages said "the visitors" for one;
+    - two untested paths (the old settle order with the switch off, visitors re-routed before setting off);
+    - an older gap in a re-planned housekeeper's hour.
+  - **The second** (3 reviewers, on the fixes) confirmed 5 more, all fixed:
+    - a housekeeper waiting for a later party could wait inside the room just cleaned;
+    - a clean cut at the bell could be dropped with only a step to spare;
+    - a complaint after a hand ask went unanswered;
+    - the tick's "leaving" wiring was untested;
+    - merging a continued stop into one stay also changed facility crediting in the old game. The merge is now for visitors only. The old double-credit of a visit under way during a rebuild is left as a separate fix.
+  - Seven findings were refuted, among them that make-up's 1.6x tracks turnover quality (by design: they mind cleanliness more).
+  - 61 of 62 mutations caught; the other is equivalent (a queue filter the planner repeats).

@@ -1,10 +1,11 @@
-import type { HotelState, Room, GameEvent } from './types.js';
-import { HOUSEKEEPING, STAFF, ECONOMY } from '../config/balance.js';
+import type { HotelState, Room, GameEvent, Guest } from './types.js';
+import { HOUSEKEEPING, STAFF, ECONOMY, GUEST_HOUSEKEEPING } from '../config/balance.js';
 import { formatRoomLabel, isRoomReachable } from './HotelState.js';
 import { getStaffTravelHours } from './Layout.js';
 import { getStaffPlan, plannedWork, isOnShift } from './StaffManager.js';
 import { isCheckoutDay } from './GuestManager.js';
 import { occupantFactor, guestsById } from './Party.js';
+import { housekeepingPrefOf } from './CleaningPreference.js';
 
 /**
  * Start turnover cleaning on a room after guest checkout. The housekeepers'
@@ -46,7 +47,12 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
   const lastShiftHour = state.hour === STAFF.housekeeping.workEndHour - 1;
   let dailyDone = 0;
   let dailySkipped = 0;
+  let dndLeft = 0; // do-not-disturb rooms whose guests weren't out long enough while a housekeeper was free
   let dailyCost = 0;
+  // With housekeeping preferences on: each guest's cleans this stay, done and missed
+  const prefs = GUEST_HOUSEKEEPING.enabled;
+  const guests = prefs ? guestsById(state) : new Map<string, Guest>();
+  const tally = new Map<string, 'done' | 'missed'>();
 
   const updatedRooms = state.rooms.map(room => {
     const turnover = turnoverWork.get(room.id);
@@ -68,6 +74,7 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
       if (remaining <= 1e-9) {
         dailyDone++;
         dailyCost += HOUSEKEEPING.dailyCleaningCost;
+        if (prefs && room.guestId) tally.set(room.guestId, 'done');
         return {
           ...room,
           cleanliness: Math.min(100, room.cleanliness + HOUSEKEEPING.dailyCleaningBoost),
@@ -76,7 +83,9 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
         };
       }
       if (lastShiftHour) {
-        dailySkipped++;
+        if (prefs && housekeepingPrefOf(guests.get(room.guestId ?? '')) === 'dnd') dndLeft++;
+        else dailySkipped++;
+        if (prefs && room.guestId) tally.set(room.guestId, 'missed');
         return { ...room, dailyCleanHoursRemaining: 0 };
       }
       return { ...room, dailyCleanHoursRemaining: remaining };
@@ -100,9 +109,22 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
       data: { roomsSkipped: dailySkipped },
     });
   }
+  if (dndLeft > 0) {
+    events.push({
+      type: 'dnd_rooms_left',
+      message: `${dndLeft} do-not-disturb room${dndLeft > 1 ? 's' : ''} not cleaned today (the guests weren't out while a housekeeper was free)`,
+      data: { roomsLeft: dndLeft },
+    });
+  }
+  const guestsAfter = tally.size === 0 ? state.guests : state.guests.map(g => {
+    const how = tally.get(g.id);
+    if (!how) return g;
+    const cleans = g.cleans ?? { done: 0, missed: 0 };
+    return { ...g, cleans: { ...cleans, [how]: cleans[how] + 1 } };
+  });
 
   return {
-    state: { ...state, rooms: updatedRooms, cash: state.cash - dailyCost },
+    state: { ...state, rooms: updatedRooms, guests: guestsAfter, cash: state.cash - dailyCost },
     events: dailyDone > 0
       ? [...events, { type: 'daily_cleaning', message: `Daily housekeeping: ${dailyDone} room${dailyDone > 1 ? 's' : ''} cleaned ($${dailyCost})`, data: { roomsCleaned: dailyDone, cost: dailyCost } }]
       : events,
@@ -118,7 +140,9 @@ export function processDailyHousekeeping(state: HotelState): { state: HotelState
   const cadence = state.housekeeping.dailyCadence;
   if (cadence === 'none') return { state, events: [] };
   if (state.hour !== HOUSEKEEPING.dailyCleaningHour) return { state, events: [] };
-  if (cadence === 'every_other_day' && state.day % 2 !== 0) return { state, events: [] };
+  // Every other day: on the off days, only guests who want their room made up daily get a clean
+  const offDay = cadence === 'every_other_day' && state.day % 2 !== 0;
+  if (offDay && !GUEST_HOUSEKEEPING.enabled) return { state, events: [] };
 
   const cleanHours = 1 / STAFF.housekeeping.dailyCleanRoomsPerHour;
   let queued = 0;
@@ -127,6 +151,7 @@ export function processDailyHousekeeping(state: HotelState): { state: HotelState
     if (!isRoomReachable(state, room)) return room;
     const guest = state.guests.find(g => g.id === room.guestId);
     if (guest && isCheckoutDay(guest, state.day)) return room; // leaving today: the turnover will do
+    if (offDay && housekeepingPrefOf(guest) !== 'makeup') return room;
     queued++;
     return { ...room, dailyCleanHoursRemaining: cleanHours };
   });
@@ -149,10 +174,18 @@ export function estimateHousekeepingHours(state: HotelState, occupancy: number):
   const occupied = state.rooms.length * occupancy;
   const checkouts = occupied / AVERAGE_STAY_NIGHTS;
   const turnover = HOUSEKEEPING.turnoverDuration[state.housekeeping.turnoverQuality] ?? HOUSEKEEPING.turnoverDuration.standard;
-  const cadence = state.housekeeping.dailyCadence === 'daily' ? 1 : state.housekeeping.dailyCadence === 'every_other_day' ? 0.5 : 0;
+  // Every other day: half the rooms a day, and (with preferences on) the make-up rooms on the off days too
+  const makeupShare = GUEST_HOUSEKEEPING.enabled ? expectedShare('makeup') : 0;
+  const cadence = state.housekeeping.dailyCadence === 'daily' ? 1 : state.housekeeping.dailyCadence === 'every_other_day' ? 0.5 + 0.5 * makeupShare : 0;
   const stayovers = occupied - checkouts; // guests leaving today get the turnover, not a daily clean (processDailyHousekeeping skips them)
   const dailyRound = stayovers * cadence * (1 / STAFF.housekeeping.dailyCleanRoomsPerHour + avgWalk);
   return checkouts * (turnover + avgWalk) + dailyRound;
+}
+
+/** The share of guests who want a kind of housekeeping (by the usual weights). */
+function expectedShare(pref: 'dnd' | 'standard' | 'makeup'): number {
+  const weights = GUEST_HOUSEKEEPING.byLean.base;
+  return (weights.find(([p]) => p === pref)?.[1] ?? 0) / weights.reduce((sum, [, w]) => sum + w, 0);
 }
 
 /** Housekeeper-hours available in a day: one per housekeeper per shift hour. */
@@ -172,10 +205,11 @@ export function degradeCleanliness(state: HotelState): HotelState {
   const guests = guestsById(state);
   const updatedRooms = state.rooms.map(room => {
     if (room.status !== 'occupied') return room;
-    // A bigger party makes more mess
+    // A bigger party makes more mess, and (with preferences on) a rowdy one more still
+    const rowdy = GUEST_HOUSEKEEPING.enabled && guests.get(room.guestId ?? '')?.profile?.rowdiness === 'rowdy' ? GUEST_HOUSEKEEPING.rowdyMessMult : 1;
     return {
       ...room,
-      cleanliness: Math.max(0, room.cleanliness - HOUSEKEEPING.cleanlinessDecayPerDay * occupantFactor(state, room, guests)),
+      cleanliness: Math.max(0, room.cleanliness - HOUSEKEEPING.cleanlinessDecayPerDay * occupantFactor(state, room, guests) * rowdy),
     };
   });
   return { ...state, rooms: updatedRooms };

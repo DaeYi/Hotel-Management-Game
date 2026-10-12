@@ -6,6 +6,7 @@ import { roomTile } from './GuestMovement.js';
 import { outingChanceMult, outingHours } from './Purpose.js';
 import { activityHour, activityOffset, guestPace } from './Profile.js';
 import { isCheckoutDay } from './GuestManager.js';
+import { isHosting } from './Visitors.js';
 
 // Guests leave the building during the day -- sightseeing, meetings, the
 // beach -- and come back later. Like facility visits, it's decided at each
@@ -68,6 +69,7 @@ export function planOutings(state: HotelState): HotelState {
   const guests = state.guests.map(guest => {
     if (isUnderway(guest.trip, T)) return guest; // arriving, or already out
     if (isCheckoutDay(guest, state.day)) return guest; // packing to leave
+    if (isHosting(state, guest.id, T)) return guest; // friends round: staying in
     const p = outingChance(guest, state.hour);
     if (p <= 0 || hash01(`${guest.id}|${state.day}|${state.hour}|out`) >= p) return guest;
     const room = state.rooms.find(r => r.guestId === guest.id && r.status === 'occupied');

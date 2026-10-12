@@ -1,9 +1,11 @@
 import type { HotelState, Room, StaffPlan } from './types.js';
-import { HOUSEKEEPING, STAFF, ECONOMY } from '../config/balance.js';
+import { HOUSEKEEPING, STAFF, ECONOMY, GUEST_HOUSEKEEPING, TRAVEL } from '../config/balance.js';
 import { checkoutHour } from './Profile.js';
 import { isRoomReachable } from './HotelState.js';
 import { getStaffPlan, getRoster, isOnShift } from './StaffManager.js';
 import { hourStart } from './Movement.js';
+import { isGuestAway } from './GuestMovement.js';
+import { housekeepingPrefOf, dndOpening } from './CleaningPreference.js';
 
 // Where each room's cleaning stands at a moment in the hour, for the cleaning
 // overlay, the housekeeping panel and the room inspector. It reads the same
@@ -14,8 +16,8 @@ import { hourStart } from './Movement.js';
 export type CleaningJob = 'turnover' | 'daily';
 /** In the room now; walking there (or due there later this hour); or nobody's on it this hour. */
 export type CleaningPhase = 'cleaning' | 'on_the_way' | 'waiting';
-/** Why a room is waiting: nobody to do it, nobody can get there, the shift's over, the new hires aren't in yet, or everyone's busy. */
-export type CleaningWait = 'no_housekeepers' | 'unreachable' | 'off_shift' | 'arriving' | 'busy';
+/** Why a room is waiting: nobody to do it, nobody can get there, the shift's over, the new hires aren't in yet, a do-not-disturb room's guests are in, or everyone's busy. */
+export type CleaningWait = 'no_housekeepers' | 'unreachable' | 'off_shift' | 'arriving' | 'guest_in' | 'busy';
 
 export interface RoomCleaning {
   job: CleaningJob; // a turnover between guests, or a daily clean during a stay
@@ -84,17 +86,22 @@ export function roomCleaningAt(state: HotelState, t: number, plan: StaffPlan = g
     } else if (later || heading.has(room.id)) {
       result.set(room.id, { job, phase: 'on_the_way', hoursLeft, progress, staffId: later?.staffId ?? heading.get(room.id) });
     } else {
-      result.set(room.id, { job, phase: 'waiting', wait: waitReason(state, room, staffed), hoursLeft, progress });
+      result.set(room.id, { job, phase: 'waiting', wait: waitReason(state, room, staffed, now, hoursLeft), hoursLeft, progress });
     }
   }
   return result;
 }
 
-function waitReason(state: HotelState, room: Room, staffed: boolean): CleaningWait {
+function waitReason(state: HotelState, room: Room, staffed: boolean, t: number, hoursLeft: number): CleaningWait {
   if (state.staff.housekeepers <= 0) return 'no_housekeepers';
   if (!isRoomReachable(state, room)) return 'unreachable';
   if (!isOnShift('housekeeper', state.hour)) return 'off_shift';
   if (!staffed) return 'arriving';
+  // Do not disturb: in, or not out long enough for a clean (whoever's free, nobody can go in)
+  if (room.status === 'occupied' && GUEST_HOUSEKEEPING.enabled) {
+    const guest = state.guests.find(g => g.id === room.guestId);
+    if (guest && housekeepingPrefOf(guest) === 'dnd' && (!isGuestAway(guest, t) || dndOpening(guest, room, t, hourStart(state) + 1, hoursLeft + 2 * TRAVEL.hoursPerTile) === null)) return 'guest_in';
+  }
   return 'busy';
 }
 
@@ -105,6 +112,7 @@ export function describeWait(wait: CleaningWait): string {
     case 'unreachable': return "housekeepers can't get to it";
     case 'off_shift': return `housekeepers start at ${STAFF.housekeeping.workStartHour}:00`;
     case 'arriving': return 'new housekeepers start next hour';
+    case 'guest_in': return 'do not disturb: waiting for the guests to be out long enough';
     case 'busy': return 'all housekeepers busy';
   }
 }
@@ -112,7 +120,7 @@ export function describeWait(wait: CleaningWait): string {
 export interface CleaningSummary {
   turnovers: { cleaning: number; onTheWay: number; waiting: number };
   waits: Partial<Record<CleaningWait, number>>; // waiting turnovers, by reason
-  daily: { cleaning: number; due: number }; // daily cleans being done now, and ones not started (a housekeeper may be on the way)
+  daily: { cleaning: number; due: number; guestIn: number }; // daily cleans being done now, ones not started (a housekeeper may be on the way), and of those, do-not-disturb rooms whose guests are in
   grubby: number; // rooms (in use or ready to sell) clean enough to hurt a review
   waitingByFloor: Map<number, number>; // waiting turnovers on each floor
 }
@@ -123,7 +131,7 @@ export function summarizeCleaning(state: HotelState, t: number, plan?: StaffPlan
   const summary: CleaningSummary = {
     turnovers: { cleaning: 0, onTheWay: 0, waiting: 0 },
     waits: {},
-    daily: { cleaning: 0, due: 0 },
+    daily: { cleaning: 0, due: 0, guestIn: 0 },
     grubby: 0,
     waitingByFloor: new Map(),
   };
@@ -142,6 +150,7 @@ export function summarizeCleaning(state: HotelState, t: number, plan?: StaffPlan
     if (s?.job === 'daily') {
       if (s.phase === 'cleaning') summary.daily.cleaning++;
       else summary.daily.due++;
+      if (s.wait === 'guest_in') summary.daily.guestIn++;
     }
     if ((room.status === 'occupied' || room.status === 'vacant') && room.cleanliness < GRUBBY_BELOW) summary.grubby++;
   }

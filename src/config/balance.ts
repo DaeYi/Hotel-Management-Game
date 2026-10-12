@@ -298,10 +298,53 @@ export const MOOD = {
   delightedShopMult: 1.5, // a delighted guest spends more at the shop
 };
 
+/**
+ * Housekeeping preference (docs/designs/guest-staff-personalities.md, Tastes
+ * #11; CleaningPreference.ts): do not disturb, standard, or make up the room
+ * daily. A do-not-disturb room is cleaned only while its guests are out; a
+ * make-up room is cleaned every day even on an every-other-day cadence, before
+ * the other daily cleans, and its guest minds how clean it is 1.6x as much.
+ */
+export const GUEST_HOUSEKEEPING = {
+  enabled: true,
+  byLean: {
+    base: [['dnd', 0.25], ['standard', 0.55], ['makeup', 0.2]],
+    business: [['dnd', 0.15], ['standard', 0.55], ['makeup', 0.3]], // a business traveller wants the room made up
+    getaway: [['dnd', 0.35], ['standard', 0.5], ['makeup', 0.15]], // a getaway wants to be left alone
+  } as Record<string, Array<[HousekeepingName, number]>>,
+  makeupWeight: 1.6, // how much more a make-up guest minds cleanliness...
+  makeupExpects: 92, // ...either side of this: a thoroughly turned-over room a night on (so it only costs them when a clean is missed)
+  dndMaxWait: 0.25, // a housekeeper waits at a do-not-disturb door this long (hours) for its guests to finish going out
+  rowdyMessMult: 1.5, // a rowdy guest's room gets dirty faster
+};
+
+/**
+ * Hosted nights (docs/designs/guest-staff-personalities.md, Rowdiness;
+ * Visitors.ts): on one night of their stay, half of rowdy guests have friends round.
+ * They walk in from the street after 22:00, go up to the room and leave
+ * between 01:00 and 02:00, and the room is that much louder (the host is up
+ * while they're there). A neighbour kept awake may complain; the front desk
+ * can ask the visitors to leave (the host minds), by hand or as a policy.
+ */
+export const HOSTED_NIGHTS = {
+  enabled: true,
+  hostShare: 0.5, // of rowdy guests have friends round, on one night of their stay (all of them: too much noise for the neighbours)
+  startHour: 22, // planned at this hour's boundary
+  visitors: [[1, 0.4], [2, 0.4], [3, 0.2]] as Array<[number, number]>,
+  arriveSpread: 0.75, // they set off from the street over this long (hours)
+  leaveHours: [1, 2] as [number, number], // they leave the room between these hours of the next morning
+  minStay: 1, // hours in the room at least (a long walk up doesn't make a flying visit)
+  leaveDelay: 0.1, // asked to leave: they gather their things this long, then go
+  hostPenalty: 10, // satisfaction the host loses when their visitors are asked to leave
+  complaintChance: { heavy: 0.05, normal: 0.25, light: 0.6 } as Record<SleepName, number>, // a neighbour kept awake complains (once a night)
+  complaintGraceHours: 2, // sleep-hours the noise can go on after a complaint before the guest checks out early
+};
+
 type ChronotypeName = 'early' | 'regular' | 'night';
 type MobilityName = 'brisk' | 'normal' | 'limited';
 type SleepName = 'heavy' | 'normal' | 'light';
 type RowdinessName = 'quiet' | 'normal' | 'rowdy';
+type HousekeepingName = 'dnd' | 'standard' | 'makeup';
 type PartyKindName = 'solo' | 'business' | 'couple' | 'friends' | 'family';
 type PurposeName = 'business' | 'sightseeing' | 'getaway';
 

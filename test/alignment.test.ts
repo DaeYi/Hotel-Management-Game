@@ -15,6 +15,8 @@ import { guestFigures } from '../src/render/figures.js';
 import { STAFF, TRAVEL } from '../src/config/balance.js';
 import type { HotelState, Leg } from '../src/simulation/types.js';
 import { guestPace } from '../src/simulation/Profile.js';
+import { housekeepingPrefOf } from '../src/simulation/CleaningPreference.js';
+import { isGuestAway } from '../src/simulation/GuestMovement.js';
 
 function contiguous(legs: Leg[]): boolean {
   for (let i = 1; i < legs.length; i++) if (Math.abs(legs[i].start - legs[i - 1].end) > 1e-6) return false;
@@ -34,6 +36,8 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
   const bad = (k: string, ex: string) => { problems[k] = (problems[k] ?? 0) + 1; if (!examples[k]) examples[k] = ex; };
   let visits = 0;
   let partyTrips = 0;
+  let dndCleans = 0;
+  let visitorNights = 0;
   for (const seed of [1, 2]) {
     let s: HotelState = createStarterHotel();
     // Doubles, and rooms for friends and families, so parties of every size stay
@@ -85,8 +89,53 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
         const lastHour = before.hour === STAFF.housekeeping.workEndHour - 1 && next.dailyCleanHoursRemaining === 0 && next.lastDailyCleanDay !== before.day;
         if (!lastHour && Math.abs(doneHours - Math.min(room.dailyCleanHoursRemaining, daily.get(room.id) ?? 0)) > 1e-6) bad('daily clean != time in room', room.id);
       }
+      // L: nobody from housekeeping is ever in a do-not-disturb room (cleaning, waiting, stepping in)
+      // while anyone's in it -- every member of the guest's party, drawn where the simulation has them
+      // (a guest with no trip is in), and anyone visiting -- with no exceptions
+      const dndRooms = before.rooms.filter(r => r.status === 'occupied' && housekeepingPrefOf(before.guests.find(g => g.id === r.guestId)) === 'dnd');
+      for (const it of plan.itineraries) {
+        if (it.legs.length === 0) continue;
+        const cleansDnd = it.legs.some(l => l.kind === 'stay' && l.job === 'daily' && dndRooms.some(r => r.id === l.placeId));
+        if (cleansDnd) dndCleans++;
+        for (let tt = Math.max(T, it.legs[0].start) + 0.001; tt < Math.min(T + 1, legsEnd(it.legs)); tt += 0.02) {
+          const me = positionAt(it.legs, tt)!;
+          const room = dndRooms.find(r => Math.round(me.x) === r.gridX && Math.round(me.y) === r.gridY && me.floor === r.floor);
+          if (!room) continue;
+          const guest = before.guests.find(g => g.id === room.guestId)!;
+          const legs = guest.trip ?? [];
+          const onTrip = legs.length > 0 && tt < legsEnd(legs) && (tt >= legs[0].start || guest.tripKind === 'arrival');
+          if (!onTrip) { bad('staff in a do-not-disturb room with the guest in', `${it.staffId} in ${room.id} at ${tt}`); continue; }
+          const people = [{ id: guest.id, legs, size: partyOf(guest).size }, ...(before.walkers ?? []).map(w => ({ id: w.id, legs: w.trip, size: partyOf(w).size }))];
+          for (const pp of people) {
+            if (!pp.legs.length || tt < pp.legs[0].start || tt >= legsEnd(pp.legs)) continue;
+            for (let m = 0; m < pp.size; m++) {
+              const at = memberPositionAt(pp.legs, tt, m)!;
+              if (Math.round(at.x) === room.gridX && Math.round(at.y) === room.gridY && at.floor === room.floor) bad('staff in a do-not-disturb room with the guest in', `${it.staffId}: ${pp.id}#${m} in ${room.id} at ${tt}`);
+            }
+          }
+        }
+      }
       const r = tickSimulation(before, prng);
       const after = r.state;
+      // M: visitors walk in from the street, and are drawn in a room only while it's their host's and the host is in
+      const T1v = hourStart(after);
+      for (const w of after.walkers ?? []) {
+        if (w.reason !== 'visitor') continue;
+        const first = w.trip[0];
+        if (first.start >= T1v - 1e-9) {
+          visitorNights++;
+          if (first.kind !== 'walk' || !isEntranceTile(after, first.path[0])) bad('visitors do not come in from the street', w.id);
+        }
+        for (const tt of [T1v + 0.05, T1v + 0.35, T1v + 0.65, T1v + 0.95]) {
+          const at = positionAt(w.trip, tt);
+          const leg = at?.leg;
+          if (!at || !leg || leg.kind !== 'stay' || leg.activity !== 'in_room' || tt >= legsEnd(w.trip)) continue;
+          const room = after.rooms.find(x => x.id === leg.placeId);
+          const host = after.guests.find(g => g.id === w.hostId);
+          if (!room || room.guestId !== w.hostId || !host || isGuestAway(host, tt)) bad('visitors in a room without their host', `${w.id} at ${tt}`);
+          if (room && (Math.round(at.x) !== room.gridX || Math.round(at.y) !== room.gridY || at.floor !== room.floor)) bad('visitors drawn outside the room they are in', w.id);
+        }
+      }
       for (const g of after.guests) for (const l of g.trip ?? []) if (l.kind === 'stay' && l.activity === 'visit' && l.start >= hourStart(after)) visits++;
       for (const room of before.rooms) {
         const next = after.rooms.find(x => x.id === room.id);
@@ -188,5 +237,7 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
     expect(visits).toBeGreaterThan(0); // the run got far enough for guests to be using facilities
   }
   expect(partyTrips).toBeGreaterThan(50); // parties of three or more came and went
+  expect(dndCleans).toBeGreaterThan(20); // do-not-disturb rooms were cleaned (while their guests were out)
+  expect(visitorNights).toBeGreaterThan(20); // rowdy guests had friends round
   expect(problems, JSON.stringify(examples)).toEqual({});
 }, 300000);

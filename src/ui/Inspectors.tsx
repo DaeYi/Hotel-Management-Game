@@ -14,7 +14,10 @@ import { describeGuest, awayActivity, popularWith } from '../simulation/Purpose'
 import { roomFit, listFeatures } from '../simulation/Preferences';
 import { RoomSuits } from './RoomSuits';
 
-import { guestTags, describeRhythm, describeTemperament, isSleepHour, sleepHours, favoriteOf, describeFavorite } from '../simulation/Profile';
+import { guestTags, describeRhythm, describeTemperament, sleepHours, favoriteOf, describeFavorite } from '../simulation/Profile';
+import { housekeepingPrefOf, describeHousekeeping } from '../simulation/CleaningPreference';
+import { isAsleepAt, isHosting, theVisitors, visitorCount } from '../simulation/Visitors';
+import { describeVisitors, canAskVisitorsToLeave } from '../simulation/HostedNights';
 import { describeLoyalty } from '../simulation/Loyalty';
 import { guestMood } from '../simulation/Mood';
 import { getOpenFacilities } from '../simulation/Layout';
@@ -94,10 +97,16 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
   // What the guest staying likes (or doesn't) about the room: part of their review
   const fit = room.status === 'occupied' && guest ? roomFit(profile, guest) : null;
 
+  // Friends round, and the hanger on the door
+  const visitors = room.status === 'occupied' && guest ? describeVisitors(state, guest.id, c.gameTime) : null;
+  const hanger = room.status === 'occupied' && guest ? housekeepingPrefOf(guest) : 'standard';
+
   const stats = [
     `Status:      ${status}`,
+    ...(visitors ? [`Visitors:    ${visitors}`] : []),
     `Condition:   ${formatBar(room.condition)} ${room.condition.toFixed(0)}%`,
     `Cleanliness: ${formatBar(room.cleanliness)} ${room.cleanliness.toFixed(0)}%${cleaning?.job === 'daily' ? `, ${dailyStatus(cleaning)}` : ''}`,
+    ...(hanger !== 'standard' ? [`Hanger:      ${hanger === 'dnd' ? 'Do not disturb' : 'Please make up the room'}`] : []),
     `Decor:       ${formatBar(room.decor)} ${room.decor.toFixed(0)}%${room.decor < DECOR.freshThreshold ? ' stale' : ''}`,
     `Amenities:   ${AMENITIES.tiers[state.amenities[room.type]]?.label ?? 'Basic'}`,
     GUEST_PROFILE.enabled ? `Night noise: ${noiseLabel(nightRoomNoise(room, state))}` : `Noise:       ${noiseLabel(calculateRoomNoise(room, state))}`,
@@ -141,6 +150,7 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
         onInput={e => c.setRoomPrice(room.id, Number((e.target as HTMLInputElement).value))}
       />
       <div class="actions">
+        {guest && room.status === 'occupied' && <AskVisitorsButton hostId={guest.id} state={state} />}
         <button onClick={() => c.turnRoomDoor(room.id)} aria-label="Turn door">
           Door {DOOR_ARROWS[room.door]} Turn
         </button>
@@ -161,6 +171,20 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
         )}
       </div>
     </TileCard>
+  );
+}
+
+/** "Ask the visitors to leave": while a guest has friends in (or on the way up) and nobody's asked yet. */
+function AskVisitorsButton({ hostId, state }: { hostId: string; state: HotelState }) {
+  const c = useController();
+  const host = state.guests.find(g => g.id === hostId);
+  if (!host || host.hostedNight?.keptDownAt !== undefined || !isHosting(state, hostId, c.gameTime)) return null;
+  const staffed = canAskVisitorsToLeave(state);
+  return (
+    <button class="warn" disabled={!staffed} title={staffed ? `${PartyLabel(host)} will mind` : 'Nobody at the front desk to ask'}
+      onClick={() => c.askVisitorsToLeave(hostId)}>
+      Ask {theVisitors(visitorCount(state, hostId))} to leave
+    </button>
   );
 }
 
@@ -240,7 +264,9 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
   const room = state.rooms.find(r => r.guestId === guest.id);
   const where = guestWhereabouts(guest, state, c.gameTime);
   const roomLabel = room ? formatRoomLabel(room.gridX, room.gridY, room.floor) : null;
-  const asleep = GUEST_PROFILE.enabled && !where && isSleepHour(guest, state.hour);
+  const asleep = GUEST_PROFILE.enabled && !where && isAsleepAt(state, guest, c.gameTime);
+  const visitors = describeVisitors(state, guest.id, c.gameTime);
+  const housekeeping = describeHousekeeping(guest);
   // Which night of the stay: before they wake, they're still in the night that began yesterday
   const night = Math.min(guest.stayLength, Math.max(1, state.day - guest.checkInDay + (state.hour < sleepHours(guest)[1] ? 0 : 1)));
   const fit = room ? roomFit(profileRoom(room), guest) : null;
@@ -251,6 +277,7 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
     `${capitalize(describeGuest(party, guest.purpose))}${guest.isReturning && !LOYALTY.enabled ? ', back again' : ''}`,
     `Night ${night} of ${guest.stayLength}${LOYALTY.enabled ? ` \u00b7 ${describeLoyalty(guest)}` : ''}`,
     ...(favoriteLine ? [favoriteLine] : []),
+    ...(housekeeping ? [housekeeping] : []),
     ...(guest.profile ? [describeRhythm(guest, state)] : []),
     ...describeTemperament(guest),
     // Without a profile (an older save), what the trait says
@@ -266,6 +293,11 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
         </div>
       )}
       <pre class="stats">{`Mood:  ${formatBar(guest.satisfaction)} ${Math.floor(guest.satisfaction)}%${MOOD.enabled ? ` ${guestMood(guest)}` : ''}`}</pre>
+      {visitors && (
+        <div class="small visitors">
+          {visitors}{' '}<AskVisitorsButton hostId={guest.id} state={state} />
+        </div>
+      )}
       <div class="small">
         {where ? capitalize(where) : asleep ? 'Asleep in' : 'In'}{!where && roomLabel ? ` room ${roomLabel}` : ''}{' '}
         {room && (

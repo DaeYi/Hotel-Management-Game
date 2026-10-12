@@ -47,7 +47,7 @@ export class WorldScene extends Phaser.Scene {
     this.grid.renderFacilities(state, floor);
     const selectedGuest = c.selection?.kind === 'guest' ? c.selection.id : null;
     this.actors.update(state, floor, c.gameTime, selectedGuest);
-    this.grid.renderGuests(state, floor, this.actors.awayGuestIds(), selectedGuest);
+    this.grid.renderGuests(state, floor, this.actors.awayGuestIds(), selectedGuest, c.gameTime);
     this.grid.renderNoise(state, floor);
     this.grid.renderCleaning(state, floor, c.gameTime, c.cleaningOverlay);
     this.grid.renderConstruction(state, floor);

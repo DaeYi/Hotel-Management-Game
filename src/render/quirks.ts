@@ -59,6 +59,38 @@ export function drawMoodFace(g: Phaser.GameObjects.Graphics, x: number, y: numbe
   }
 }
 
+/** The door hangers' colours: red, do not disturb; green, please make up the room. */
+export const HANGER_COLORS: Record<'dnd' | 'makeup', number> = { dnd: 0xe74c3c, makeup: 0x2ecc71 };
+
+/** The colour of the ring round a room with visitors in (noisy). */
+export const VISITORS_COLOR = 0xff6b6b;
+
+/**
+ * A hanger on a room's door (docs/designs/guest-staff-personalities.md,
+ * Housekeeping preference): a small tag hanging inside the room off one end of
+ * the door bar, on a tile of `size` at (x, y), turned with the door.
+ */
+export function drawHanger(g: Phaser.GameObjects.Graphics, x: number, y: number, door: 'up' | 'right' | 'down' | 'left', pref: 'dnd' | 'makeup', size: number) {
+  const long = size * 0.4;
+  const thick = 4;
+  const mid = (size - long) / 2;
+  const along = mid + long - 7; // near the bar's far end
+  const upright = door === 'up' || door === 'down';
+  const [w, h] = upright ? [7, 10] : [10, 7];
+  const [ax, ay] = door === 'up' ? [x + along, y + thick] : door === 'down' ? [x + along, y + size - thick - h]
+    : door === 'left' ? [x + thick, y + along] : [x + size - thick - w, y + along];
+  // Pale-edged, so it reads against the furniture; do not disturb has a white bar across, like a no-entry sign
+  g.fillStyle(HANGER_COLORS[pref], 1);
+  g.fillRect(ax, ay, w, h);
+  g.lineStyle(1, 0xf5f5f5, 0.9);
+  g.strokeRect(ax, ay, w, h);
+  if (pref === 'dnd') {
+    g.fillStyle(0xffffff, 1);
+    if (upright) g.fillRect(ax + 1.5, ay + h / 2 - 1, w - 3, 2);
+    else g.fillRect(ax + w / 2 - 1, ay + 1.5, 2, h - 3);
+  }
+}
+
 /** A "z" (asleep) with its top-left at (x, y), 5px square. */
 export function drawSleepZ(g: Phaser.GameObjects.Graphics, x: number, y: number) {
   g.lineStyle(1.5, 0xecf0f1, 0.9);
