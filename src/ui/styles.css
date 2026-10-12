@@ -102,6 +102,8 @@ button.warn { color: #e67e22; background: #3a2a1a; }
 .legend { display: flex; flex-wrap: wrap; gap: 16px; color: var(--text-dim); font-size: 11px; }
 .legend .swatch { display: inline-block; width: 10px; height: 10px; margin-right: 4px; vertical-align: -1px; }
 .legend .swatch.round { border-radius: 50%; }
+.legend-face { display: inline-block; margin: 0 3px 0 6px; vertical-align: -1px; }
+.legend .swatch.ring { border-radius: 50%; border: 2px solid; box-sizing: border-box; margin-left: 6px; }
 
 /* ---------- Cards ---------- */
 

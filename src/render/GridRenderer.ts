@@ -11,7 +11,10 @@ import { roomCleaningAt, GRUBBY_BELOW } from '../simulation/CleaningStatus';
 import { getGuestDotColor, isChild } from './figures';
 import { partyOf, sharesBeds } from '../simulation/Party';
 import { isSleepHour, quirkOf } from '../simulation/Profile';
-import { drawQuirk, drawSleepZ } from './quirks';
+import { drawQuirk, drawSleepZ, drawMoodFace, RING_COLORS, SELECTED_COLOR } from './quirks';
+import { ringTierOf } from './figures';
+import { staysOf } from '../simulation/Loyalty';
+import { guestMood, moodFace } from '../simulation/Mood';
 
 /** Guest dot color by trait (see figures.ts). */
 export { getGuestDotColor };
@@ -445,11 +448,12 @@ export class GridRenderer {
         // Return-guest marker (design-review D7/D10): a thin ring around the
         // first member's trait-color dot, visible on the grid during actual play.
         if (m === 0 && guest.isReturning) {
-          this.guestGraphics.lineStyle(1.5, 0xffffff, 0.9);
+          // White returning, silver a regular, gold a VIP
+          this.guestGraphics.lineStyle(1.5, RING_COLORS[ringTierOf(staysOf(guest)) ?? 'returning'], 0.95);
           this.guestGraphics.strokeCircle(x, y, 9);
         }
         if (guest.id === selectedGuestId) {
-          this.guestGraphics.lineStyle(2, 0xf1c40f, 1);
+          this.guestGraphics.lineStyle(2, SELECTED_COLOR, 1);
           this.guestGraphics.strokeCircle(x, y, r + 5);
         }
         if (m === 0) {
@@ -459,7 +463,10 @@ export class GridRenderer {
           const clampX = (v: number) => Math.min(left + TILE_SIZE - 6, Math.max(left + 6, v));
           const clampY = (v: number) => Math.min(top + TILE_SIZE - 6, Math.max(top + 6, v));
           if (quirk) drawQuirk(this.guestGraphics, clampX(x + 8), clampY(y - 9), quirk);
-          if (asleep) drawSleepZ(this.guestGraphics, clampX(x - 13), clampY(y - 14));
+          // Irritated or angry: a face (lying awake, if it's their sleep hours); else asleep, a "z"
+          const face = moodFace(guestMood(guest));
+          if (face) drawMoodFace(this.guestGraphics, clampX(x - 8), clampY(y - 9), face);
+          else if (asleep) drawSleepZ(this.guestGraphics, clampX(x - 13), clampY(y - 14));
         }
       }
     }

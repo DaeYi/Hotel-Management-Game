@@ -1,8 +1,8 @@
 import type { Ref } from 'preact';
 import { PURPOSES, PURPOSE_LABELS } from '../simulation/Purpose';
 import { PURPOSE_COLORS, NO_PURPOSE_COLOR } from '../render/figures';
-import { GUEST_PURPOSES, GUEST_PROFILE } from '../config/balance';
-import { QUIRK_GLYPHS } from '../render/quirks';
+import { GUEST_PURPOSES, GUEST_PROFILE, MOOD, LOYALTY } from '../config/balance';
+import { QUIRK_GLYPHS, MOOD_COLORS, RING_COLORS } from '../render/quirks';
 import type { GameController, PanelId } from '../game/GameController';
 import { GameContext, useController, useControllerVersion } from './context';
 import { calculateValuation } from '../simulation/ObjectivesManager';
@@ -152,6 +152,21 @@ function StatusBar() {
 
 const toCss = (color: number) => `#${color.toString(16).padStart(6, '0')}`;
 
+/** A mood face as the floor plan draws it (quirks.drawMoodFace): a flat mouth irritated, a frown angry. */
+function MoodGlyph({ mood }: { mood: 'irritated' | 'angry' }) {
+  return (
+    <svg class="legend-face" width="12" height="12" viewBox="-4 -4 8 8" aria-hidden="true">
+      <circle r="4" fill="#1b1b2b" opacity="0.9" />
+      <circle r="3" fill={toCss(MOOD_COLORS[mood])} />
+      <rect x="-1.6" y="-1.4" width="1" height="1" fill="#1b1b2b" />
+      <rect x="0.6" y="-1.4" width="1" height="1" fill="#1b1b2b" />
+      {mood === 'irritated'
+        ? <line x1="-1.4" y1="1.2" x2="1.4" y2="1.2" stroke="#1b1b2b" stroke-width="0.9" />
+        : <polyline points="-1.5,1.8 0,0.9 1.5,1.8" fill="none" stroke="#1b1b2b" stroke-width="0.9" />}
+    </svg>
+  );
+}
+
 function Legend() {
   const c = useController();
   return (
@@ -169,6 +184,19 @@ function Legend() {
           <span class="legend-mark">{QUIRK_GLYPHS.moon}</span>Light sleeper
           <span class="legend-mark">{QUIRK_GLYPHS.note}</span>Rowdy
           <span class="legend-mark">{QUIRK_GLYPHS.asleep}</span>Asleep
+          {MOOD.enabled && (
+            <>
+              <MoodGlyph mood="irritated" />Irritated
+              <MoodGlyph mood="angry" />Angry
+            </>
+          )}
+          <span class="swatch ring" style={{ borderColor: toCss(RING_COLORS.returning) }} />Back again
+          {LOYALTY.enabled && (
+            <>
+              <span class="swatch ring" style={{ borderColor: toCss(RING_COLORS.regular) }} />Regular
+              <span class="swatch ring" style={{ borderColor: toCss(RING_COLORS.vip) }} />VIP
+            </>
+          )}
           <span class="dim">(click a guest for more)</span>
         </span>
       )}

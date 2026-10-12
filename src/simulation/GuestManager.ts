@@ -1,6 +1,6 @@
 import type { Guest, GuestTrait, Room, HotelState, Booking, GameEvent, ReturningGuestProfile } from './types.js';
 import type { PRNG } from './prng.js';
-import { ECONOMY, GUEST_TRAITS, REVIEW, HOUSEKEEPING, STAFF, AMENITIES, GUEST_NAMES, SATISFACTION, STORY, PARTIES, GUEST_PROFILE } from '../config/balance.js';
+import { ECONOMY, GUEST_TRAITS, REVIEW, HOUSEKEEPING, STAFF, AMENITIES, GUEST_NAMES, SATISFACTION, STORY, PARTIES, GUEST_PROFILE, LOYALTY, GUEST_FAVORITES, FACILITY_CONFIG } from '../config/balance.js';
 import { getDecorReviewPenalty } from './DecorManager.js';
 import { getCampaignDemandMultiplier } from './MarketingManager.js';
 import { getCheckInCapacity } from './Layout.js';
@@ -13,6 +13,8 @@ import { partyOf, rollParty, withParty, smallerParty, partyLabel, PartyLabel, de
 import { hash01 } from './Movement.js';
 import { rollPurpose } from './Purpose.js';
 import { rollProfile, checkoutHour, wantsLateCheckout, lateCheckoutPolicy } from './Profile.js';
+import { returnEntry, addToPool, dueIndexes, pickDue, tierOf, staysOf, ordinal, expectationMultFor, bookingWeightFor, isLostRegular, personIdOf } from './Loyalty.js';
+import { moodOf } from './Mood.js';
 import { roomFit, type RoomFeature } from './Preferences.js';
 import { getTotalDemandMultiplier } from './SeasonManager.js';
 import { getReputationPenaltyMultiplier } from './StoryGenerator.js';
@@ -71,6 +73,14 @@ function generateReturningGuest(profile: ReturningGuestProfile, prng: PRNG, day:
     checkInDay: day,
     isReturning: true,
     hadNoiseComplaint: false,
+    // With loyalty on: the same person, one more stay, and what they had last time
+    ...(LOYALTY.enabled && profile.personId ? {
+      loyalty: {
+        personId: profile.personId, stays: (profile.stays ?? 1) + 1,
+        ...(profile.lastRoomId ? { lastRoomId: profile.lastRoomId, lastRoomType: profile.roomType } : {}),
+        ...(profile.lastReview !== undefined ? { lastReview: profile.lastReview } : {}),
+      },
+    } : {}),
   };
 }
 
@@ -85,7 +95,11 @@ export function getWordOfMouthMultiplier(state: HotelState): number {
   const recent = state.bookings.slice(-REVIEW.reviewWindowBookingCount);
   if (recent.length === 0) return 1.0;
 
-  const avgSatisfaction = recent.reduce((sum, b) => sum + b.satisfactionAtCheckout, 0) / recent.length;
+  // A regular's or VIP's mood counts double (bookings without a weight count once, as ever)
+  const weighted = recent.some(b => b.weight !== undefined);
+  const avgSatisfaction = weighted
+    ? recent.reduce((sum, b) => sum + b.satisfactionAtCheckout * (b.weight ?? 1), 0) / recent.reduce((sum, b) => sum + (b.weight ?? 1), 0)
+    : recent.reduce((sum, b) => sum + b.satisfactionAtCheckout, 0) / recent.length;
   const normalized = (avgSatisfaction - SATISFACTION.initial) / SATISFACTION.initial; // roughly -1..+1
   const raw = 1.0 + normalized * (STORY.wordOfMouthCeilingMultiplier - 1.0);
   return Math.max(STORY.wordOfMouthFloorMultiplier, Math.min(STORY.wordOfMouthCeilingMultiplier, raw));
@@ -172,11 +186,14 @@ export function processArrivals(
 
   for (let i = 0; i < totalArrivals; i++) {
     let guest: Guest;
-    if (pool.length > 0 && prng.chance(STORY.returningGuestPullChance)) {
-      const idx = Math.floor(prng.next() * pool.length);
-      const profile = pool[idx];
+    // Someone back for another stay (with loyalty on, only those due back by now)
+    let pulled: ReturningGuestProfile | null = null;
+    const due = dueIndexes(pool, state.day);
+    if (due.length > 0 && prng.chance(STORY.returningGuestPullChance)) {
+      const idx = pickDue(pool, due, prng.next());
+      pulled = pool[idx];
       pool = [...pool.slice(0, idx), ...pool.slice(idx + 1)];
-      guest = generateReturningGuest(profile, prng, state.day, state.starRating);
+      guest = generateReturningGuest(pulled, prng, state.day, state.starRating);
     } else {
       guest = generateFreshGuest(prng, state.day, state.starRating);
     }
@@ -194,6 +211,16 @@ export function processArrivals(
     // Who they are, beyond the trip (their party and purpose lean it; a family is never rowdy)
     const profile = rollProfile(guest.id, partyOf(guest), purpose, guest.trait);
     if (profile) guest = { ...guest, profile };
+    // A returning guest is who they were: their rhythm, pace, sleep and favourite (a new trip, a new party)
+    if (pulled?.profile && LOYALTY.enabled && guest.profile) {
+      // ...but with the family this time, never rowdy (the fresh roll knows)
+      const rowdiness = partyOf(guest).kind === 'family' ? guest.profile.rowdiness : pulled.profile.rowdiness;
+      guest = { ...guest, profile: { ...pulled.profile, rowdiness } };
+    }
+    // Turned away (desk, room, price): with loyalty on, they'll try again another day
+    const requeue = () => {
+      if (pulled && LOYALTY.enabled) pool = addToPool(pool, { ...pulled, dueDay: state.day + 2 });
+    };
 
     // Front desk at capacity: guest leaves impatiently
     if (checkedInThisHour >= checkInCapacity) {
@@ -204,6 +231,7 @@ export function processArrivals(
         message: `${partyOf(guest).size > 2 ? PartyLabel(guest) : 'Guest'} left (${checkInCapacity === 0 ? 'no staffed check-in desk' : 'front desk too busy'})`,
         data: { reason: checkInCapacity === 0 ? 'no_desk' : 'front_desk_capacity', guestId: guest.id, partyKind: partyOf(guest).kind, size: partyOf(guest).size },
       });
+      requeue();
       continue;
     }
 
@@ -231,12 +259,18 @@ export function processArrivals(
             message: `${PartyLabel(guest)} was turned away: ${need}`,
             data: { guestId: guest.id, partyKind: party.kind, size: party.size, reason: 'no_fit' },
           });
+          requeue();
           continue;
         }
       }
     }
 
-    const room = matchGuestToRoom(guest, remainingRooms, priceTolerance, state.starRating);
+    // A regular asks for their old room first (the same room, still the same kind)
+    const regular = LOYALTY.enabled && guest.loyalty?.lastRoomId && tierOf(staysOf(guest)) !== 'returning' && tierOf(staysOf(guest)) !== 'first';
+    const oldRoom = regular ? remainingRooms.find(r => r.id === guest.loyalty!.lastRoomId && r.type === guest.loyalty!.lastRoomType) : undefined;
+    const inOldRoom = oldRoom ? matchGuestToRoom(guest, [oldRoom], priceTolerance, state.starRating) : null;
+    if (inOldRoom) guest = { ...guest, loyalty: { ...guest.loyalty!, oldRoom: true } };
+    const room = inOldRoom ?? matchGuestToRoom(guest, remainingRooms, priceTolerance, state.starRating);
     const who = partyOf(guest);
     if (room) {
       booked.add(room.id);
@@ -248,11 +282,14 @@ export function processArrivals(
         data: { guestId: guest.id, roomId: room.id, trait: guest.trait, partyKind: who.kind, size: who.size, ...(wanted ? { wanted } : {}) },
       });
       if (guest.isReturning) {
+        const stays = staysOf(guest);
+        const which = stays > 2 ? `their ${ordinal(stays)} stay` : 'another stay';
         result.events.push({
           type: 'guest_returned',
           // The guest who stayed before, by name: who they bring this time is new
-          message: `${guest.name} is back for another stay${who.size > 2 ? (who.kind === 'family' ? ', with the family' : ', with friends') : ''}!`,
-          data: { guestId: guest.id, roomId: room.id },
+          message: `${guest.name} is back for ${which}${who.size > 2 ? (who.kind === 'family' ? ', with the family' : ', with friends') : ''}${inOldRoom ? ', in their old room' : ''}!`,
+          // (a second stay with loyalty on gets no story: its toast must show whatever's open)
+          data: { guestId: guest.id, roomId: room.id, stays, ...(inOldRoom ? { oldRoom: true } : {}), ...(LOYALTY.enabled && stays < LOYALTY.regularFrom ? { unlogged: true } : {}) },
         });
       }
     } else {
@@ -263,6 +300,7 @@ export function processArrivals(
         message: who.size > 2 ? `${PartyLabel(guest)} turned away (no room at a price they would pay)` : 'Guest turned away (no room at a price they would pay)',
         data: { guestId: guest.id, partyKind: who.kind, size: who.size, reason: 'price', ...(wanted ? { wanted } : {}) },
       });
+      requeue();
     }
   }
 
@@ -311,6 +349,7 @@ export function processDepartures(
       const score = breakdown.finalScore;
       const totalPaid = room.pricePerNight * guest.stayLength + lateFee;
 
+      const weight = bookingWeightFor(guest);
       const booking: Booking = {
         id: `booking-${guest.id}`,
         roomId: room.id,
@@ -318,6 +357,7 @@ export function processDepartures(
         nightRate: room.pricePerNight,
         reviewScore: score,
         satisfactionAtCheckout: guest.satisfaction,
+        ...(weight ? { weight } : {}),
       };
 
       result.departed.push({ guest, roomId: room.id, booking, breakdown, ...(lateFee > 0 ? { lateFee } : {}) });
@@ -327,13 +367,19 @@ export function processDepartures(
         data: {
           guestId: guest.id, roomId: room.id, reviewScore: score, totalPaid, partyKind: partyOf(guest).kind, size: partyOf(guest).size,
           roomFit: breakdown.roomFit, liked: !!breakdown.roomLikes, disliked: !!breakdown.roomDislikes, noisePenalty: breakdown.noisePenalty,
+          mood: moodOf(guest.satisfaction), stays: staysOf(guest), favoriteMisses: guest.favoriteMisses?.count ?? 0,
         },
       });
 
-      // Satisfied guests become eligible to return later (Satisfaction System Design, point 3)
-      if (guest.satisfaction >= SATISFACTION.returnEligibleThreshold) {
-        const profile: ReturningGuestProfile = { name: guest.name, trait: guest.trait, roomType: room.type };
-        pool = [...pool, profile].slice(-STORY.returningGuestPoolMaxSize);
+      // Will they be back? (Satisfaction System Design, point 3; Loyalty.ts)
+      const entry = returnEntry(guest, guest.satisfaction, room, score, state.day);
+      if (entry) pool = addToPool(pool, entry);
+      else if (isLostRegular(guest, score)) {
+        result.events.push({
+          type: 'regular_lost',
+          message: `${guest.name} won't be back: their ${ordinal(staysOf(guest))} stay was a letdown`,
+          data: { guestId: guest.id, personId: personIdOf(guest), roomId: room.id, stays: staysOf(guest) },
+        });
       }
     }
   }
@@ -356,6 +402,8 @@ export interface GuestReviewBreakdown {
   roomFit: number; // how well the room suited them (Preferences.ts): what they liked, less what they didn't
   roomLikes?: RoomFeature[];
   roomDislikes?: RoomFeature[];
+  favoriteMiss?: number; // their favourite facility let them down (missing, or full)
+  favoriteMissLabel?: string; // "the pool"
   finalScore: number;
 }
 
@@ -409,6 +457,11 @@ export function calculateGuestReviewBreakdown(
   // What they liked (or didn't) in the room: their purpose, party and trait against its furniture
   const fit = roomFit(profileRoom(room), guest);
 
+  // Their favourite facility let them down (missing, or full): a little off the review, a day at a time
+  const favorite = guest.profile?.favorite;
+  const misses = GUEST_FAVORITES.enabled ? Math.min(GUEST_FAVORITES.maxMissesPerStay, guest.favoriteMisses?.count ?? 0) : 0;
+  const favoriteMiss = misses * GUEST_FAVORITES.missReview;
+
   // Random variance
   const guestVariance = prng.range(-REVIEW.varianceRange, REVIEW.varianceRange);
 
@@ -424,11 +477,12 @@ export function calculateGuestReviewBreakdown(
     + facilityBonus
     - amenityPenalty
     + fit.score
+    - favoriteMiss
     + guestVariance;
 
   // Apply star expectation multiplier to penalties
   // Higher star = penalties are amplified, bonuses stay the same
-  const expectation = getExpectationMultiplier(state.starRating);
+  const expectation = getExpectationMultiplier(state.starRating) * expectationMultFor(guest); // the loyal forgive more
   const penalties = noisePenalty + decorPenalty + elevatorPenalty + Math.max(0, -conditionBonus) + Math.max(0, -cleanlinessBonus) + amenityPenalty;
   const expectationAdjustment = penalties * (expectation - 1);
 
@@ -447,6 +501,7 @@ export function calculateGuestReviewBreakdown(
     facilityBonus,
     amenityBonus,
     roomFit: fit.score,
+    ...(favoriteMiss > 0 && favorite && favorite !== 'none' ? { favoriteMiss, favoriteMissLabel: `the ${FACILITY_CONFIG[favorite].label.toLowerCase()}` } : {}),
     ...(fit.likes.length > 0 ? { roomLikes: fit.likes } : {}),
     ...(fit.dislikes.length > 0 ? { roomDislikes: fit.dislikes } : {}),
     finalScore: clampedScore,

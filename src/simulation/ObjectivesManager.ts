@@ -193,6 +193,8 @@ export function recordDailyStat(state: HotelState): HotelState {
     totalRevenue: state.totalRevenue,
     valuation: calculateValuation(state),
     reviewScore: state.reviewScore,
+    // Guests let down by a facility today (favourites)
+    ...(state.facilityDemand?.day === state.day ? { wanted: state.facilityDemand.wanted, full: state.facilityDemand.full, tooFar: state.facilityDemand.tooFar } : {}),
   };
   return {
     ...state,

@@ -43,12 +43,13 @@ export const EVENT_COLORS: Record<string, string> = {
   renovation_complete: '#2ecc71',
   campaign_ended: '#f39c12',
   floor_built: '#9b59b6',
+  regular_lost: '#e67e22',
 };
 
 /** Incident-related event types (design-review D13): suppressed as toasts while
  * the Story Log panel is open, since the player is already looking at them there. */
 export const INCIDENT_EVENT_TYPES = new Set([
-  'guest_returned', 'guest_walked_out', 'noise_complaint_filed',
+  'guest_returned', 'regular_lost', 'guest_walked_out', 'noise_complaint_filed',
   'noise_complaint_escalated', 'mid_stay_breakdown_resolved',
 ]);
 
@@ -68,7 +69,7 @@ export class ToastQueue {
   /** Queue toasts for a batch of events. `storyLogOpen` suppresses incident toasts. */
   add(events: GameEvent[], now: number, storyLogOpen = false) {
     for (const event of events) {
-      if (storyLogOpen && INCIDENT_EVENT_TYPES.has(event.type)) continue;
+      if (storyLogOpen && INCIDENT_EVENT_TYPES.has(event.type) && !event.data?.unlogged) continue; // (in the open log already, unless it isn't logged)
 
       if (event.type === 'loan_payment' && event.data?.missed) {
         this.show(event.message, '#e74c3c', now);

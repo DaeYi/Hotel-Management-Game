@@ -1,12 +1,12 @@
 import type { SimulationSummary } from './types.js';
-import type { PartyKind } from './types.js';
+import type { PartyKind, Mood } from './types.js';
 import { settleChanges } from './Settle.js';
 import { hourStart } from './Movement.js';
 import { PRNG } from './prng.js';
 import { createStarterHotel, addRoom } from './HotelState.js';
 import { tickSimulation } from './tick.js';
 import { calculateValuation } from './ObjectivesManager.js';
-import { ECONOMY } from '../config/balance.js';
+import { ECONOMY, LOYALTY } from '../config/balance.js';
 import { STRATEGIES, idleStrategy } from './strategies.js';
 import type { Strategy } from './strategies.js';
 
@@ -44,6 +44,10 @@ export function simulate(
   let familiesSmaller = 0;
   const fit = { checkouts: 0, total: 0, liked: 0, disliked: 0, noise: 0 };
   let returningArrivals = 0;
+  let regularArrivals = 0;
+  let vipArrivals = 0;
+  let favoriteMisses = 0;
+  const moods: Record<Mood, number> = { delighted: 0, content: 0, irritated: 0, angry: 0 };
   const totalHours = days * 24;
 
   for (let tick = 0; tick < totalHours; tick++) {
@@ -59,7 +63,17 @@ export function simulate(
         if (e.data?.liked) fit.liked++;
         if (e.data?.disliked) fit.disliked++;
       }
-      if (e.type === 'guest_returned') returningArrivals++;
+      if (e.type === 'guest_returned') {
+        returningArrivals++;
+        const stays = (e.data?.stays as number) ?? 2;
+        if (stays >= LOYALTY.regularFrom) regularArrivals++;
+        if (stays >= LOYALTY.vipFrom) vipArrivals++;
+      }
+      if (e.type === 'guest_departed') {
+        favoriteMisses += (e.data?.favoriteMisses as number) ?? 0;
+        const mood = e.data?.mood as Mood | undefined;
+        if (mood) moods[mood]++;
+      }
       const kind = (e.data?.wanted ?? e.data?.partyKind) as PartyKind | undefined;
       if (!kind || !(kind in partyArrivals)) continue;
       if (e.type === 'guest_arrived') {
@@ -116,6 +130,10 @@ export function simulate(
     dislikedShare: fit.disliked / Math.max(1, fit.checkouts),
     returningArrivals,
     avgNoisePenalty: fit.noise / Math.max(1, fit.checkouts),
+    regularArrivals,
+    vipArrivals,
+    favoriteMisses,
+    moodShares: Object.fromEntries(Object.entries(moods).map(([k, n]) => [k, n / Math.max(1, Object.values(moods).reduce((a, b) => a + b, 0))])) as Record<Mood, number>,
   };
 }
 

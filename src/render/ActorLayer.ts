@@ -6,7 +6,7 @@ import { positionAt, legsEnd, hash01 } from '../simulation/Movement';
 import { guestFigures, type Figure } from './figures';
 import { BREAK_ROOM } from '../config/balance';
 import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE } from './GridRenderer';
-import { drawQuirk } from './quirks';
+import { drawQuirk, drawMoodFace, RING_COLORS, SELECTED_COLOR } from './quirks';
 
 // People in the building, drawn exactly where the simulation has them. Nothing
 // here moves anyone: guests' trips (arriving, out at a facility, moving rooms),
@@ -177,7 +177,10 @@ export class ActorLayer {
       this.drawFigure(GRID_OFFSET_X + (f.x + 0.5) * TILE_SIZE + ox, GRID_OFFSET_Y + (f.y + 0.5) * TILE_SIZE + oy, f);
     }
     // Quirk icons last, so a neighbour's dot never covers one
-    for (const { figure, x, y } of this.drawn) if (figure.quirk) drawQuirk(g, x + 6, y - 7, figure.quirk);
+    for (const { figure, x, y } of this.drawn) {
+      if (figure.quirk) drawQuirk(g, x + 6, y - 7, figure.quirk);
+      if (figure.mood) drawMoodFace(g, x - 6, y - 7, figure.mood);
+    }
   }
 
   /** Guests are dots (children smaller) and staff are squares, both outlined in white; the selected guest's party is circled in gold. */
@@ -189,9 +192,12 @@ export class ActorLayer {
       const r = f.small ? 3.5 : 5;
       g.fillCircle(cx, cy, r);
       g.strokeCircle(cx, cy, r);
-      if (f.ring) g.strokeCircle(cx, cy, 8);
+      if (f.ring) {
+        g.lineStyle(1.5, RING_COLORS[f.ringTier ?? 'returning'], 0.95);
+        g.strokeCircle(cx, cy, 8);
+      }
       if (f.guestId && f.guestId === this.selectedGuestId) {
-        g.lineStyle(2, 0xf1c40f, 1);
+        g.lineStyle(2, SELECTED_COLOR, 1);
         g.strokeCircle(cx, cy, r + 5);
       }
       this.drawn.push({ figure: f, x: cx, y: cy, r });

@@ -15,7 +15,7 @@ import { calculateStarRating, calculateStarPoints, getNextStarRequirements } fro
 import { getSpecialEvent, getTotalDemandMultiplier } from '../src/simulation/SeasonManager.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import { simulate } from '../src/simulation/simulate.js';
-import { ECONOMY, REVIEW, ROOM_CONFIG, FACILITY_CONFIG, GUEST_TRAITS, NOISE, HOUSEKEEPING, SATISFACTION, STORY } from '../src/config/balance.js';
+import { ECONOMY, REVIEW, ROOM_CONFIG, FACILITY_CONFIG, GUEST_TRAITS, NOISE, HOUSEKEEPING, SATISFACTION, STORY, LOYALTY } from '../src/config/balance.js';
 import type { Room, Guest, Booking, GuestTrait, ActiveIncident, StoryLogEntry, Purpose } from '../src/simulation/types.js';
 import { ACTOR_COLORS } from '../src/render/ActorLayer';
 import { getGuestDotColor } from '../src/render/GridRenderer';
@@ -1375,7 +1375,7 @@ describe('simulate (headless)', () => {
       expect(state.cash).not.toBeNaN();
       expect(state.reviewScore).not.toBeNaN();
       // Bounded state: story log and active incidents never grow unbounded.
-      expect(state.returningGuestPool.length).toBeLessThanOrEqual(STORY.returningGuestPoolMaxSize);
+      expect(state.returningGuestPool.length).toBeLessThanOrEqual(LOYALTY.enabled ? LOYALTY.poolMaxSize : STORY.returningGuestPoolMaxSize);
 
       if (hour % (7 * 24) === 0 && hour > 0) {
         arrivalsPerWeek.push(arrivalsThisWeek);

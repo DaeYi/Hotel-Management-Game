@@ -29,6 +29,18 @@ export interface GuestProfile {
   sleep: SleepSensitivity;
   rowdiness: Rowdiness;
   checkoutHour: number; // when they'd like to leave on their last morning (an early bird's 07-10; 11 otherwise; a night owl asks for late checkout on top)
+  favorite?: FacilityType | 'none'; // the facility they seek out (absent on 1a-era profiles: no preference either way)
+}
+/** How a guest feels right now, from their satisfaction (see Mood.ts). */
+export type Mood = 'delighted' | 'content' | 'irritated' | 'angry';
+/** A guest's history with the hotel (see Loyalty.ts): the same person across stays. */
+export interface GuestLoyalty {
+  personId: string; // the id of their first booking: the same person, stay after stay
+  stays: number; // this stay included: 1 first visit, 2 returning, 3-4 regular, 5+ VIP
+  lastRoomId?: string; // the room they had last time (a regular asks for it again)
+  lastRoomType?: RoomType;
+  lastReview?: number;
+  oldRoom?: boolean; // they got their old room back this stay
 }
 /** Whether a night owl may stay till the late checkout: no, yes, or yes for a fee. */
 export type LateCheckoutPolicy = 'deny' | 'free' | 'fee';
@@ -124,6 +136,12 @@ export interface Guest {
   // noise over the threshold in their sleep hours, how many nights it woke
   // them, and the last of those nights (see NoiseManager.accrueNightNoise)
   nightNoise?: { exposure: number; woken: number; lastWokenNight: number };
+  // Who they are to the hotel: absent for a first stay (see Loyalty.ts)
+  loyalty?: GuestLoyalty;
+  // Days their favourite facility let them down (missing, or full): the last such day and how many
+  favoriteMisses?: { day: number; count: number };
+  // Outings in place of their missing favourite (the beach, a meal out): today's count and the hour of the last, so a fan goes at most twice a day, a few hours apart
+  favoriteOutings?: { day: number; today: number; lastAt: number };
   // Where the guest is going (walking in from the street, out to a facility and
   // back, to a new room): absolute game-hour legs. Once the last leg ends -- or
   // with no trip -- the guest is in their room. See Movement.ts.
@@ -131,7 +149,7 @@ export interface Guest {
   tripKind?: 'arrival' | 'visit' | 'move' | 'outing'; // what the trip is for (an arriving guest isn't in the building before it starts)
   // Facilities this guest actually used this stay (best level used, and the
   // day of the last visit): the facility part of their review. See FacilityManager.ts.
-  facilitiesUsed?: Partial<Record<FacilityType, { level: number; day: number }>>;
+  facilitiesUsed?: Partial<Record<FacilityType, { level: number; day: number; today?: number; visits?: number; lastAt?: number }>>; // (today/visits/lastAt: their favourite only)
 }
 
 /** A tile in the building: (gridX, gridY) on a floor. A `door` means the tile is entered through that side only (a room or facility). */
@@ -167,6 +185,7 @@ export interface StayLeg {
   placeId?: string; // the room, facility, desk, or break room being stayed in
   job?: 'turnover' | 'daily' | 'repair'; // what the stay works on, for staff
   credited?: boolean; // a facility visit whose bonus and sale have been counted (once the guest got there)
+  out?: 'beach' | 'breakfast' | 'lunch' | 'dinner'; // an outing instead of a facility the hotel doesn't have
 }
 
 export type Leg = WalkLeg | StayLeg;
@@ -183,6 +202,8 @@ export interface Walker {
   profile?: GuestProfile; // who they are (their pace, their quirk icon)
   guestId?: string; // the booking they were (someone checking out, not someone turned away)
   name?: string;
+  stays?: number; // their stays with the hotel (the ring's colour)
+  mood?: Mood; // how they left
 }
 
 export type StaffRole = 'housekeeper' | 'maintenance';
@@ -216,6 +237,7 @@ export interface Booking {
   nightRate: number;
   reviewScore: number; // 0-10 guest review score
   satisfactionAtCheckout: number; // 0-100, feeds the word-of-mouth rolling window
+  weight?: number; // how much this booking counts in the review and word-of-mouth windows (a regular's or a VIP's: 2)
 }
 
 /** A guest profile remembered after a satisfied checkout, for the return-guest mechanic. */
@@ -223,6 +245,13 @@ export interface ReturningGuestProfile {
   name: string;
   trait: GuestTrait;
   roomType: RoomType; // cosmetic/log-flavor only -- does not influence matchGuestToRoom
+  // With loyalty on (Loyalty.ts): the same person, who they are, and what they had last time
+  personId?: string;
+  stays?: number; // stays so far
+  profile?: GuestProfile;
+  lastRoomId?: string;
+  lastReview?: number;
+  dueDay?: number; // not back before this day
 }
 
 export type IncidentType = 'noise_complaint' | 'mid_stay_breakdown';
@@ -291,6 +320,8 @@ export interface NoiseSource {
 
 export interface HotelState {
   lateCheckout?: LateCheckoutPolicy; // absent: deny (see Profile.lateCheckoutPolicy)
+  // Today's let-downs at facilities, so far (recorded in dailyStats at the end of the day)
+  facilityDemand?: { day: number; wanted: Partial<Record<FacilityType, number>>; full: Partial<Record<FacilityType, number>>; tooFar: Partial<Record<FacilityType, number>>; fullAt?: Record<string, number> };
   cash: number;
   day: number;
   hour: number; // 0-23
@@ -351,6 +382,10 @@ export interface DailyStat {
   totalRevenue: number; // HotelState.totalRevenue at end of day (cumulative)
   valuation: number; // hotel valuation at end of day (see ValuationManager)
   reviewScore?: number; // review score at end of day (absent in saves from before it was recorded)
+  // Guests let down by a facility that day (favourite facilities): it isn't built (wanted), it was full, or too far to walk
+  wanted?: Partial<Record<FacilityType, number>>;
+  full?: Partial<Record<FacilityType, number>>;
+  tooFar?: Partial<Record<FacilityType, number>>;
 }
 
 /** A temporary arrival-multiplier penalty from a Review Goes Semi-Viral incident. */
@@ -387,6 +422,10 @@ export interface SimulationSummary {
   dislikedShare: number;
   returningArrivals: number; // guests who came back for another stay
   avgNoisePenalty: number; // the mean noise part of a checkout's review
+  regularArrivals: number; // returning guests on their third stay or more
+  vipArrivals: number; // ... their fifth or more
+  favoriteMisses: number; // days guests' favourite facility let them down
+  moodShares: Record<Mood, number>; // how guests left
 }
 
 export interface TickResult {
@@ -395,7 +434,7 @@ export interface TickResult {
 }
 
 export interface GameEvent {
-  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'party_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked' | 'renovation_complete' | 'campaign_ended' | 'floor_built';
+  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'party_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked' | 'renovation_complete' | 'campaign_ended' | 'floor_built' | 'regular_lost';
   message: string;
   data?: Record<string, unknown>;
 }

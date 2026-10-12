@@ -14,10 +14,13 @@ import { describeGuest, awayActivity, popularWith } from '../simulation/Purpose'
 import { roomFit, listFeatures } from '../simulation/Preferences';
 import { RoomSuits } from './RoomSuits';
 
-import { guestTags, describeRhythm, describeTemperament, isSleepHour, sleepHours } from '../simulation/Profile';
+import { guestTags, describeRhythm, describeTemperament, isSleepHour, sleepHours, favoriteOf, describeFavorite } from '../simulation/Profile';
+import { describeLoyalty } from '../simulation/Loyalty';
+import { guestMood } from '../simulation/Mood';
+import { getOpenFacilities } from '../simulation/Layout';
 import { PartyLabel } from '../simulation/Party';
-import { guestsInFacility } from '../simulation/FacilityManager';
-import { GUEST_PROFILE } from '../config/balance';
+import { guestsInFacility, facilityStatus } from '../simulation/FacilityManager';
+import { GUEST_PROFILE, GUEST_FAVORITES, LOYALTY, MOOD } from '../config/balance';
 import type { Tile } from '../game/GameController';
 import { getStaffTravelHours } from '../simulation/Layout';
 import { positionAt, legsEnd } from '../simulation/Movement';
@@ -196,7 +199,10 @@ function guestWhereabouts(guest: Guest, state: HotelState, t: number): string | 
   if (guest.tripKind === 'move') return 'moving rooms';
   if (guest.tripKind === 'outing') {
     const leg = positionAt(trip, t)?.leg;
-    if (leg?.kind === 'stay' && leg.activity === 'away') return `${awayActivity(guest)}, back about ${formatClock(leg.end)}`;
+    if (leg?.kind === 'stay' && leg.activity === 'away') {
+      const doing = leg.out === 'beach' ? 'at the beach' : leg.out === 'breakfast' ? 'out for breakfast' : leg.out === 'lunch' ? 'out to lunch' : leg.out === 'dinner' ? 'out to dinner' : awayActivity(guest);
+      return `${doing}, back about ${formatClock(leg.end)}`;
+    }
     return t < (trip.find(l => l.kind === 'stay')?.start ?? 0) ? 'heading out' : 'back from town';
   }
   const visit = trip.find(l => l.kind === 'stay' && l.activity === 'visit');
@@ -239,9 +245,12 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
   const night = Math.min(guest.stayLength, Math.max(1, state.day - guest.checkInDay + (state.hour < sleepHours(guest)[1] ? 0 : 1)));
   const fit = room ? roomFit(profileRoom(room), guest) : null;
   const elsewhere = room && room.floor !== c.currentFloor;
+  const favorite = favoriteOf(guest);
+  const favoriteLine = favorite ? describeFavorite(guest, facilityStatus(state, favorite), FACILITY_CONFIG[favorite].label) : null;
   const lines = [
-    `${capitalize(describeGuest(party, guest.purpose))}${guest.isReturning ? ', back again' : ''}`,
-    `Night ${night} of ${guest.stayLength}`,
+    `${capitalize(describeGuest(party, guest.purpose))}${guest.isReturning && !LOYALTY.enabled ? ', back again' : ''}`,
+    `Night ${night} of ${guest.stayLength}${LOYALTY.enabled ? ` \u00b7 ${describeLoyalty(guest)}` : ''}`,
+    ...(favoriteLine ? [favoriteLine] : []),
     ...(guest.profile ? [describeRhythm(guest, state)] : []),
     ...describeTemperament(guest),
     // Without a profile (an older save), what the trait says
@@ -256,7 +265,7 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
           {fit.dislikes.length > 0 && <span class="warn-text">Doesn't like {listFeatures(fit.dislikes)}.</span>}
         </div>
       )}
-      <pre class="stats">{`Mood:  ${formatBar(guest.satisfaction)} ${guest.satisfaction.toFixed(0)}%`}</pre>
+      <pre class="stats">{`Mood:  ${formatBar(guest.satisfaction)} ${Math.floor(guest.satisfaction)}%${MOOD.enabled ? ` ${guestMood(guest)}` : ''}`}</pre>
       <div class="small">
         {where ? capitalize(where) : asleep ? 'Asleep in' : 'In'}{!where && roomLabel ? ` room ${roomLabel}` : ''}{' '}
         {room && (
@@ -278,6 +287,11 @@ function FacilityInspector({ facility, state }: { facility: Facility; state: Hot
   const people = peopleInFacility(state, facility.id, c.gameTime);
   const usedBy = state.guests.filter(g => g.facilitiesUsed?.[facility.type as FacilityType]).length;
   const here = guestsInFacility(state, facility.id, c.gameTime);
+  // Fans let down today: it was full, or too far to walk to
+  const demand = state.facilityDemand?.day === state.day ? state.facilityDemand : null;
+  const full = demand?.fullAt?.[facility.id] ?? 0;
+  const far = demand?.tooFar[facility.type] ?? 0;
+  const turnedBack = [full > 0 && `${full} (full)`, far > 0 && `${far} (too far to walk)`].filter(Boolean).join(', ');
   const config = FACILITY_CONFIG[facility.type];
   const level = FACILITY_LEVELS[facility.level - 1];
   const next = FACILITY_LEVELS[facility.level];
@@ -294,6 +308,8 @@ function FacilityInspector({ facility, state }: { facility: Facility; state: Hot
           `In use:         ${Number.isInteger(inUse) ? inUse : inUse.toFixed(1)}/${capacity}${people > inUse ? ` (${people} people)` : ''}`,
           `Guests who've used one: ${usedBy}`,
           ...(popularWith(facility.type).length > 0 ? [`Popular with:   ${popularWith(facility.type).join(', ')}`] : []),
+          ...(GUEST_FAVORITES.enabled ? [`Fans staying:   ${state.guests.filter(g => favoriteOf(g) === facility.type).length}`] : []),
+          ...(turnedBack ? [`Turned back today: ${turnedBack}`] : []),
           ...(config.spendPerVisit > 0 ? [`Spend/visit:    ${formatMoney(config.spendPerVisit * level.revenueMult)}`] : []),
           `Operating cost: ${formatMoney(operating)}/day`,
           `Decor:          ${facility.decor.toFixed(0)}%${facility.decor < DECOR.freshThreshold ? ' (stale)' : ''}`,

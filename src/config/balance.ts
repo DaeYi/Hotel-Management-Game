@@ -229,6 +229,75 @@ export const GUEST_PROFILE = {
   nightDriftWeight: 8,
   maxNightNoisePenalty: Infinity, // the most a stay's night noise can take off a review
 };
+/**
+ * Favourite facilities (docs/designs/guest-staff-personalities.md, Tastes #10;
+ * FacilityManager.ts). About half of guests have one, leaning by who they are:
+ * business travellers the gym and breakfast, families and getaways the pool.
+ * A fan is three times as likely to go, up to twice a day, and it counts for
+ * more in their review; everyone else a little less likely, so visits overall
+ * stay about where they were. A visit lifts a guest's mood; a favourite that
+ * isn't there (once the hotel's stars allow it) or is full lets them down.
+ */
+export const GUEST_FAVORITES = {
+  enabled: true,
+  byLean: {
+    base: [['none', 0.55], ['gym', 0.1], ['restaurant', 0.15], ['pool', 0.1], ['shop', 0.1]],
+    business: [['none', 0.45], ['gym', 0.3], ['restaurant', 0.2], ['pool', 0], ['shop', 0.05]],
+    family: [['none', 0.45], ['gym', 0.05], ['restaurant', 0.15], ['pool', 0.3], ['shop', 0.05]],
+    getaway: [['none', 0.45], ['gym', 0.05], ['restaurant', 0.2], ['pool', 0.25], ['shop', 0.05]],
+  } as Record<string, Array<[FacilityName | 'none', number]>>,
+  fanChanceMult: 3,
+  nonFanChanceMult: { gym: 0.6, restaurant: 1, pool: 0.9, shop: 0.85 } as Record<FacilityName, number>, // tuned so visits overall stay about where they were
+  fanVisitsPerDay: 2,
+  fanRevisitGapHours: 4, // not straight back for a second breakfast
+  fanReviewMult: 1.5,
+  visitMood: 3, // satisfaction a visit to any facility adds
+  favoriteVisitMood: 6, // ... to their favourite
+  missMood: 4, // satisfaction lost when their favourite lets them down (once a day)
+  missReview: 0.3, // review lost per such day
+  maxMissesPerStay: 2,
+  fallbackOutingHours: [2, 4] as [number, number], // no pool or restaurant: off to the beach, or out to dinner, instead
+};
+type FacilityName = 'gym' | 'restaurant' | 'pool' | 'shop';
+
+/**
+ * Loyalty (Status #12; Loyalty.ts). A guest who enjoyed their stay may want to
+ * come back: the happier, the likelier (a delighted guest more so), after a
+ * few days to a month. The same person returns -- the same chronotype, pace,
+ * sleep, favourite -- and keeps count: returning (2nd stay), regular (3rd-4th),
+ * VIP (5th+). Regulars ask for their old room; the loyal forgive more, and
+ * their reviews count double. A regular who leaves unhappier than last time
+ * is lost. Off: the old rule (back if satisfaction reached 65).
+ */
+export const LOYALTY = {
+  enabled: true,
+  entryFrom: 52, // satisfaction at checkout from which a guest might want to come back...
+  entryFull: 68, // ...and at which they certainly do
+  delightedMult: 1.5,
+  returnAfterDays: [5, 30] as [number, number],
+  poolMaxSize: 40,
+  regularFrom: 3, // stays
+  vipFrom: 5,
+  expectationMult: { returning: 0.9, regular: 0.85, vip: 0.75 } as Record<'returning' | 'regular' | 'vip', number>, // how much their high expectations amplify what's wrong
+  bookingWeight: 2, // a regular's or VIP's review and mood count this many times over
+  oldRoomMood: 4, // satisfaction from getting their old room back
+  lostBelowLastReview: 1, // a regular whose review falls this far below their last won't be back
+  vipPullWeight: 2,
+};
+
+/**
+ * Mood (Status #14; Mood.ts): how a guest feels right now, from their
+ * satisfaction. The bands sit where guests really are (most are content): an
+ * irritated or angry guest shows a face, so it means something to fix.
+ */
+export const MOOD = {
+  enabled: true,
+  delighted: 62, // satisfaction at or above
+  irritated: 47, // below
+  angry: 42, // below
+  delightedShopMult: 1.5, // a delighted guest spends more at the shop
+};
+
 type ChronotypeName = 'early' | 'regular' | 'night';
 type MobilityName = 'brisk' | 'normal' | 'limited';
 type SleepName = 'heavy' | 'normal' | 'light';

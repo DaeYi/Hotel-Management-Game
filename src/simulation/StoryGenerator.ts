@@ -4,9 +4,10 @@ import { profileRoom, fitsParty } from './RoomProfile.js';
 import { roomFit, FEATURE_LABELS, type RoomFeature } from './Preferences.js';
 import type { PRNG } from './prng.js';
 import type { GuestReviewBreakdown } from './GuestManager.js';
-import { SATISFACTION, STORY, NOISE, ECONOMY, REVIEW, HOUSEKEEPING, GUEST_PROFILE } from '../config/balance.js';
+import { SATISFACTION, STORY, NOISE, ECONOMY, REVIEW, HOUSEKEEPING, GUEST_PROFILE, LOYALTY } from '../config/balance.js';
 import { calculateRoomNoise, noiseToRatingPenalty, getLoudestNeighborGuestId, nightNoiseThisHour } from './NoiseManager.js';
 import { isSleepHour } from './Profile.js';
+import { personIdOf } from './Loyalty.js';
 import { formatRoomLabel, isRoomReachable } from './HotelState.js';
 import { roomMoveTrip, isGuestAway } from './GuestMovement.js';
 import { isCheckoutDue } from './GuestManager.js';
@@ -430,18 +431,51 @@ export function recordReturnGuestEntries(state: HotelState, events: GameEvent[])
     const guest = current.guests.find(g => g.id === guestId);
     if (!guest) continue;
 
+    // Glad to be back (and gladder in their old room)
+    const lift = SATISFACTION.regularReturnBonus + (LOYALTY.enabled && event.data.oldRoom ? LOYALTY.oldRoomMood : 0);
+    const glad = (s: HotelState): HotelState => ({
+      ...s,
+      guests: s.guests.map(g => (g.id === guestId ? { ...g, satisfaction: Math.min(100, g.satisfaction + lift) } : g)),
+    });
+    if (LOYALTY.enabled) {
+      // With loyalty on, returns are common: a story for a regular or a VIP (one thread per person), a toast for the rest
+      const stays = (event.data.stays as number) ?? 2;
+      if (stays < LOYALTY.regularFrom) {
+        current = glad(current);
+        continue;
+      }
+      current = glad(appendStoryLogEntry(current, {
+        type: 'loyal_return',
+        guestName: guest.name,
+        roomId,
+        message: event.message,
+        chainId: `person-${personIdOf(guest)}`,
+      }).state);
+      continue;
+    }
+
     const appended = appendStoryLogEntry(current, {
       type: 'regular_returns',
       guestName: guest.name,
       roomId,
       message: event.message,
     });
-    current = {
-      ...appended.state,
-      guests: appended.state.guests.map(g => g.id === guestId
-        ? { ...g, satisfaction: Math.min(100, g.satisfaction + SATISFACTION.regularReturnBonus) }
-        : g),
-    };
+    current = glad(appended.state);
+  }
+  return current;
+}
+
+/** A story when a regular or a VIP is lost: their stay was a letdown, and they won't be back (on their own thread). */
+export function recordLostRegulars(state: HotelState, events: GameEvent[]): HotelState {
+  let current = state;
+  for (const event of events) {
+    if (event.type !== 'regular_lost' || !event.data) continue;
+    current = appendStoryLogEntry(current, {
+      type: 'regular_lost',
+      roomId: event.data.roomId as string,
+      message: event.message,
+      chainId: `person-${event.data.personId as string}`,
+    }).state;
   }
   return current;
 }
@@ -524,6 +558,7 @@ export function attributeReviewCause(b: GuestReviewBreakdown): string {
     { label: 'amenities', magnitude: b.amenityPenalty },
     { label: 'pricing', magnitude: (1 - b.priceFairness) * REVIEW.basePriceFairnessWeight },
     { label: b.roomDislikes?.[0] ? FEATURE_LABELS[b.roomDislikes[0]] : 'the room', magnitude: Math.max(0, -b.roomFit) },
+    { label: b.favoriteMissLabel ?? 'the facilities', magnitude: b.favoriteMiss ?? 0 },
   ];
   let winner = candidates[0];
   for (const c of candidates.slice(1)) {

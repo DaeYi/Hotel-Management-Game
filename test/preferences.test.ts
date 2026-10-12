@@ -14,7 +14,7 @@ import { simulate } from '../src/simulation/simulate.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
 import { PRNG } from '../src/simulation/prng.js';
 import { hourStart, legsEnd } from '../src/simulation/Movement.js';
-import { GUEST_PURPOSES, ROOM_PREFERENCES, GUEST_OUTINGS, FACILITY_CONFIG, ECONOMY, REVIEW, PARTIES, GUEST_PROFILE } from '../src/config/balance.js';
+import { GUEST_PURPOSES, ROOM_PREFERENCES, GUEST_OUTINGS, FACILITY_CONFIG, ECONOMY, REVIEW, PARTIES, GUEST_PROFILE, GUEST_FAVORITES, LOYALTY, MOOD } from '../src/config/balance.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import type { ActiveIncident } from '../src/simulation/types.js';
 import type { PresetId } from '../src/config/furniture.js';
@@ -382,6 +382,9 @@ describe('Balance', () => {
     GUEST_PURPOSES.enabled = false;
     ROOM_PREFERENCES.enabled = false;
     GUEST_PROFILE.enabled = false;
+    GUEST_FAVORITES.enabled = false;
+    LOYALTY.enabled = false;
+    MOOD.enabled = false;
     try {
       const run = simulate(30, 9, undefined, STRATEGIES.balanced);
       // The same run before purposes and preferences existed (c0782c1). If an unrelated
@@ -400,7 +403,10 @@ describe('Balance', () => {
       expect(busy.avgReviewScore).toBeCloseTo(7.651394734368281, 9);
       expect(busy.totalRevenue).toBe(66779);
       expect(busy.totalTurnedAway).toBe(317);
-    } finally { GUEST_PURPOSES.enabled = true; ROOM_PREFERENCES.enabled = true; GUEST_PROFILE.enabled = true; }
+    } finally {
+      GUEST_PURPOSES.enabled = true; ROOM_PREFERENCES.enabled = true; GUEST_PROFILE.enabled = true;
+      GUEST_FAVORITES.enabled = true; LOYALTY.enabled = true; MOOD.enabled = true;
+    }
   }, 120000);
 
   it('on: some guests like their room, and the bot hotel still thrives', () => {

@@ -32,6 +32,33 @@ export function drawQuirk(g: Phaser.GameObjects.Graphics, x: number, y: number, 
   }
 }
 
+/** The return ring's colour: white for a returning guest, silver for a regular, gold for a VIP. */
+export const RING_COLORS: Record<'returning' | 'regular' | 'vip', number> = { returning: 0xffffff, regular: 0xbfc9ca, vip: 0xf4c542 };
+
+/** The selected guest's ring (not to be mistaken for a VIP's gold). */
+export const SELECTED_COLOR = 0x5dade2;
+
+/** The colours of the mood faces. */
+export const MOOD_COLORS: Record<'irritated' | 'angry', number> = { irritated: 0xe67e22, angry: 0xe74c3c };
+
+/** A small face centred at (x, y) for an irritated (flat mouth) or angry (frown) guest, on the same dark disc as a quirk. */
+export function drawMoodFace(g: Phaser.GameObjects.Graphics, x: number, y: number, mood: 'irritated' | 'angry') {
+  g.fillStyle(BACKING, 0.9);
+  g.fillCircle(x, y, 4);
+  g.fillStyle(MOOD_COLORS[mood], 1);
+  g.fillCircle(x, y, 3);
+  // Eyes, and the mouth
+  g.fillStyle(BACKING, 1);
+  g.fillRect(x - 1.6, y - 1.4, 1, 1);
+  g.fillRect(x + 0.6, y - 1.4, 1, 1);
+  g.lineStyle(0.9, BACKING, 1);
+  if (mood === 'irritated') g.lineBetween(x - 1.4, y + 1.2, x + 1.4, y + 1.2);
+  else {
+    g.lineBetween(x - 1.5, y + 1.8, x, y + 0.9);
+    g.lineBetween(x, y + 0.9, x + 1.5, y + 1.8);
+  }
+}
+
 /** A "z" (asleep) with its top-left at (x, y), 5px square. */
 export function drawSleepZ(g: Phaser.GameObjects.Graphics, x: number, y: number) {
   g.lineStyle(1.5, 0xecf0f1, 0.9);

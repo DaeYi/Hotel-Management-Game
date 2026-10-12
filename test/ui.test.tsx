@@ -331,6 +331,42 @@ describe('Interface', () => {
     expect(card(/family$/)).toContain('Checked out');
   });
 
+  it('a regular: stays, their favourite and how it is going, their mood; the gym knows its fans; the pool is wanted', () => {
+    const { controller, flush } = setup();
+    controller.selectTool('standard');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.state = { ...controller.state, cash: 1_000_000, peakStarRating: 4, starRating: 4 };
+    controller.selectTool('gym');
+    controller.tileDown({ gridX: 7, gridY: 2 });
+    controller.selectTool(null);
+    const room = { ...controller.state.rooms[0], status: 'occupied' as const, guestId: 'g1' };
+    controller.state = {
+      ...controller.state, day: 9, hour: 15, rooms: [room],
+      guests: [{
+        id: 'g1', name: 'Mei', budget: 300, stayLength: 3, trait: 'normal', satisfaction: 61.7, checkInDay: 8, isReturning: true, hadNoiseComplaint: false,
+        party: { kind: 'solo', size: 1 }, purpose: 'business',
+        profile: { chronotype: 'regular', mobility: 'normal', sleep: 'normal', rowdiness: 'normal', checkoutHour: 11, favorite: 'gym' },
+        loyalty: { personId: 'mei', stays: 4 },
+        facilitiesUsed: { gym: { level: 1, day: 9, today: 1, visits: 2, lastAt: 200 } },
+      }],
+      facilityDemand: { day: 9, wanted: { pool: 3 }, full: { gym: 1 }, tooFar: {}, fullAt: { [controller.state.facilities[0].id]: 1 } },
+      dailyStats: [{ day: 8, occupancy: 0.5, totalRevenue: 0, valuation: 0, wanted: { pool: 4 } }],
+    };
+    controller.selectGuest('g1', { gridX: 5, gridY: 2 });
+    flush();
+    const card = screen.getByRole('dialog', { name: 'Mei' }).textContent!;
+    expect(card).toContain('4th stay (a regular)');
+    expect(card).toContain('Loves the gym (2 visits this stay)');
+    expect(card).toMatch(/61% content/); // rounded down, so the number is in the word's band (62 is delighted)
+    controller.tileDown({ gridX: 7, gridY: 2 });
+    flush();
+    const gym = screen.getByRole('dialog', { name: /Gym/ }).textContent!;
+    expect(gym).toContain('Fans staying:   1');
+    expect(gym).toContain('Turned back today: 1 (full)');
+    expect(screen.getByText('asked for 7\u00d7 this week')).toBeTruthy(); // the pool: 4 yesterday, 3 today
+    expect(screen.getByRole('group', { name: 'Guest marks' }).textContent).toContain('VIP');
+  });
+
   it('the cleaning panel sets the late checkout; the legend explains the marks on guests', () => {
     const { controller, flush } = setup();
     controller.togglePanel('housekeeping');

@@ -17,12 +17,13 @@ import { processCleaningTick, processDailyHousekeeping, degradeCleanliness, star
 import { calculateStarRating } from './StarRatingManager.js';
 import { checkSeasonChange } from './SeasonManager.js';
 import { processMaintenanceTick, getStaffDailyCost } from './MaintenanceManager.js';
-import { ECONOMY, REVIEW, HOUSEKEEPING, STAFF, ROOM_CONFIG, FACILITY_CONFIG } from '../config/balance.js';
+import { ECONOMY, REVIEW, HOUSEKEEPING, STAFF, ROOM_CONFIG, FACILITY_CONFIG, LOYALTY } from '../config/balance.js';
 import {
   driftSatisfaction, advanceIncidents, dropIncidentsForGuests, selectNewIncident,
-  recordReturnGuestEntries, recordPartyTurnAways, checkReviewSemiViral, tickReputationPenalties, recordRoomDislikes,
+  recordReturnGuestEntries, recordPartyTurnAways, checkReviewSemiViral, tickReputationPenalties, recordRoomDislikes, recordLostRegulars,
 } from './StoryGenerator.js';
 import type { DepartedGuestReview } from './StoryGenerator.js';
+import { bookingWeightFor, staysOf, ordinal, personIdOf } from './Loyalty.js';
 
 export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   const events: GameEvent[] = [];
@@ -112,6 +113,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   );
 
   const walkoutBookings: Booking[] = [];
+  const walkoutLost: GameEvent[] = [];
   const walkoutReviews: DepartedGuestReview[] = [];
   let walkoutCashDelta = 0;
 
@@ -130,6 +132,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
     const breakdown = calculateGuestReviewBreakdown(room, current, guest, prng);
     const score = Math.max(REVIEW.minScore, breakdown.finalScore - REVIEW.walkoutIncidentPenalty);
 
+    const weight = bookingWeightFor(guest);
     const booking: Booking = {
       id: `booking-walkout-${guest.id}`,
       roomId: room.id,
@@ -137,8 +140,17 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
       nightRate: room.pricePerNight,
       reviewScore: score,
       satisfactionAtCheckout: guest.satisfaction,
+      ...(weight ? { weight } : {}),
     };
     walkoutBookings.push(booking);
+    // A regular or VIP who walks out won't be back
+    if (LOYALTY.enabled && guest.loyalty && staysOf(guest) >= LOYALTY.regularFrom) {
+      walkoutLost.push({
+        type: 'regular_lost',
+        message: `${guest.name} won't be back: they walked out of their ${ordinal(staysOf(guest))} stay`,
+        data: { guestId: guest.id, personId: personIdOf(guest), roomId: room.id, stays: staysOf(guest) },
+      });
+    }
     walkoutReviews.push({ guestName: partyLabel(guest), roomId: room.id, booking, breakdown });
 
     events.push({
@@ -181,9 +193,11 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   });
 
   // Departing guests walk out from wherever they are, starting now
+  // (as they left: a night owl refused a late checkout is that much less happy walking out)
+  const leftAs = new Map(departures.departed.map(d => [d.guest.id, d.guest]));
   const leaving = current.guests
     .filter(g => departedGuestIds.has(g.id))
-    .map(g => departureWalker(current, g, T, earlyDepartureGuestIds.has(g.id) ? 'walked_out' : 'checked_out'))
+    .map(g => departureWalker(current, leftAs.get(g.id) ?? g, T, earlyDepartureGuestIds.has(g.id) ? 'walked_out' : 'checked_out'))
     .filter((w): w is NonNullable<typeof w> => w !== null);
 
   const revenueResult = processRevenue(current, departures);
@@ -215,6 +229,9 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   events.push(...semiViral.events);
   // Something in the room a guest didn't like (separate beds for a couple): a story, once a day
   current = recordRoomDislikes(current, departureReviews);
+  // A regular who won't be back (unhappier than last time, or walked out)
+  events.push(...walkoutLost);
+  current = recordLostRegulars(current, [...departures.events, ...walkoutLost]);
 
   // Tick down any active reputation penalty from a prior Review Semi-Viral incident
   current = tickReputationPenalties(current);

@@ -1,11 +1,12 @@
 import type { HotelState, Guest, Room, Leg, TilePos, Walker, Fixture, StayLeg } from './types.js';
-import { DESK, STAFF, TRAVEL, GUEST_PROFILE } from '../config/balance.js';
+import { DESK, STAFF, TRAVEL, GUEST_PROFILE, MOOD } from '../config/balance.js';
 import {
   findRoute, routeFromStreet, routeToStreet, getAccessibleDesks, getMannedDeskStaff, getFixtureFront, getEntranceTiles,
   getOpenFacilities, isEntranceTile, type Route,
 } from './Layout.js';
 import { makeWalk, makeStay, legsEnd, truncateLegs, walkProgress, stepStillOpen, sameTile, hash01 } from './Movement.js';
 import { guestPace } from './Profile.js';
+import { guestMood } from './Mood.js';
 
 // Guests' comings and goings as trips the simulation plans when it decides
 // them: walking in from the street and checking in at a staffed desk, heading
@@ -28,7 +29,10 @@ const firstTile = (legs: Leg[]): TilePos => (legs[0].kind === 'stay' ? legs[0].a
 
 /** What a walker keeps of the guest they were: their party, purpose and profile (their colour, pace and quirk). */
 function walkerFields(guest: Guest): Partial<Walker> {
-  return { ...(guest.party ? { party: guest.party } : {}), ...(guest.purpose ? { purpose: guest.purpose } : {}), ...(guest.profile ? { profile: guest.profile } : {}) };
+  return {
+    ...(guest.party ? { party: guest.party } : {}), ...(guest.purpose ? { purpose: guest.purpose } : {}), ...(guest.profile ? { profile: guest.profile } : {}),
+    ...(guest.loyalty ? { stays: guest.loyalty.stays } : {}),
+  };
 }
 
 /** Where a guest is (the tile, door included) at time t: on their trip, or in their room. */
@@ -191,7 +195,10 @@ export function departureWalker(state: HotelState, guest: Guest, T: number, reas
   const pace = guestPace(guest);
   const route = routeToStreet(state, from, pace);
   if (!route || route.path.length < 2) return null;
-  return { id: `leave-${guest.id}-${T}`, trait: guest.trait, isReturning: guest.isReturning, reason, trip: [makeWalk(route.path, T, pace)], ...walkerFields(guest), guestId: guest.id, name: guest.name };
+  return {
+    id: `leave-${guest.id}-${T}`, trait: guest.trait, isReturning: guest.isReturning, reason, trip: [makeWalk(route.path, T, pace)], ...walkerFields(guest),
+    guestId: guest.id, name: guest.name, ...(MOOD.enabled ? { mood: guestMood(guest) } : {}),
+  };
 }
 
 /** A guest moving rooms at time T (after a breakdown): from where they are to the new room (round by the street if need be). */

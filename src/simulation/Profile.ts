@@ -1,5 +1,5 @@
-import type { Chronotype, Guest, GuestProfile, GuestTrait, HotelState, LateCheckoutPolicy, Mobility, Party, Purpose, Rowdiness, SleepSensitivity } from './types.js';
-import { ECONOMY, GUEST_PROFILE, NOISE, TRAVEL } from '../config/balance.js';
+import type { Chronotype, FacilityType, Guest, GuestProfile, GuestTrait, HotelState, LateCheckoutPolicy, Mobility, Party, Purpose, Rowdiness, SleepSensitivity } from './types.js';
+import { ECONOMY, GUEST_PROFILE, NOISE, TRAVEL, GUEST_FAVORITES } from '../config/balance.js';
 import { hash01 } from './Movement.js';
 import { pick } from './Party.js';
 
@@ -23,7 +23,34 @@ export function rollProfile(id: string, party: Party, purpose: Purpose | undefin
   const rowdiness: Rowdiness = trait === 'party_guest' ? 'rowdy' : hash01(`${id}#rowdiness`) < GUEST_PROFILE.quietChance ? 'quiet' : 'normal';
   const [first, last] = GUEST_PROFILE.earlyCheckoutHours;
   const checkoutHour = chronotype === 'early' ? first + Math.floor(hash01(`${id}#checkout`) * (last - first + 1)) : ECONOMY.checkOutHour;
-  return { chronotype, mobility, sleep, rowdiness, checkoutHour };
+  // The facility they seek out (business travellers the gym, families and getaways the pool)
+  const favoriteLean = lean === 'business' || lean === 'family' ? lean : purpose === 'getaway' ? 'getaway' : 'base';
+  const favorite = GUEST_FAVORITES.enabled ? pick(GUEST_FAVORITES.byLean[favoriteLean], hash01(`${id}#favorite`)) : undefined;
+  return { chronotype, mobility, sleep, rowdiness, checkoutHour, ...(favorite ? { favorite } : {}) };
+}
+
+/** A guest's favourite facility (none: no favourite, or favourites off). */
+export function favoriteOf(guest: Pick<Guest, 'profile'>): FacilityType | null {
+  const f = GUEST_FAVORITES.enabled ? guest.profile?.favorite : undefined;
+  return f && f !== 'none' ? f : null;
+}
+
+/** How much likelier than most a guest is to go to a type of facility: a fan three times, anyone else a little less (1 without a favourite roll). */
+export function favoriteChanceMult(guest: Pick<Guest, 'profile'>, type: FacilityType): number {
+  const f = GUEST_FAVORITES.enabled ? guest.profile?.favorite : undefined;
+  if (f === undefined) return 1;
+  return f === type ? GUEST_FAVORITES.fanChanceMult : GUEST_FAVORITES.nonFanChanceMult[type];
+}
+
+/** "Loves the pool (2 visits this stay)", "Loves the pool (there isn't one)": a guest's favourite and how it's going. */
+export function describeFavorite(guest: Pick<Guest, 'profile' | 'facilitiesUsed' | 'favoriteMisses'>, hotelHas: 'open' | 'closed' | 'none', label: string): string | null {
+  const favorite = favoriteOf(guest);
+  if (!favorite) return null;
+  const visits = guest.facilitiesUsed?.[favorite]?.visits ?? 0;
+  const missed = guest.favoriteMisses?.count ?? 0;
+  const been = visits > 0 ? `${visits} visit${visits === 1 ? '' : 's'} this stay` : '';
+  const how = hotelHas === 'none' ? "there isn't one here" : hotelHas === 'closed' ? `its door is blocked${been ? `; ${been}` : ''}` : been || 'not been yet';
+  return `Loves the ${label.toLowerCase()} (${how}${missed > 0 ? `; let down ${missed === 1 ? 'once' : `${missed} times`}` : ''})`;
 }
 
 /** A guest's chronotype (a regular, for a guest without a profile). */

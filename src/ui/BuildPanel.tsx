@@ -1,6 +1,6 @@
-import type { RoomType, FacilityType, TileType, Direction } from '../simulation/types';
+import type { RoomType, FacilityType, TileType, Direction, HotelState } from '../simulation/types';
 import type { BuildType, PresetTool } from '../game/GameController';
-import { ROOM_CONFIG, FACILITY_CONFIG, ELEVATOR, DESK, CLOSET, BREAK_ROOM, ENTRANCE } from '../config/balance';
+import { ROOM_CONFIG, FACILITY_CONFIG, ELEVATOR, DESK, CLOSET, BREAK_ROOM, ENTRANCE, GUEST_FAVORITES } from '../config/balance';
 import { ROOM_PRESETS, PRESET_FOR_TYPE, type PresetId } from '../config/furniture';
 import { getRequiredStars, isUnlocked, getRoomBuildCost, presetFor } from '../simulation/HotelState';
 import { defaultFurnishing, profileFurnishing } from '../simulation/RoomProfile';
@@ -23,6 +23,13 @@ const ROOM_TOOLS: Array<RoomType | PresetTool> = ['standard', 'twin', 'bunk_fami
 /** The category a room tool builds (twin and family rooms are standard rooms). */
 const roomTypeOf = (tool: RoomType | PresetId): RoomType => profileFurnishing(defaultFurnishing(presetFor(tool))).type;
 const toCss = (color: number) => `#${color.toString(16).padStart(6, '0')}`;
+
+/** Times guests wanted a type of facility the hotel hasn't built over the last week, today included (once per guest a day): demand before the spend. */
+function wantedThisWeek(state: HotelState, type: FacilityType): number {
+  if (!GUEST_FAVORITES.enabled || state.facilities.some(f => f.type === type)) return 0;
+  const today = state.facilityDemand?.day === state.day ? state.facilityDemand.wanted[type] ?? 0 : 0;
+  return today + state.dailyStats.filter(s => s.day > state.day - 7 && s.day < state.day).reduce((sum, s) => sum + (s.wanted?.[type] ?? 0), 0);
+}
 
 const OPTIONS: BuildOption[] = [
   ...ROOM_TOOLS.map(tool => ({
@@ -59,9 +66,10 @@ export function BuildPanel() {
         const gate = unlockType(option.type);
         const locked = gate !== null && !isUnlocked(state, gate);
         const affordable = state.cash >= option.cost;
+        const wanted = option.category === 'FACILITIES' ? wantedThisWeek(state, option.type as FacilityType) : 0;
         const subtitle = option.category === 'ROOMS'
           ? `$${getRoomExpectedPrice({ type: roomTypeOf(option.type as RoomType | PresetId), furnishing: defaultFurnishing(presetFor(option.type as RoomType | PresetId)), floor: 0 }, state.starRating)}/nt`
-          : option.subtitle;
+          : wanted > 0 ? `asked for ${wanted}\u00d7 this week` : option.subtitle;
         const cost = locked
           ? `🔒 ${getRequiredStars(gate!)}★`
           : option.cost > 0 ? formatMoney(option.cost) : 'Free';

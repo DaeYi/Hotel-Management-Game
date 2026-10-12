@@ -80,7 +80,11 @@ export function updateReviewScore(state: HotelState): number {
   const recentBookings = state.bookings.slice(-REVIEW.reviewWindowBookingCount);
   if (recentBookings.length === 0) return ECONOMY.initialReviewScore;
 
-  const avg = recentBookings.reduce((sum, b) => sum + b.reviewScore, 0) / recentBookings.length;
+  // A regular's or VIP's review counts double (bookings without a weight count once, as ever)
+  const weighted = recentBookings.some(b => b.weight !== undefined);
+  const avg = weighted
+    ? recentBookings.reduce((sum, b) => sum + b.reviewScore * (b.weight ?? 1), 0) / recentBookings.reduce((sum, b) => sum + (b.weight ?? 1), 0)
+    : recentBookings.reduce((sum, b) => sum + b.reviewScore, 0) / recentBookings.length;
   return Math.max(REVIEW.minScore, Math.min(REVIEW.maxScore, avg));
 }
 
