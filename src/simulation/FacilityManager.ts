@@ -5,6 +5,7 @@ import { getCurrentSeason } from './SeasonManager.js';
 import { hourStart, makeWalk, makeStay, isUnderway, hash01 } from './Movement.js';
 import { roomTile } from './GuestMovement.js';
 import { partyLoad, partySize, perPersonFactor } from './Party.js';
+import { facilityChanceMult } from './Purpose.js';
 
 // Guests use the hotel's facilities. Each hour boundary, guests who are in
 // their rooms may head out to a facility -- breakfast at the restaurant, a
@@ -29,13 +30,13 @@ export function facilityCapacity(facility: Facility): number {
   return Math.round(FACILITY_CONFIG[facility.type].capacity * FACILITY_LEVELS[facility.level - 1].capacityMult);
 }
 
-/** The chance a guest in their room heads to a type of facility during an hour of the day. */
-export function visitChance(type: FacilityType, hour: number, day: number): number {
+/** The chance a guest in their room heads to a type of facility during an hour of the day (by their purpose: business travellers to the gym, a getaway to the pool). */
+export function visitChance(type: FacilityType, hour: number, day: number, guest?: Pick<Guest, 'purpose'>): number {
   const config = FACILITY_CONFIG[type];
   const window = config.visitChance.find(([from, to]) => hour >= from && hour < to);
   if (!window) return 0;
   const season = config.seasonalMultiplier ? FACILITY_VISITS.seasonalChanceMult[getCurrentSeason(day)] ?? 1 : 1;
-  return window[2] * season;
+  return Math.min(1, window[2] * season * (guest ? facilityChanceMult(guest, type) : 1));
 }
 
 /** Facility opening hours as text, e.g. "6-9, 17-22". */
@@ -88,7 +89,7 @@ export function planFacilityVisits(state: HotelState): HotelState {
     let best: { type: FacilityType; score: number } | null = null;
     for (const type of types) {
       if (guest.facilitiesUsed?.[type]?.day === state.day) continue; // once a day per type
-      const p = visitChance(type, state.hour, state.day);
+      const p = visitChance(type, state.hour, state.day, guest);
       if (p <= 0) continue;
       const u = hash01(`${guest.id}|${state.day}|${state.hour}|${type}`);
       if (u < p && (!best || u / p < best.score)) best = { type, score: u / p };

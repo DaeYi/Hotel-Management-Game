@@ -1,4 +1,4 @@
-import type { HotelState, GuestTrait, Leg, Party } from '../simulation/types';
+import type { HotelState, Leg, Party, Purpose } from '../simulation/types';
 import { isGuestAway } from '../simulation/GuestMovement';
 import { memberPositionAt, legsEnd } from '../simulation/Movement';
 import { partyOf, kidsIn } from '../simulation/Party';
@@ -9,14 +9,17 @@ import { TRAVEL } from '../config/balance';
 // the positions the simulation's itineraries give them. ActorLayer draws
 // these; the guests settled in their rooms are drawn by GridRenderer.
 
-/** Guest dot color by trait, in one place so every trait gets an explicit, distinct color. */
-export function getGuestDotColor(trait: GuestTrait): number {
-  switch (trait) {
-    case 'light_sleeper': return 0x3498db;
-    case 'big_spender': return 0xe74c3c;
-    case 'party_guest': return 0xe91e63;
-    case 'normal': return 0xecf0f1;
-  }
+/** Guest dot colours by why they're here (the legend shows them): unlike any staff or facility colour, and apart in brightness too. */
+export const PURPOSE_COLORS: Record<Purpose, number> = {
+  business: 0x5d6d7e, // slate: a suit
+  sightseeing: 0xf4d03f, // yellow: a sun hat
+  getaway: 0xf1948a, // rose
+};
+export const NO_PURPOSE_COLOR = 0xecf0f1; // a guest from before purposes (or with purposes off)
+
+/** Guest dot colour, by purpose. */
+export function getGuestDotColor(purpose: Purpose | undefined): number {
+  return purpose ? PURPOSE_COLORS[purpose] : NO_PURPOSE_COLOR;
 }
 
 export interface Figure {
@@ -68,11 +71,11 @@ export function guestFigures(state: HotelState, t: number): { figures: Figure[];
     if (!trip || trip.length === 0 || t >= legsEnd(trip)) continue;
     if (isGuestAway(guest, t)) away.add(guest.id); // arriving, or out: nobody in the room
     if (t < trip[0].start) continue; // not set out yet (or not here yet)
-    figures.push(...partyFigures(guest.id, partyOf(guest), trip, t, getGuestDotColor(guest.trait), guest.isReturning));
+    figures.push(...partyFigures(guest.id, partyOf(guest), trip, t, getGuestDotColor(guest.purpose), guest.isReturning));
   }
   for (const walker of state.walkers ?? []) {
     if (walker.trip.length === 0 || t < walker.trip[0].start || t >= legsEnd(walker.trip)) continue;
-    figures.push(...partyFigures(walker.id, partyOf(walker), walker.trip, t, getGuestDotColor(walker.trait), walker.isReturning));
+    figures.push(...partyFigures(walker.id, partyOf(walker), walker.trip, t, getGuestDotColor(walker.purpose), walker.isReturning));
   }
   return { figures, away };
 }

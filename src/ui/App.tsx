@@ -1,4 +1,7 @@
 import type { Ref } from 'preact';
+import { PURPOSES, PURPOSE_LABELS } from '../simulation/Purpose';
+import { PURPOSE_COLORS, NO_PURPOSE_COLOR } from '../render/figures';
+import { GUEST_PURPOSES } from '../config/balance';
 import type { GameController, PanelId } from '../game/GameController';
 import { GameContext, useController, useControllerVersion } from './context';
 import { calculateValuation } from '../simulation/ObjectivesManager';
@@ -152,7 +155,14 @@ function Legend() {
   const c = useController();
   return (
     <div class="legend">
-      <span><span class="swatch round" style={{ background: '#ecf0f1' }} />Guest</span>
+      <span class="legend-group" role="group" aria-label="Guests">
+        <span class="legend-title">Guests:</span>
+        {GUEST_PURPOSES.enabled && PURPOSES.map(p => <span key={p}><span class="swatch round" style={{ background: toCss(PURPOSE_COLORS[p]) }} />{PURPOSE_LABELS[p]}</span>)}
+        {/* Guests from before purposes (an older save), or everyone with purposes off */}
+        {(!GUEST_PURPOSES.enabled || c.state.guests.some(g => !g.purpose) || (c.state.walkers ?? []).some(w => !w.purpose)) && (
+          <span><span class="swatch round" style={{ background: toCss(NO_PURPOSE_COLOR) }} />{GUEST_PURPOSES.enabled ? 'Other' : 'Guest'}</span>
+        )}
+      </span>
       <span><span class="swatch" style={{ background: toCss(ACTOR_COLORS.frontDesk) }} />Front desk</span>
       <span><span class="swatch" style={{ background: toCss(ACTOR_COLORS.housekeeper) }} />Housekeeping</span>
       <span><span class="swatch" style={{ background: toCss(ACTOR_COLORS.maintenance) }} />Maintenance</span>

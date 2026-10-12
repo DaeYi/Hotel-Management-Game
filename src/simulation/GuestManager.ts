@@ -11,6 +11,8 @@ import { getExpectationMultiplier, getPartyFairPrice, getPriceMultiplier, getSta
 import { profileRoom, fitsParty } from './RoomProfile.js';
 import { partyOf, rollParty, withParty, smallerParty, partyLabel, PartyLabel, describeParty, numberWord, sharesBeds } from './Party.js';
 import { hash01 } from './Movement.js';
+import { rollPurpose } from './Purpose.js';
+import { roomFit, type RoomFeature } from './Preferences.js';
 import { getTotalDemandMultiplier } from './SeasonManager.js';
 import { getReputationPenaltyMultiplier } from './StoryGenerator.js';
 
@@ -183,8 +185,11 @@ export function processArrivals(
       guest = { ...guest, id: `${guest.id}-${n}` };
     }
     taken.add(guest.id);
-    // Who the booking's for, from its id (so nothing else's randomness moves)
+    // Who the booking's for, and why they're here, from its id (so nothing
+    // else's randomness moves). The purpose stays if they book smaller below.
     guest = withParty(guest, rollParty(guest.id, state.day));
+    const purpose = rollPurpose(guest.id, partyOf(guest));
+    if (purpose) guest = { ...guest, purpose };
 
     // Front desk at capacity: guest leaves impatiently
     if (checkedInThisHour >= checkInCapacity) {
@@ -241,7 +246,8 @@ export function processArrivals(
       if (guest.isReturning) {
         result.events.push({
           type: 'guest_returned',
-          message: `${PartyLabel(guest)} is back for another stay!`,
+          // The guest who stayed before, by name: who they bring this time is new
+          message: `${guest.name} is back for another stay${who.size > 2 ? (who.kind === 'family' ? ', with the family' : ', with friends') : ''}!`,
           data: { guestId: guest.id, roomId: room.id },
         });
       }
@@ -309,7 +315,10 @@ export function processDepartures(
       result.events.push({
         type: 'guest_departed',
         message: `${partyOf(guest).size > 2 ? PartyLabel(guest) : 'Guest'} checked out (${score.toFixed(1)}/10, $${totalPaid})`,
-        data: { guestId: guest.id, roomId: room.id, reviewScore: score, totalPaid, partyKind: partyOf(guest).kind, size: partyOf(guest).size },
+        data: {
+          guestId: guest.id, roomId: room.id, reviewScore: score, totalPaid, partyKind: partyOf(guest).kind, size: partyOf(guest).size,
+          roomFit: breakdown.roomFit, liked: !!breakdown.roomLikes, disliked: !!breakdown.roomDislikes,
+        },
       });
 
       // Satisfied guests become eligible to return later (Satisfaction System Design, point 3)
@@ -335,6 +344,9 @@ export interface GuestReviewBreakdown {
   guestVariance: number;
   facilityBonus: number;
   amenityBonus: number;
+  roomFit: number; // how well the room suited them (Preferences.ts): what they liked, less what they didn't
+  roomLikes?: RoomFeature[];
+  roomDislikes?: RoomFeature[];
   finalScore: number;
 }
 
@@ -386,6 +398,9 @@ export function calculateGuestReviewBreakdown(
     }
   }
 
+  // What they liked (or didn't) in the room: their purpose, party and trait against its furniture
+  const fit = roomFit(profileRoom(room), guest);
+
   // Random variance
   const guestVariance = prng.range(-REVIEW.varianceRange, REVIEW.varianceRange);
 
@@ -400,6 +415,7 @@ export function calculateGuestReviewBreakdown(
     + amenityBonus
     + facilityBonus
     - amenityPenalty
+    + fit.score
     + guestVariance;
 
   // Apply star expectation multiplier to penalties
@@ -422,6 +438,9 @@ export function calculateGuestReviewBreakdown(
     guestVariance,
     facilityBonus,
     amenityBonus,
+    roomFit: fit.score,
+    ...(fit.likes.length > 0 ? { roomLikes: fit.likes } : {}),
+    ...(fit.dislikes.length > 0 ? { roomDislikes: fit.dislikes } : {}),
     finalScore: clampedScore,
   };
 }

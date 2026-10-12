@@ -16,7 +16,8 @@ import { getSpecialEvent, getTotalDemandMultiplier } from '../src/simulation/Sea
 import { tickSimulation } from '../src/simulation/tick.js';
 import { simulate } from '../src/simulation/simulate.js';
 import { ECONOMY, REVIEW, ROOM_CONFIG, FACILITY_CONFIG, GUEST_TRAITS, NOISE, HOUSEKEEPING, SATISFACTION, STORY } from '../src/config/balance.js';
-import type { Room, Guest, Booking, GuestTrait, ActiveIncident, StoryLogEntry } from '../src/simulation/types.js';
+import type { Room, Guest, Booking, GuestTrait, ActiveIncident, StoryLogEntry, Purpose } from '../src/simulation/types.js';
+import { ACTOR_COLORS } from '../src/render/ActorLayer';
 import { getGuestDotColor } from '../src/render/GridRenderer';
 
 /** A fresh hotel with every room type and facility unlocked and cash to spare,
@@ -402,14 +403,12 @@ describe('party_guest trait', () => {
 });
 
 describe('getGuestDotColor', () => {
-  it('gives every trait its own explicit color (no shared fallback)', () => {
-    const traits: GuestTrait[] = ['normal', 'light_sleeper', 'big_spender', 'party_guest'];
-    const colors = traits.map(getGuestDotColor);
-    expect(new Set(colors).size).toBe(traits.length);
-  });
-
-  it('party_guest does not fall through to the normal/default color', () => {
-    expect(getGuestDotColor('party_guest')).not.toBe(getGuestDotColor('normal'));
+  it('gives every purpose its own colour, unlike a guest from before purposes, the staff and the facilities', () => {
+    const purposes: Purpose[] = ['business', 'sightseeing', 'getaway'];
+    const colors = purposes.map(getGuestDotColor);
+    expect(new Set(colors).size).toBe(purposes.length);
+    expect(colors).not.toContain(getGuestDotColor(undefined));
+    for (const other of [...Object.values(ACTOR_COLORS), ...Object.values(FACILITY_CONFIG).map(f => f.color)]) expect(colors).not.toContain(other);
   });
 });
 
@@ -1204,19 +1203,21 @@ describe('StoryGenerator', () => {
   });
 
   it('attributeReviewCause picks the largest negative contributor with a fixed tie-break order', () => {
-    const base = { noisePenalty: 0, decorPenalty: 0, elevatorPenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 5 };
+    const base = { noisePenalty: 0, decorPenalty: 0, elevatorPenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, roomFit: 0, finalScore: 5 };
     expect(attributeReviewCause({ ...base, noisePenalty: 2 })).toBe('noise');
     expect(attributeReviewCause({ ...base, conditionBonus: -2 })).toBe('room condition');
     expect(attributeReviewCause({ ...base, cleanlinessBonus: -2 })).toBe('cleanliness');
     expect(attributeReviewCause({ ...base, amenityPenalty: 2 })).toBe('amenities');
     expect(attributeReviewCause({ ...base, priceFairness: 0 })).toBe('pricing');
+    expect(attributeReviewCause({ ...base, roomFit: -0.6, roomDislikes: ['separateBeds'] })).toBe('separate beds');
+    expect(attributeReviewCause({ ...base, roomFit: 0.6, roomLikes: ['desk'], noisePenalty: 0.1 })).toBe('noise'); // a room they liked is never the complaint
     // Tie between noise and condition -- fixed order picks noise (declared first).
     expect(attributeReviewCause({ ...base, noisePenalty: 2, conditionBonus: -2 })).toBe('noise');
   });
 
   it('checkReviewSemiViral fires a temporary reputation penalty on an unusually bad checkout', () => {
     let state = createHotelState();
-    const breakdown = { noisePenalty: 3, decorPenalty: 0, elevatorPenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 1 };
+    const breakdown = { noisePenalty: 3, decorPenalty: 0, elevatorPenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, roomFit: 0, finalScore: 1 };
     const booking: Booking = { id: 'b1', roomId: 'r1', guestId: 'g1', nightRate: 80, reviewScore: 1, satisfactionAtCheckout: 10 };
 
     const result = checkReviewSemiViral(state, [{ guestName: 'Sam', roomId: 'r1', booking, breakdown }], new PRNG(1));
@@ -1227,7 +1228,7 @@ describe('StoryGenerator', () => {
 
   it('checkReviewSemiViral does nothing when no checkout was unusually bad', () => {
     const state = createHotelState();
-    const breakdown = { noisePenalty: 0, decorPenalty: 0, elevatorPenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, finalScore: 8 };
+    const breakdown = { noisePenalty: 0, decorPenalty: 0, elevatorPenalty: 0, conditionBonus: 0, cleanlinessBonus: 0, amenityPenalty: 0, priceFairness: 1, guestVariance: 0, facilityBonus: 0, amenityBonus: 0, roomFit: 0, finalScore: 8 };
     const booking: Booking = { id: 'b1', roomId: 'r1', guestId: 'g1', nightRate: 80, reviewScore: 8, satisfactionAtCheckout: 80 };
 
     const result = checkReviewSemiViral(state, [{ guestName: 'Sam', roomId: 'r1', booking, breakdown }], new PRNG(1));

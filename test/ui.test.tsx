@@ -198,6 +198,76 @@ describe('Interface', () => {
     expect(panel()!.textContent).toContain('2×3');
   });
 
+  it('guest preferences: who a room suits, live in the editor; who is staying and what they like', () => {
+    const { controller, flush } = setup();
+    controller.selectTool('standard');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.selectTool(null);
+    controller.openFurnishing(controller.state.rooms[0].id);
+    flush();
+    const panel = () => screen.getByRole('region', { name: /FURNISH ROOM/ });
+    // A plain queen suits nobody in particular; swap the armchair for a desk and it suits business travellers
+    expect(panel().textContent).not.toContain('Good for');
+    pickPiece('Armchair');
+    fireEvent.change(screen.getByLabelText('Seat'), { target: { value: 'desk' } });
+    flush();
+    expect(panel().textContent).toContain('Good for business travellers');
+    fireEvent.click(screen.getByText(/Refit now/));
+    flush();
+
+    // A business traveller staying in it: who they are, and that they like the desk
+    const room = { ...controller.state.rooms[0], status: 'occupied' as const, guestId: 'g1', renovationHoursRemaining: 0 };
+    controller.state = {
+      ...controller.state,
+      rooms: [room],
+      // A solo booking on business: only the purpose makes them a business traveller who wants a desk
+      guests: [{ id: 'g1', name: 'Sam', budget: 300, stayLength: 2, trait: 'light_sleeper', satisfaction: 50, checkInDay: 1, isReturning: false, hadNoiseComplaint: false, party: { kind: 'solo', size: 1 }, purpose: 'business' }],
+    };
+    controller.closePanel();
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    flush();
+    const inspector = screen.getByRole('dialog', { name: /Standard Queen/ });
+    expect(inspector.textContent).toContain('Occupied: a business traveller (light sleeper)');
+    expect(inspector.textContent).not.toContain('solo traveller');
+    expect(inspector.textContent).toContain('Likes the desk');
+    expect(inspector.textContent).toContain('Good for business travellers');
+
+    // Out at a meeting till the evening
+    const T = (controller.state.day - 1) * 24 + controller.state.hour;
+    const street = { gridX: 0, gridY: 0, floor: 0 };
+    controller.state = {
+      ...controller.state,
+      guests: controller.state.guests.map(g => ({ ...g, tripKind: 'outing' as const, trip: [{ kind: 'stay' as const, at: street, start: T - 1, end: T + 7.6, activity: 'away' as const }] })),
+    };
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    flush();
+    expect(screen.getByRole('dialog', { name: /Standard Queen/ }).textContent).toMatch(/out at a meeting, back about \d\d:00/);
+
+    // The legend says what the guest colours mean
+    expect(screen.getByRole('group', { name: 'Guests' }).textContent).toBe('Guests:BusinessSightseeingGetaway');
+    // A guest from an older save, with no purpose: white, and in the legend too
+    controller.state = { ...controller.state, guests: controller.state.guests.map(g => ({ ...g, purpose: undefined })) };
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    flush();
+    expect(screen.getByRole('group', { name: 'Guests' }).textContent).toBe('Guests:BusinessSightseeingGetawayOther');
+  });
+
+  it('a twin room warns that couples would not like separate beds; the gym is popular with business travellers', () => {
+    const { controller, flush } = setup();
+    controller.selectTool('twin');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.state = { ...controller.state, cash: 1_000_000, peakStarRating: 3, starRating: 3 };
+    controller.selectTool('gym');
+    controller.tileDown({ gridX: 7, gridY: 2 });
+    controller.selectTool(null);
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    flush();
+    expect(screen.getByRole('dialog', { name: /Twin/ }).textContent).toContain("Couples won't like separate beds");
+    controller.tileDown({ gridX: 7, gridY: 2 });
+    flush();
+    expect(screen.getByRole('dialog', { name: /Gym/ }).textContent).toContain('Popular with:   business travellers');
+  });
+
   it('twin and family rooms can be built from the start', () => {
     const { controller, flush } = setup();
     fireEvent.click(screen.getByText('Standard Twin'));

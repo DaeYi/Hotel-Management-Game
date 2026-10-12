@@ -14,6 +14,7 @@ import { useController } from '../context';
 import { formatMoney } from '../format';
 import { PanelCard } from './PanelCard';
 import { RoomPlan } from '../RoomPlan';
+import { RoomSuits } from '../RoomSuits';
 
 /**
  * Furnish a room: start from a preset, choose where the bathroom goes, and
@@ -135,6 +136,7 @@ function FurnishEditor({ room }: { room: Room }) {
               </>
             )}
             <div class="dim small" style={{ marginTop: '6px' }}>Fits {whoFits(after)}</div>
+            <RoomSuits profile={after} />
           </div>
         </div>
         <div class="dim small furnish-hint" aria-live="polite">

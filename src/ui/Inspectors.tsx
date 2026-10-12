@@ -9,7 +9,10 @@ import { calculateRoomNoise } from '../simulation/NoiseManager';
 import { DOOR_ARROWS } from './BuildPanel';
 import { RoomPlan } from './RoomPlan';
 import { profileRoom, profileFurnishing, furnishingOf, whoFits } from '../simulation/RoomProfile';
-import { partyOf, describeParty } from '../simulation/Party';
+import { partyOf } from '../simulation/Party';
+import { describeGuest, awayActivity, popularWith } from '../simulation/Purpose';
+import { roomFit, listFeatures } from '../simulation/Preferences';
+import { RoomSuits } from './RoomSuits';
 import type { GuestTrait } from '../simulation/types';
 
 /** How a guest's trait reads (the loud trait is "rowdy": not to be confused with a party of people). */
@@ -75,12 +78,14 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
   let status: string;
   if (room.status === 'occupied') {
     const where = guest ? guestWhereabouts(guest, state, c.gameTime) : null;
-    status = `Occupied${guest ? `: ${describeParty(partyOf(guest))}${TRAIT_LABELS[guest.trait] ? ` (${TRAIT_LABELS[guest.trait]})` : ''}` : ''}${where ? `, ${where}` : ''}`;
+    status = `Occupied${guest ? `: ${describeGuest(partyOf(guest), guest.purpose)}${TRAIT_LABELS[guest.trait] ? ` (${TRAIT_LABELS[guest.trait]})` : ''}` : ''}${where ? `, ${where}` : ''}`;
   }
   else if (room.status === 'cleaning') status = turnoverStatus(cleaning);
   else if (room.status === 'renovating') status = `Renovating (${room.renovationHoursRemaining}h left)`;
   else if (room.condition <= ECONOMY.roomBreakdownThreshold) status = 'OUT OF ORDER';
   else status = isRoomReachable(state, room) ? 'Vacant' : 'Door blocked: no hallway access!';
+  // What the guest staying likes (or doesn't) about the room: part of their review
+  const fit = room.status === 'occupied' && guest ? roomFit(profile, guest) : null;
 
   const stats = [
     `Status:      ${status}`,
@@ -104,11 +109,18 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
         <div>
           <div class="small">{capitalize(room.type)} room{' \u00b7 '}sleeps {profile.sleeps}</div>
           <div class="dim small">Fits {whoFits(profile)}</div>
+          <RoomSuits profile={profile} />
           {room.pendingRefit && <div class="small gold">Refit booked: {profileFurnishing(room.pendingRefit).label}</div>}
           <button onClick={() => c.openFurnishing(room.id)}>Furnish{'\u2026'}</button>
         </div>
       </div>
       <pre class="stats">{stats.join('\n')}</pre>
+      {fit && (fit.likes.length > 0 || fit.dislikes.length > 0) && (
+        <div class="small guest-fit">
+          {fit.likes.length > 0 && <span class="good-text">Likes {listFeatures(fit.likes, profile.type)}. </span>}
+          {fit.dislikes.length > 0 && <span class="warn-text">Doesn't like {listFeatures(fit.dislikes)}.</span>}
+        </div>
+      )}
       <label class="price-row">
         <span>Price/night (fair {formatMoney(fair)}):</span>
         <span class="price">{formatMoney(room.pricePerNight)}</span>
@@ -164,6 +176,11 @@ function dailyStatus(cleaning: RoomCleaning): string {
   return `daily clean due (${describeWait(cleaning.wait!)})`;
 }
 
+/** A time of day, to the hour: "18:00". */
+function formatClock(t: number): string {
+  return `${String(Math.round(t) % 24).padStart(2, '0')}:00`;
+}
+
 function guestWhereabouts(guest: Guest, state: HotelState, t: number): string | null {
   const trip = guest.trip;
   if (!trip || trip.length === 0 || t >= legsEnd(trip)) return null;
@@ -172,7 +189,7 @@ function guestWhereabouts(guest: Guest, state: HotelState, t: number): string | 
   if (guest.tripKind === 'move') return 'moving rooms';
   if (guest.tripKind === 'outing') {
     const leg = positionAt(trip, t)?.leg;
-    if (leg?.kind === 'stay' && leg.activity === 'away') return 'out for the day';
+    if (leg?.kind === 'stay' && leg.activity === 'away') return `${awayActivity(guest)}, back about ${formatClock(leg.end)}`;
     return t < (trip.find(l => l.kind === 'stay')?.start ?? 0) ? 'heading out' : 'back from town';
   }
   const visit = trip.find(l => l.kind === 'stay' && l.activity === 'visit');
@@ -206,6 +223,7 @@ function FacilityInspector({ facility, state }: { facility: Facility; state: Hot
           `Open hours:     ${openingHours(facility.type)}`,
           `In use:         ${Number.isInteger(inUse) ? inUse : inUse.toFixed(1)}/${capacity}${people > inUse ? ` (${people} people)` : ''}`,
           `Guests who've used one: ${usedBy}`,
+          ...(popularWith(facility.type).length > 0 ? [`Popular with:   ${popularWith(facility.type).join(', ')}`] : []),
           ...(config.spendPerVisit > 0 ? [`Spend/visit:    ${formatMoney(config.spendPerVisit * level.revenueMult)}`] : []),
           `Operating cost: ${formatMoney(operating)}/day`,
           `Decor:          ${facility.decor.toFixed(0)}%${facility.decor < DECOR.freshThreshold ? ' (stale)' : ''}`,

@@ -3,6 +3,7 @@ import { GUEST_OUTINGS, TRAVEL } from '../config/balance.js';
 import { findRoute, routeToStreet } from './Layout.js';
 import { hourStart, makeWalk, makeStay, isUnderway, hash01 } from './Movement.js';
 import { roomTile } from './GuestMovement.js';
+import { outingChanceMult, outingHours } from './Purpose.js';
 import { isCheckoutDay } from './GuestManager.js';
 
 // Guests leave the building during the day -- sightseeing, meetings, the
@@ -16,10 +17,10 @@ import { isCheckoutDay } from './GuestManager.js';
 const PACE = TRAVEL.guestHoursPerTile;
 const LEAVE_SPREAD = 0.5; // guests set out over the first half of the hour
 
-/** The chance a guest in their room heads out for the day during an hour of the day. */
-export function outingChance(guest: Pick<Guest, 'trait'>, hour: number): number {
+/** The chance a guest in their room heads out for the day during an hour of the day (business and sightseeing likelier, a getaway less). */
+export function outingChance(guest: Pick<Guest, 'trait' | 'purpose'>, hour: number): number {
   const window = GUEST_OUTINGS.leaveChance.find(([from, to]) => hour >= from && hour < to);
-  return window ? window[2] * (GUEST_OUTINGS.traitMult[guest.trait] ?? 1) : 0;
+  return window ? Math.min(1, window[2] * (GUEST_OUTINGS.traitMult[guest.trait] ?? 1) * outingChanceMult(guest)) : 0;
 }
 
 /**
@@ -43,7 +44,8 @@ export function planOutings(state: HotelState): HotelState {
     if (!out || out.path.length < 2) return guest;
     const leave = T + hash01(`${guest.id}|${state.day}|${state.hour}|leave`) * LEAVE_SPREAD;
     const outside = leave + out.hours;
-    const length = GUEST_OUTINGS.minHours + hash01(`${guest.id}|${state.day}|${state.hour}|length`) * (GUEST_OUTINGS.maxHours - GUEST_OUTINGS.minHours);
+    const hours = outingHours(guest); // a meeting runs till the evening; a getaway's stroll is short
+    const length = hours.minHours + hash01(`${guest.id}|${state.day}|${state.hour}|length`) * (hours.maxHours - hours.minHours);
     const entrance = out.path[out.path.length - 1];
     const back = findRoute(state, entrance, roomTile(room), PACE);
     if (!back) return guest;

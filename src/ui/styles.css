@@ -256,6 +256,8 @@ input[type='range'] { width: 100%; accent-color: var(--gold); }
 .tier-toggle { display: inline-flex; gap: 2px; }
 .tier-toggle button { padding: 2px 5px; font-size: 10px; }
 .warn-text { color: #e67e22; }
+.good-text { color: #2ecc71; }
+.guest-fit { margin: 4px 0 2px; }
 button.link { background: none; border: none; color: var(--gold); text-decoration: underline; padding: 0; cursor: pointer; }
 
 

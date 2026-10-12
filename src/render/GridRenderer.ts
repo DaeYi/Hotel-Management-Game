@@ -418,7 +418,7 @@ export class GridRenderer {
       // In bed: one person in the middle of it, a party one to a sleeping spot
       const party = partyOf(guest);
       const spots = party.size > 1 ? sleepSpots(room, !sharesBeds(party)) : [];
-      const dotColor = getGuestDotColor(guest.trait);
+      const dotColor = getGuestDotColor(guest.purpose);
       for (let m = 0; m < party.size; m++) {
         const [bx, by] = spots[m] ?? bedSpot(room);
         const x = GRID_OFFSET_X + room.gridX * TILE_SIZE + bx * (TILE_SIZE / ROOM_CELLS);

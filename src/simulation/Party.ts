@@ -79,7 +79,7 @@ export function getPartyMix(day: number): Record<PartyKind, number> {
 }
 
 /** Pick from weighted options with a roll in [0, 1). */
-function pick<T>(options: Array<[T, number]>, roll: number): T {
+export function pick<T>(options: Array<[T, number]>, roll: number): T {
   const total = options.reduce((sum, [, w]) => sum + w, 0);
   let at = roll * total;
   for (const [value, weight] of options) {

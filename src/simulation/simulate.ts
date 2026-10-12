@@ -42,6 +42,8 @@ export function simulate(
   const partyTurnedAway = kinds();
   let partiesBookedSmaller = 0;
   let familiesSmaller = 0;
+  const fit = { checkouts: 0, total: 0, liked: 0, disliked: 0 };
+  let returningArrivals = 0;
   const totalHours = days * 24;
 
   for (let tick = 0; tick < totalHours; tick++) {
@@ -50,6 +52,13 @@ export function simulate(
     const { state: newState, events } = tickSimulation(state, prng);
     state = newState;
     for (const e of events) {
+      if (e.type === 'guest_departed' || e.type === 'guest_walked_out') {
+        fit.checkouts++;
+        fit.total += (e.data?.roomFit as number) ?? 0;
+        if (e.data?.liked) fit.liked++;
+        if (e.data?.disliked) fit.disliked++;
+      }
+      if (e.type === 'guest_returned') returningArrivals++;
       const kind = (e.data?.wanted ?? e.data?.partyKind) as PartyKind | undefined;
       if (!kind || !(kind in partyArrivals)) continue;
       if (e.type === 'guest_arrived') {
@@ -101,6 +110,10 @@ export function simulate(
     partyTurnedAway,
     partiesBookedSmaller,
     familyTurnAwayRate: (partyTurnedAway.family + familiesSmaller) / Math.max(1, partyArrivals.family + partyTurnedAway.family),
+    avgRoomFit: fit.total / Math.max(1, fit.checkouts),
+    likedShare: fit.liked / Math.max(1, fit.checkouts),
+    dislikedShare: fit.disliked / Math.max(1, fit.checkouts),
+    returningArrivals,
   };
 }
 
@@ -153,6 +166,7 @@ if (isMainModule) {
     console.log(`  Valuation:       p10 ${money(quantile(results.map(r => r.finalValuation), 0.1))} / median ${money(quantile(results.map(r => r.finalValuation), 0.5))} / p90 ${money(quantile(results.map(r => r.finalValuation), 0.9))}`);
     console.log(`  Loan left:       ${money(avg(results.map(r => r.loanBalance)))} avg, paid off in ${pct(results.filter(r => r.loanBalance <= 0).length)}`);
     console.log(`  Families:        ${Math.round(avg(results.map(r => r.familyTurnAwayRate)) * 100)}% not given a family room (turned away or booked smaller); ${Math.round(avg(results.map(r => r.partiesBookedSmaller)))} parties booked smaller`);
+    console.log(`  Room fit:        ${avg(results.map(r => r.avgRoomFit)).toFixed(2)} avg; ${pct(avg(results.map(r => r.likedShare)) * results.length)} liked something, ${pct(avg(results.map(r => r.dislikedShare)) * results.length)} disliked something; ${Math.round(avg(results.map(r => r.returningArrivals)))} returning guests`);
     console.log();
   }
 }

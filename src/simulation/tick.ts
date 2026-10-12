@@ -20,7 +20,7 @@ import { processMaintenanceTick, getStaffDailyCost } from './MaintenanceManager.
 import { ECONOMY, REVIEW, HOUSEKEEPING, STAFF, ROOM_CONFIG, FACILITY_CONFIG } from '../config/balance.js';
 import {
   driftSatisfaction, advanceIncidents, dropIncidentsForGuests, selectNewIncident,
-  recordReturnGuestEntries, recordPartyTurnAways, checkReviewSemiViral, tickReputationPenalties,
+  recordReturnGuestEntries, recordPartyTurnAways, checkReviewSemiViral, tickReputationPenalties, recordRoomDislikes,
 } from './StoryGenerator.js';
 import type { DepartedGuestReview } from './StoryGenerator.js';
 
@@ -142,7 +142,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
     events.push({
       type: 'guest_walked_out',
       message: `${PartyLabel(guest)} checked out early ($${settlement.cashDelta.toFixed(0)})`,
-      data: { guestId: guest.id, roomId: room.id, reviewScore: score, cashDelta: settlement.cashDelta },
+      data: { guestId: guest.id, roomId: room.id, reviewScore: score, cashDelta: settlement.cashDelta, roomFit: breakdown.roomFit, liked: !!breakdown.roomLikes, disliked: !!breakdown.roomDislikes },
     });
   }
 
@@ -211,6 +211,8 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   const semiViral = checkReviewSemiViral(current, departureReviews, prng);
   current = semiViral.state;
   events.push(...semiViral.events);
+  // Something in the room a guest didn't like (separate beds for a couple): a story, once a day
+  current = recordRoomDislikes(current, departureReviews);
 
   // Tick down any active reputation penalty from a prior Review Semi-Viral incident
   current = tickReputationPenalties(current);

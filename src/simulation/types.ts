@@ -11,6 +11,8 @@ export interface Party {
   kind: PartyKind;
   size: number;
 }
+/** Why a booking is here: on business, to see the sights, or to get away (see Purpose.ts). */
+export type Purpose = 'business' | 'sightseeing' | 'getaway';
 export type RoomStatus = 'vacant' | 'occupied' | 'cleaning' | 'renovating';
 export type CleaningQuality = 'quick' | 'standard' | 'thorough';
 export type DailyCleaningCadence = 'daily' | 'every_other_day' | 'none';
@@ -93,6 +95,9 @@ export interface Guest {
   // Who the booking is for (see Party.ts; absent on older saves: one person).
   // One Guest is one booking: one room, one trip, one review, the whole party together.
   party?: Party;
+  // Why they're here (see Purpose.ts; absent on older saves, or with purposes
+  // off: no purpose, and nothing about them changes with it)
+  purpose?: Purpose;
   // Where the guest is going (walking in from the street, out to a facility and
   // back, to a new room): absolute game-hour legs. Once the last leg ends -- or
   // with no trip -- the guest is in their room. See Movement.ts.
@@ -148,6 +153,7 @@ export interface Walker {
   reason: 'checked_out' | 'walked_out' | 'turned_away' | 'impatient';
   trip: Leg[];
   party?: Party; // the whole party walks it (absent: one person)
+  purpose?: Purpose; // why they came (for their colour)
 }
 
 export type StaffRole = 'housekeeper' | 'maintenance';
@@ -344,6 +350,12 @@ export interface SimulationSummary {
   partyTurnedAway: Record<PartyKind, number>; // turned away for any reason
   partiesBookedSmaller: number; // booked as one or two because nothing free fit them
   familyTurnAwayRate: number; // families not given a room for the family: turned away, or booked smaller
+  // How well rooms suited the guests who stayed (Preferences.ts): the mean room
+  // fit over checkouts, and the share who liked or disliked something
+  avgRoomFit: number;
+  likedShare: number;
+  dislikedShare: number;
+  returningArrivals: number; // guests who came back for another stay
 }
 
 export interface TickResult {

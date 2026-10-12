@@ -162,7 +162,7 @@ export function planArrivalTrips(
     t += linger;
     const out = routeToStreet(state, spot, PACE);
     if (out && out.path.length > 1) legs.push(makeWalk(out.path, t, PACE));
-    walkers.push({ id: `walkin-${guest.id}-${T}`, trait: guest.trait, isReturning: guest.isReturning, reason: outcome, trip: legs, ...(guest.party ? { party: guest.party } : {}) });
+    walkers.push({ id: `walkin-${guest.id}-${T}`, trait: guest.trait, isReturning: guest.isReturning, reason: outcome, trip: legs, ...(guest.party ? { party: guest.party } : {}), ...(guest.purpose ? { purpose: guest.purpose } : {}) });
   });
 
   return { trips, walkers };
@@ -178,7 +178,7 @@ export function departureWalker(state: HotelState, guest: Guest, T: number, reas
   if (!from) return null;
   const route = routeToStreet(state, from, PACE);
   if (!route || route.path.length < 2) return null;
-  return { id: `leave-${guest.id}-${T}`, trait: guest.trait, isReturning: guest.isReturning, reason, trip: [makeWalk(route.path, T, PACE)], ...(guest.party ? { party: guest.party } : {}) };
+  return { id: `leave-${guest.id}-${T}`, trait: guest.trait, isReturning: guest.isReturning, reason, trip: [makeWalk(route.path, T, PACE)], ...(guest.party ? { party: guest.party } : {}), ...(guest.purpose ? { purpose: guest.purpose } : {}) };
 }
 
 /** A guest moving rooms at time T (after a breakdown): from where they are to the new room (round by the street if need be). */

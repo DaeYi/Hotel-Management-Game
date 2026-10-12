@@ -1,7 +1,7 @@
 # Design: Guest and Staff Personalities
 
 Date: 2026-10-11
-Status: PROPOSED
+Status: PROPOSED. Purpose of stay (three values) and room preferences shipped first, as a slice: see guest-preferences.md.
 Follows: aligned-movement.md, open-floor-plan.md, late-game-economy.md
 Builds on: the 11:00 checkout, guest day trips (`OutingManager.ts`, `GUEST_OUTINGS`) and presence-aware noise, which shipped together with this proposal (see aligned-movement.md).
 

@@ -1,6 +1,7 @@
 import type { HotelState, Room, Guest, ActiveIncident, StoryLogEntry, GameEvent, Booking } from './types.js';
 import { partyOf, partyLabel, PartyLabel } from './Party.js';
 import { profileRoom, fitsParty } from './RoomProfile.js';
+import { roomFit, FEATURE_LABELS, type RoomFeature } from './Preferences.js';
 import type { PRNG } from './prng.js';
 import type { GuestReviewBreakdown } from './GuestManager.js';
 import { SATISFACTION, STORY, NOISE, ECONOMY, REVIEW, HOUSEKEEPING } from '../config/balance.js';
@@ -86,7 +87,9 @@ function deriveSatisfactionTarget(room: Room, state: HotelState, guest: Guest): 
   const noisePenalty = isGuestAway(guest, hourStart(state) + 0.5) ? 0 : noiseToRatingPenalty(calculateRoomNoise(room, state), guest);
   const conditionBonus = (room.condition - REVIEW.conditionMidpoint) / REVIEW.conditionScale * REVIEW.conditionWeight;
   const cleanlinessBonus = (room.cleanliness - HOUSEKEEPING.cleanlinessMidpoint) / HOUSEKEEPING.cleanlinessScale * HOUSEKEEPING.cleanlinessWeight;
-  const raw = conditionBonus + cleanlinessBonus - noisePenalty;
+  // What they like (or don't) about the room: the same as in their review
+  const fit = roomFit(profileRoom(room), guest).score;
+  const raw = conditionBonus + cleanlinessBonus - noisePenalty + fit;
   return Math.max(0, Math.min(100, SATISFACTION.initial + raw * 10));
 }
 
@@ -418,7 +421,7 @@ export function recordReturnGuestEntries(state: HotelState, events: GameEvent[])
 
     const appended = appendStoryLogEntry(current, {
       type: 'regular_returns',
-      guestName: partyLabel(guest),
+      guestName: guest.name,
       roomId,
       message: event.message,
     });
@@ -460,6 +463,41 @@ export function recordPartyTurnAways(state: HotelState, events: GameEvent[]): Ho
   return current;
 }
 
+/** What to do about something guests disliked in a room. */
+const DISLIKE_ADVICE: Partial<Record<RoomFeature, string>> = {
+  separateBeds: 'Couples want to share a bed, but they book the cheapest free room that sleeps two: price your twins above your doubles, or keep them for friends.',
+};
+
+/**
+ * A story beat when guests check out unhappy with something in their room
+ * (separate beds for a couple): once a day, naming who and where, so the
+ * player can see what the reviews are about. Not an incident origin: it uses
+ * none of the day's incident budget.
+ */
+export function recordRoomDislikes(state: HotelState, departures: DepartedGuestReview[]): HotelState {
+  const chainId = `dislike-${state.day}`;
+  if (state.storyLog.some(e => e.chainId === chainId)) return state;
+  const unhappy = departures.filter(d => d.breakdown.roomDislikes?.length);
+  if (unhappy.length === 0) return state;
+  // The thing most of them disliked
+  const counts = new Map<RoomFeature, DepartedGuestReview[]>();
+  for (const d of unhappy) for (const f of d.breakdown.roomDislikes!) counts.set(f, [...(counts.get(f) ?? []), d]);
+  const [feature, who] = [...counts.entries()].sort((a, b) => b[1].length - a[1].length)[0];
+  const rooms = who.map(d => state.rooms.find(r => r.id === d.roomId)).filter((r): r is Room => !!r).map(r => formatRoomLabel(r.gridX, r.gridY, r.floor));
+  const name = who[0].guestName.charAt(0).toUpperCase() + who[0].guestName.slice(1);
+  const where = rooms.length === 0 ? '' : rooms.length === 1 ? ` in room ${rooms[0]}` : ` (rooms ${rooms.join(', ')})`;
+  const message = who.length === 1
+    ? `${name} didn't like ${FEATURE_LABELS[feature]}${where}.`
+    : `${who.length} guests didn't like ${FEATURE_LABELS[feature]}${where}.`;
+  const advice = DISLIKE_ADVICE[feature];
+  return appendStoryLogEntry(state, {
+    type: 'room_disliked',
+    message: advice ? `${message} ${advice}` : message,
+    chainId,
+    ...(who.length === 1 ? { roomId: who[0].roomId } : {}),
+  }).state;
+}
+
 // ============================================================================
 // Review Goes Semi-Viral: attribution rule + temporary arrival penalty.
 // ============================================================================
@@ -474,6 +512,7 @@ export function attributeReviewCause(b: GuestReviewBreakdown): string {
     { label: 'cleanliness', magnitude: Math.max(0, -b.cleanlinessBonus) },
     { label: 'amenities', magnitude: b.amenityPenalty },
     { label: 'pricing', magnitude: (1 - b.priceFairness) * REVIEW.basePriceFairnessWeight },
+    { label: b.roomDislikes?.[0] ? FEATURE_LABELS[b.roomDislikes[0]] : 'the room', magnitude: Math.max(0, -b.roomFit) },
   ];
   let winner = candidates[0];
   for (const c of candidates.slice(1)) {

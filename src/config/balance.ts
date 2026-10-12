@@ -147,6 +147,66 @@ export const PARTIES = {
   rerollChance: 0.9,
 };
 
+/**
+ * Why guests come (docs/designs/guest-preferences.md). A booking's purpose
+ * follows from its party -- a business party is on business, families never
+ * are -- so who books is unchanged: the purpose mix moves with the week and
+ * the season through the party mix (weekdays about 45% business, weekends
+ * about half sightseeing). It changes what guests do (when they go out, for
+ * how long, which facilities they use) and what they like in a room.
+ */
+export const GUEST_PURPOSES = {
+  enabled: true,
+  // The purpose by party: [purpose, weight]
+  byParty: {
+    solo: [['business', 0.7], ['sightseeing', 0.2], ['getaway', 0.1]],
+    business: [['business', 1]],
+    couple: [['sightseeing', 0.5], ['getaway', 0.5]],
+    friends: [['sightseeing', 0.7], ['getaway', 0.3]],
+    family: [['sightseeing', 0.7], ['getaway', 0.3]],
+  } as Record<PartyKindName, Array<[PurposeName, number]>>,
+  // Going out for the day: the chance (x GUEST_OUTINGS.leaveChance) and how long.
+  // Business guests are out at meetings till the evening, sightseers most of the
+  // day; a getaway is spent mostly in the hotel. About as many outings as before.
+  outing: {
+    business: { chanceMult: 1.3, minHours: 6, maxHours: 10 },
+    sightseeing: { chanceMult: 1.15, minHours: 3, maxHours: 8 },
+    getaway: { chanceMult: 0.4, minHours: 2, maxHours: 4 },
+  } as Record<PurposeName, { chanceMult: number; minHours: number; maxHours: number }>,
+  // Facilities: the visit chance by purpose (x FACILITY_CONFIG[type].visitChance)
+  facility: {
+    business: { gym: 1.6, restaurant: 1.3, pool: 0.3, shop: 0.6 },
+    sightseeing: { gym: 0.6, restaurant: 0.9, pool: 0.8, shop: 1.4 },
+    getaway: { gym: 1.0, restaurant: 1.2, pool: 1.8, shop: 1.0 },
+  } as Record<PurposeName, Record<'gym' | 'restaurant' | 'pool' | 'shop', number>>,
+};
+type PartyKindName = 'solo' | 'business' | 'couple' | 'friends' | 'family';
+type PurposeName = 'business' | 'sightseeing' | 'getaway';
+
+/**
+ * What guests like (and dislike) in a room (Preferences.ts): each rule is who
+ * -- a purpose, a party kind or a trait -- a room feature, and how much it
+ * adds to their review (and their mood during the stay). Mostly likes, so a
+ * plain room is fine and a well-furnished one is better; the one dislike is a
+ * couple given separate beds. A guest's total is capped at +/- maxFit.
+ */
+export const ROOM_PREFERENCES = {
+  enabled: true,
+  rules: [
+    { who: 'business', feature: 'desk', weight: 0.4 },
+    { who: 'couple', feature: 'kingBed', weight: 0.3 },
+    { who: 'couple', feature: 'separateBeds', weight: -0.6 },
+    { who: 'family', feature: 'tub', weight: 0.3 },
+    { who: 'family', feature: 'sofaBed', weight: 0.2 },
+    { who: 'friends', feature: 'lounge', weight: 0.3 },
+    { who: 'getaway', feature: 'tub', weight: 0.3 },
+    { who: 'getaway', feature: 'kingBed', weight: 0.2 },
+    { who: 'getaway', feature: 'art', weight: 0.2 },
+    { who: 'big_spender', feature: 'deluxe', weight: 0.3 },
+  ] as Array<{ who: string; feature: string; weight: number }>,
+  maxFit: 1,
+};
+
 export const GUEST_TRAITS = {
   lightSleeperChance: 0.2,
   bigSpenderChance: 0.2,
