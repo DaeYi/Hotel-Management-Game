@@ -295,7 +295,7 @@ describe('Loyalty', () => {
     let s = { ...hotel([]), day: 30, hour: 15, staff: { ...createStarterHotel().staff, frontDesk: 6 } };
     for (let x = 0; x < 4; x++) s = addRoom(s, 'standard', x + 3, 2, 0, 'up')!;
     const old = s.rooms[2];
-    const me: GuestProfile = { ...PROFILE, chronotype: 'night', favorite: 'gym', housekeeping: 'makeup' };
+    const me: GuestProfile = { ...PROFILE, chronotype: 'night', favorite: 'gym', housekeeping: 'makeup', patience: 'patient', voice: 'stoic' };
     s = { ...s, returningGuestPool: [{ name: 'Mei', trait: 'normal', roomType: old.type, personId: 'mei', stays: 2, profile: me, lastRoomId: old.id, lastReview: 8, dueDay: 20 }] };
     let back: Guest | undefined;
     let roomId = '';

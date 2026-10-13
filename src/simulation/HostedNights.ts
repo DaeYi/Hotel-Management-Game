@@ -1,5 +1,6 @@
 import type { ActiveIncident, GameEvent, HotelState, Leg, Walker } from './types.js';
-import { HOSTED_NIGHTS, GUEST_PROFILE, TRAVEL, SATISFACTION, NOISE } from '../config/balance.js';
+import { HOSTED_NIGHTS, GUEST_PROFILE, TRAVEL, SATISFACTION, NOISE, VOICE } from '../config/balance.js';
+import { voiceOn, voiceOf, hasComplained } from './Voice.js';
 import { routeFromStreet, routeToStreet } from './Layout.js';
 import { makeWalk, makeStay, truncateLegs, legsEnd, hourStart, hash01, isUnderway } from './Movement.js';
 import { roomTile, isGuestAway } from './GuestMovement.js';
@@ -174,10 +175,10 @@ export function fileVisitorComplaints(state: HotelState, T: number, leaving: Rea
     let complainerRoom = null as typeof hostRoom | null;
     const complainer = current.guests.find(g => {
       // (not someone leaving this hour, or who's complained already this stay)
-      if (g.id === host.id || busy.has(g.id) || leaving.has(g.id) || g.hadNoiseComplaint || !g.profile) return false;
+      if (g.id === host.id || busy.has(g.id) || leaving.has(g.id) || hasComplained(g) || !g.profile) return false;
       const room = current.rooms.find(r => r.guestId === g.id && r.status === 'occupied');
       if (!room || isGuestAway(g, mid) || !isAsleepAt(current, g, mid)) return false;
-      if (hash01(`${g.id}|${host.id}|${night.day}|complain`) >= HOSTED_NIGHTS.complaintChance[g.profile.sleep]) return false;
+      if (hash01(`${g.id}|${host.id}|${night.day}|complain`) >= HOSTED_NIGHTS.complaintChance[g.profile.sleep] * (voiceOn() ? VOICE.visitorComplaintMult[voiceOf(g)] : 1)) return false;
       if (calculateRoomNoise(room, current, mid) <= NOISE.penaltyThreshold || getLoudestNeighborGuestId(room, current, mid) !== host.id) return false;
       complainerRoom = room;
       return true;
@@ -220,7 +221,10 @@ export function fileVisitorComplaints(state: HotelState, T: number, leaving: Rea
       ...current,
       activeIncidents: [...current.activeIncidents, incident],
       guests: current.guests.map(g => (g.id === complainer.id
-        ? { ...g, hadNoiseComplaint: true, satisfaction: Math.max(0, g.satisfaction - SATISFACTION.noiseComplaintPenalty) }
+        ? {
+          ...g, hadNoiseComplaint: true, satisfaction: Math.max(0, g.satisfaction - SATISFACTION.noiseComplaintPenalty),
+          ...(voiceOn() ? { complaint: { about: 'the visitors next door', cause: 'noise', via: 'phone' as const, at: T } } : {}),
+        }
         : g.id === host.id ? { ...g, hostedNight: { ...night, complainedBy: complainer.id } } : g)),
     };
     events.push({

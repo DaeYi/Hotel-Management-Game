@@ -46,13 +46,14 @@ export const EVENT_COLORS: Record<string, string> = {
   regular_lost: '#e67e22',
   visitors_asked_to_leave: '#3498db',
   dnd_rooms_left: '#3498db',
+  guest_complained: '#e67e22',
 };
 
 /** Incident-related event types (design-review D13): suppressed as toasts while
  * the Story Log panel is open, since the player is already looking at them there. */
 export const INCIDENT_EVENT_TYPES = new Set([
   'guest_returned', 'regular_lost', 'guest_walked_out', 'noise_complaint_filed',
-  'noise_complaint_escalated', 'mid_stay_breakdown_resolved', 'visitors_asked_to_leave',
+  'noise_complaint_escalated', 'mid_stay_breakdown_resolved', 'visitors_asked_to_leave', 'guest_complained',
 ]);
 
 /** Shown immediately rather than batched. */

@@ -1,11 +1,12 @@
 import type { HotelState, StaffConfig, VisitorPolicy } from '../../simulation/types';
-import { STAFF, HOSTED_NIGHTS, GUEST_PROFILE } from '../../config/balance';
+import { STAFF, HOSTED_NIGHTS, GUEST_PROFILE, DESK } from '../../config/balance';
 import { visitorPolicy } from '../../simulation/Visitors';
 import { getMaintenanceStatus, getStaffDailyCost } from '../../simulation/MaintenanceManager';
 import { getUpkeepMultiplier } from '../../simulation/StarRatingManager';
 import { getHousekeepingStatus } from '../../simulation/HousekeepingManager';
 import { getAccessibleDesks, getMannedDeskStaff, getCheckInCapacity, getStaffTravelHours } from '../../simulation/Layout';
-import { useController } from '../context';
+import { useController, useLiveClock } from '../context';
+import { queueOn, deskToday, waitingInLine } from '../../simulation/DeskQueue';
 import { formatMoney, formatWalk } from '../format';
 import { PanelCard } from './PanelCard';
 
@@ -46,6 +47,31 @@ const VISITOR_POLICIES: Array<{ key: VisitorPolicy; label: string }> = [
   { key: 'allow', label: 'Let them stay' },
 ];
 
+/** The front desk today: the line now, how check-ins went, who gave up, complaints heard -- and what to do about a line. */
+function DeskToday() {
+  const c = useController();
+  useLiveClock();
+  const { state } = c;
+  const today = deskToday(state);
+  const inLine = waitingInLine(state, c.gameTime);
+  const parts = [
+    `In line now: ${inLine}`,
+    today.checkedIn > 0 ? `${today.checkedIn} checked in today (average wait ${Math.round(today.waitHours / today.checkedIn * 60)} min)` : '',
+    today.gaveUp > 0 ? `${today.gaveUp} gave up in line` : '',
+    today.complaints > 0 ? `${today.complaints} complaint${today.complaints === 1 ? '' : 's'} at the desk` : '',
+  ].filter(Boolean);
+  const seats = getAccessibleDesks(state).length * DESK.staffPerDesk;
+  const advice = today.gaveUp === 0 ? null
+    : state.staff.frontDesk < seats ? 'Guests are giving up in line: another clerk would serve them (a desk seats two).'
+    : 'Guests are giving up in line, and every desk seat is taken: build another desk for another clerk.';
+  return (
+    <div class="tiny" aria-label="Front desk today">
+      <div class="dim">{parts.join(' \u00b7 ')}</div>
+      {advice && <div class="warn-text">{advice}</div>}
+    </div>
+  );
+}
+
 export function StaffPanel() {
   const c = useController();
   const { state } = c;
@@ -74,6 +100,7 @@ export function StaffPanel() {
     <PanelCard title="STAFF">
       <StaffRow label={`Front Desk (${formatMoney(STAFF.frontDesk.dailyWage)}/day)`} staffKey="frontDesk"
         status={`Check-in: ${getCheckInCapacity(state)}/hr at ${desks} desk${desks === 1 ? '' : 's'}${deskWarning}`} />
+      {queueOn() && <DeskToday />}
       {HOSTED_NIGHTS.enabled && GUEST_PROFILE.enabled && (
         <div class="stack" style={{ marginTop: '6px' }}>
           <div class="body small">When a neighbour complains about a guest's visitors at night:</div>

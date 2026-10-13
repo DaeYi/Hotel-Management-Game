@@ -252,6 +252,10 @@ describe('Night noise', () => {
     expect(s.guests[0].nightNoise).toMatchObject({ exposure: excess, woken: 1 });
     s = accrueNightNoise({ ...s, day: 3, hour: 0 }); // the same night: still one woken
     expect(s.guests[0].nightNoise!.woken).toBe(1);
+    expect(s.guests[0].nightNoise!.lastNight).toBeCloseTo(s.guests[0].nightNoise!.exposure, 9); // (all of it last night)
+    const next = accrueNightNoise({ ...s, day: 3, hour: 23 }).guests[0].nightNoise!;
+    expect(next.woken).toBe(2);
+    expect(next.lastNight).toBeCloseTo(next.exposure - s.guests[0].nightNoise!.exposure, 9); // a new night starts afresh
     expect(accrueNightNoise({ ...s, day: 3, hour: 14 }).guests[0].nightNoise).toEqual(s.guests[0].nightNoise); // awake: nothing
     // Out of the room: nothing either
     const out = { ...s, guests: s.guests.map(g => (g.id === 'me' ? { ...g, tripKind: 'outing' as const, trip: [{ kind: 'stay' as const, at: { gridX: 0, gridY: 0, floor: 0 }, start: 0, end: 999, activity: 'away' as const }] } : g)) };

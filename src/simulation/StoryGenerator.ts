@@ -4,15 +4,17 @@ import { profileRoom, fitsParty } from './RoomProfile.js';
 import { roomFit, FEATURE_LABELS, type RoomFeature } from './Preferences.js';
 import type { PRNG } from './prng.js';
 import type { GuestReviewBreakdown } from './GuestManager.js';
-import { SATISFACTION, STORY, NOISE, ECONOMY, REVIEW, GUEST_PROFILE, LOYALTY } from '../config/balance.js';
+import { SATISFACTION, STORY, NOISE, ECONOMY, REVIEW, GUEST_PROFILE, LOYALTY, VOICE } from '../config/balance.js';
 import { calculateRoomNoise, noiseToRatingPenalty, getLoudestNeighborGuestId, nightNoiseThisHour } from './NoiseManager.js';
 import { isAsleepAt, theVisitors } from './Visitors.js';
+import { voiceOn, voiceOf, complainsBelow, hasComplained } from './Voice.js';
+import type { Voice } from './types.js';
 import { cleanlinessTerm } from './CleaningPreference.js';
 import { personIdOf } from './Loyalty.js';
 import { formatRoomLabel, isRoomReachable } from './HotelState.js';
 import { roomMoveTrip, isGuestAway } from './GuestMovement.js';
 import { isCheckoutDue } from './GuestManager.js';
-import { hourEnd, hourStart } from './Movement.js';
+import { hourEnd, hourStart, legsEnd } from './Movement.js';
 
 // ============================================================================
 // Story log: append + chain-aware cap/eviction (design-review D11).
@@ -219,6 +221,11 @@ export function advanceIncidents(state: HotelState, prng: PRNG, T = hourEnd(stat
     }
 
     // mid_stay_breakdown
+    // (down at the front desk complaining: the move waits till they're back)
+    if (voiceOn() && guest.tripKind === 'complaint' && guest.trip && T < legsEnd(guest.trip) && room.condition <= ECONOMY.roomBreakdownThreshold && !isCheckoutDue(guest, current)) {
+      remaining.push(incident);
+      continue;
+    }
     if (room.condition > ECONOMY.roomBreakdownThreshold || isCheckoutDue(guest, current)) {
       // Repaired before we had to act, or the guest is checking out now
       // anyway (no point moving them) -- drop quietly, no log spam.
@@ -323,7 +330,8 @@ function collectCandidates(state: HotelState): Candidate[] {
 
     // Kept awake: in their room, and (with profiles on) in their sleep hours (not up with visitors)
     const tryingToSleep = !GUEST_PROFILE.enabled || isAsleepAt(state, guest, hourStart(state) + 0.5);
-    if (!guest.hadNoiseComplaint && guest.satisfaction < SATISFACTION.incidentFuelThreshold && tryingToSleep && !isGuestAway(guest, hourStart(state) + 0.5)) {
+    const below = complainsBelow(guest);
+    if (!hasComplained(guest) && below !== null && guest.satisfaction < below && tryingToSleep && !isGuestAway(guest, hourStart(state) + 0.5)) {
       const roomNoise = calculateRoomNoise(room, state);
       if (roomNoise > NOISE.penaltyThreshold) {
         const culpritGuestId = getLoudestNeighborGuestId(room, state);
@@ -359,11 +367,13 @@ export function selectNewIncident(state: HotelState, prng: PRNG): { state: Hotel
   }
 
   const candidates = collectCandidates(state);
+  // (with Voice on the pick is drawn either way, so who's below their line doesn't move the random stream)
+  const roll = voiceOn() ? prng.next() : null;
   if (candidates.length === 0) {
     return { state, events: [] };
   }
 
-  const picked = candidates[Math.floor(prng.next() * candidates.length)];
+  const picked = candidates[Math.floor((roll ?? prng.next()) * candidates.length)];
   const events: GameEvent[] = [];
   let current = state;
 
@@ -392,7 +402,10 @@ export function selectNewIncident(state: HotelState, prng: PRNG): { state: Hotel
       ...current,
       activeIncidents: [...current.activeIncidents, incident],
       guests: current.guests.map(g => g.id === guest.id
-        ? { ...g, hadNoiseComplaint: true, satisfaction: Math.max(0, g.satisfaction - SATISFACTION.noiseComplaintPenalty) }
+        ? {
+          ...g, hadNoiseComplaint: true, satisfaction: Math.max(0, g.satisfaction - SATISFACTION.noiseComplaintPenalty),
+          ...(voiceOn() ? { complaint: { about: 'the noise', cause: 'noise', via: 'phone' as const, at: hourEnd(current) } } : {}),
+        }
         : g),
     };
     events.push({
@@ -580,6 +593,7 @@ export interface DepartedGuestReview {
   roomId: string;
   booking: Booking;
   breakdown: GuestReviewBreakdown;
+  voice?: Voice; // how they complain (a stoic guest's bad review is likelier to spread)
 }
 
 export function checkReviewSemiViral(
@@ -602,7 +616,7 @@ export function checkReviewSemiViral(
     return { state, events: [] };
   }
 
-  const chosen = bad[Math.floor(prng.next() * bad.length)];
+  const chosen = voiceOn() ? pickWeighted(bad, d => VOICE.viralAuthorWeight[d.voice ?? 'typical'], prng.next()) : bad[Math.floor(prng.next() * bad.length)];
   const cause = attributeReviewCause(chosen.breakdown);
   const appended = appendStoryLogEntry(state, {
     type: 'review_semi_viral',
@@ -627,6 +641,17 @@ export function checkReviewSemiViral(
       data: { cause },
     }],
   };
+}
+
+/** One of a list picked by a roll in [0, 1), in proportion to weights. */
+function pickWeighted<T>(items: T[], weight: (t: T) => number, roll: number): T {
+  const total = items.reduce((sum, t) => sum + weight(t), 0);
+  let at = roll * total;
+  for (const t of items) {
+    if (at < weight(t)) return t;
+    at -= weight(t);
+  }
+  return items[items.length - 1];
 }
 
 /** Combined multiplier from all active temporary reputation penalties (Review Goes Semi-Viral). */

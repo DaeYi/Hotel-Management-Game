@@ -98,3 +98,42 @@ export function drawSleepZ(g: Phaser.GameObjects.Graphics, x: number, y: number)
   g.lineBetween(x + 5, y, x, y + 5);
   g.lineBetween(x, y + 5, x + 5, y + 5);
 }
+
+/** A clock filling red as someone in line runs out of patience (`used` 0-1), centred at (x, y), on a dark disc. */
+export function drawClock(g: Phaser.GameObjects.Graphics, x: number, y: number, used: number) {
+  g.fillStyle(BACKING, 0.9);
+  g.fillCircle(x, y, 4.5);
+  g.fillStyle(0xf5f5f5, 1);
+  g.fillCircle(x, y, 3.4);
+  g.fillStyle(0xe74c3c, 1);
+  g.slice(x, y, 3.4, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, used), false);
+  g.fillPath();
+  g.lineStyle(0.9, BACKING, 1);
+  g.lineBetween(x, y, x, y - 2.6);
+}
+
+/** A speech bubble with a "!" (on the way to complain), centred at (x, y). */
+export function drawComplaint(g: Phaser.GameObjects.Graphics, x: number, y: number) {
+  g.fillStyle(0xf5f5f5, 1);
+  g.fillRoundedRect(x - 4.5, y - 4, 9, 7, 2);
+  g.fillTriangle(x - 2, y + 3, x + 1, y + 3, x - 3, y + 6);
+  g.lineStyle(1, BACKING, 0.9);
+  g.strokeRoundedRect(x - 4.5, y - 4, 9, 7, 2);
+  g.fillStyle(0xe74c3c, 1);
+  g.fillRect(x - 0.6, y - 2.8, 1.3, 3);
+  g.fillRect(x - 0.6, y + 0.9, 1.3, 1.2);
+}
+
+/** A telephone (a guest just rang the front desk to complain), centred at (x, y), on a dark disc. */
+export function drawPhone(g: Phaser.GameObjects.Graphics, x: number, y: number) {
+  g.fillStyle(BACKING, 0.9);
+  g.fillCircle(x, y, 4.5);
+  g.fillStyle(0xf5f5f5, 1);
+  g.fillRect(x - 3, y - 2.2, 6, 1.6); // the handset
+  g.fillRect(x - 3, y - 1.4, 1.6, 2);
+  g.fillRect(x + 1.4, y - 1.4, 1.6, 2);
+  g.fillRect(x - 1.6, y + 0.4, 3.2, 2.2); // the base
+}
+
+/** The legend's text for the desk marks. */
+export const DESK_GLYPHS = { phone: '\u260e' };

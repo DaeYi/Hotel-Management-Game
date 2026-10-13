@@ -1,4 +1,4 @@
-import type { HotelState, Guest, Room, Leg, TilePos, Walker, Fixture, StayLeg } from './types.js';
+import type { HotelState, Guest, Room, Leg, TilePos, Walker, Fixture, StayLeg, PartyKind } from './types.js';
 import { DESK, STAFF, TRAVEL, GUEST_PROFILE, MOOD } from '../config/balance.js';
 import {
   findRoute, routeFromStreet, routeToStreet, getAccessibleDesks, getMannedDeskStaff, getFixtureFront, getEntranceTiles,
@@ -70,7 +70,7 @@ export function checkInLanes(state: HotelState): Array<{ desk: Fixture; seat: nu
 }
 
 /** A walk from one tile to another, going out to the street and back in if the two aren't connected inside (separate wings). */
-function routeVia(state: HotelState, from: TilePos, to: TilePos, pace: number): Route | null {
+export function routeVia(state: HotelState, from: TilePos, to: TilePos, pace: number): Route | null {
   const direct = findRoute(state, from, to, pace);
   if (direct) return direct;
   const out = routeToStreet(state, from, pace);
@@ -80,7 +80,7 @@ function routeVia(state: HotelState, from: TilePos, to: TilePos, pace: number): 
 }
 
 /** Walk legs for a route that may leave the building and come back in elsewhere (the walk round outside isn't drawn). */
-function walkLegs(route: Route, start: number, pace: number): Leg[] {
+export function walkLegs(route: Route, start: number, pace: number): Leg[] {
   const legs: Leg[] = [];
   let seg: TilePos[] = [route.path[0]];
   let t = start;
@@ -113,13 +113,65 @@ function walkLegs(route: Route, start: number, pace: number): Leg[] {
  */
 export function planArrivalTrips(
   state: HotelState,
-  checkedIn: Array<{ guest: Guest; roomId: string }>,
-  walkIns: Array<{ guest: Guest; outcome: 'impatient' | 'turned_away' }>,
+  checkedIn: Array<{ guest: Guest; roomId: string; desk?: { lane: string; arriveAt: number; start: number } }>,
+  walkIns: Array<{ guest: Guest; outcome: 'impatient' | 'turned_away'; desk?: { arriveAt: number; lane?: string; leaveAt?: number; wanted?: PartyKind } }>,
   T: number,
 ): { trips: Map<string, Leg[]>; walkers: Walker[] } {
   const trips = new Map<string, Leg[]>();
   const walkers: Walker[] = [];
   const lanes = checkInLanes(state);
+  const laneByKey = new Map(lanes.map(l => [`${l.desk.id}:${l.seat}`, l]));
+  // With the desk queue on, each guest has their place in it: in off the street to reach
+  // the desk then, a wait in that clerk's line if there is one, the check-in, then up to the room
+  const queued = checkedIn.filter(c => c.desk && laneByKey.has(c.desk.lane));
+  for (const { guest, roomId, desk } of queued) {
+    const room = state.rooms.find(r => r.id === roomId);
+    const lane = laneByKey.get(desk!.lane)!;
+    if (!room) continue;
+    const pace = guestPace(guest);
+    const legs: Leg[] = [];
+    const walkIn = routeFromStreet(state, lane.front, pace);
+    if (!walkIn) continue;
+    const walk = makeWalk(walkIn.path, desk!.arriveAt - makeWalk(walkIn.path, 0, pace).end, pace);
+    if (walk.path.length > 1) legs.push(walk);
+    const at = walk.path.length > 1 ? walk.end : desk!.arriveAt;
+    const start = Math.max(at, desk!.start);
+    if (start > at + 1e-12) legs.push(makeStay(lane.front, at, start, 'wait', { placeId: lane.desk.id, lane: desk!.lane }));
+    legs.push(makeStay(lane.front, start, start + CHECK_IN_HOURS, 'check_in', { placeId: lane.desk.id, lane: desk!.lane }));
+    const toRoom = routeVia(state, lane.front, roomTile(room), pace);
+    if (toRoom) legs.push(...walkLegs(toRoom, start + CHECK_IN_HOURS, pace));
+    trips.set(guest.id, legs);
+  }
+  checkedIn = checkedIn.filter(c => !queued.includes(c));
+  walkIns = walkIns.filter(w => {
+    if (!w.desk) return true;
+    // In off the street to reach the desk at their time: someone who gave up stands in their
+    // clerk's line for exactly their patience; someone turned away asks, beside it
+    const { guest, outcome, desk } = w;
+    const lane = desk.lane ? laneByKey.get(desk.lane) : undefined;
+    const spot = lane?.front ?? lanes[walkIns.indexOf(w) % Math.max(1, lanes.length)]?.front;
+    if (!spot) return true;
+    const pace = guestPace(guest);
+    const legs: Leg[] = [];
+    const walkIn = routeFromStreet(state, spot, pace);
+    let t = desk.arriveAt;
+    if (walkIn && walkIn.path.length > 1) {
+      const walk = makeWalk(walkIn.path, desk.arriveAt - makeWalk(walkIn.path, 0, pace).end, pace);
+      legs.push(walk);
+      t = walk.end;
+    }
+    const until = outcome === 'impatient' && desk.leaveAt !== undefined ? Math.max(t, desk.leaveAt) : t + INQUIRE_HOURS;
+    legs.push(outcome === 'impatient'
+      ? makeStay(spot, t, until, 'wait', lane ? { placeId: lane.desk.id, lane: desk.lane } : {})
+      : makeStay(spot, t, until, 'inquire'));
+    const out = routeToStreet(state, spot, pace);
+    if (out && out.path.length > 1) legs.push(makeWalk(out.path, until, pace));
+    walkers.push({
+      id: `walkin-${guest.id}-${T}`, trait: guest.trait, isReturning: guest.isReturning, reason: outcome, trip: legs, ...walkerFields(guest),
+      ...(outcome === 'impatient' ? { name: guest.name, waited: until - t, ...(desk.wanted ? { wanted: desk.wanted } : {}) } : {}),
+    });
+    return false;
+  });
   const laneFree = lanes.map(() => T);
   const served = lanes.map(() => 0);
   // Each lane's check-ins start once the slowest walker could have got there
@@ -226,7 +278,7 @@ export function tidyMovement(state: HotelState, t: number): HotelState {
 
 /** Whether a stop still makes sense: a desk still staffed there, a facility still open, through the same door. */
 function stayStillValid(state: HotelState, stay: StayLeg): boolean {
-  if ((stay.activity === 'check_in' || stay.activity === 'wait') && stay.placeId) {
+  if ((stay.activity === 'check_in' || stay.activity === 'wait' || stay.activity === 'complain') && stay.placeId) {
     return checkInLanes(state).some(l => l.desk.id === stay.placeId && sameTile(l.front, stay.at));
   }
   if (stay.activity === 'visit') return getOpenFacilities(state).some(f => f.id === stay.placeId && f.door === stay.at.door);
@@ -313,12 +365,14 @@ function continueTrip(state: HotelState, legs: Leg[], t: number, destination: Ti
     if (!goTo(leg.at)) continue;
     const length = ongoing ? leg.end - t : leg.end - leg.start;
     const start = Math.max(time, leg.start);
-    if (start > time && leg.activity === 'check_in') out.push(makeStay(leg.at, time, start, 'wait', { placeId: leg.placeId }));
-    const begin = leg.activity === 'check_in' ? start : time;
-    // A visitor carrying on in their host's room: one stay, not two halves (the visit is one stay for
-    // the noise and the desk). Other stops are left as they always were.
+    const atCounter = leg.activity === 'check_in' || leg.activity === 'complain'; // (their turn at the desk, booked)
+    if (start > time && atCounter) out.push(makeStay(leg.at, time, start, 'wait', { placeId: leg.placeId, ...(leg.lane ? { lane: leg.lane } : {}) }));
+    const begin = atCounter ? start : time;
+    // A visitor carrying on in their host's room, or someone at the front desk counter or in a clerk's
+    // line: one stay, not two halves (the visit is one stay for the noise and the desk; a check-in or a
+    // complaint is counted once, a wait in line is the whole wait). Other stops are left as they always were.
     const last = out[out.length - 1];
-    if (ongoing && leg.activity === 'in_room' && last && last.kind === 'stay' && last.activity === leg.activity && last.placeId === leg.placeId && Math.abs(last.end - begin) < 1e-9) {
+    if (ongoing && (leg.activity === 'in_room' || leg.lane !== undefined) && last && last.kind === 'stay' && last.activity === leg.activity && last.placeId === leg.placeId && Math.abs(last.end - begin) < 1e-9) {
       out[out.length - 1] = { ...leg, start: last.start, end: begin + length };
     } else {
       out.push({ ...leg, start: begin, end: begin + length });

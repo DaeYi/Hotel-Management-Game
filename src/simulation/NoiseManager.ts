@@ -205,7 +205,8 @@ export function accrueNightNoise(state: HotelState): HotelState {
     const night = nightOf(guest, hourStart(state));
     const before = guest.nightNoise ?? { exposure: 0, woken: 0, lastWokenNight: -Infinity };
     const woke = before.lastWokenNight !== night;
-    return { ...guest, nightNoise: { exposure: before.exposure + excess, woken: before.woken + (woke ? 1 : 0), lastWokenNight: night } };
+    const lastNight = (woke ? 0 : before.lastNight ?? 0) + excess;
+    return { ...guest, nightNoise: { exposure: before.exposure + excess, woken: before.woken + (woke ? 1 : 0), lastWokenNight: night, lastNight } };
   });
   return changed ? { ...state, guests } : state;
 }

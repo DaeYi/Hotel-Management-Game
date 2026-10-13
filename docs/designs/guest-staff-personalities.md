@@ -805,3 +805,65 @@ Housekeeping preference and hosted nights, behind two switches, `GUEST_HOUSEKEEP
     - merging a continued stop into one stay also changed facility crediting in the old game. The merge is now for visitors only. The old double-credit of a visit under way during a rebuild is left as a separate fix.
   - Seven findings were refuted, among them that make-up's 1.6x tracks turnover quality (by design: they mind cleanliness more).
   - 61 of 62 mutations caught; the other is equivalent (a queue filter the planner repeats).
+
+### Phase 2b as shipped (2026-10-12)
+
+Patience with the front desk queue, and Voice with complaint trips, behind two switches, `PATIENCE` and `VOICE` (both need guest profiles). With both off the game is the committed game exactly: a third pinned run in `test/preferences.test.ts` (the 2a game, every other switch on) and 400-day runs of all four bots match ec57afc seed for seed.
+
+- **Patience.** Patient 25 / normal 55 / impatient 20 (business travellers 15 / 50 / 35): waits up to 1h / 18 min / 9 min in line, and minds a full lift x0.6 / x1 / x1.5.
+- **The desk queue.** Each seated clerk is a lane. What a lane is doing is read from people's legs: every check-in and complaint at the counter is a stay that names its lane (`deskId:seat`), so lane time carries across hours, saves and reroutes with no separate `state.deskQueue` to keep in step.
+  - The hour's arrivals reach the desk spread over the hour in the order they booked, after the slowest walk in from the street (and never ahead of the last hour's last arrival). Each takes a room as before (the party fits, a regular's old room, the price), then the first free clerk, preferring one with a way to the room.
+  - Someone whose wait would outlast their patience stands in line exactly that long and walks out, with a toast as they go ("Omar gave up after 18 minutes in line"). They count as turned away, as the party they came as. The room is the next guest's.
+  - A wait minds them in proportion to their patience: up to 4 points of mood, after a 3-minute grace.
+  - A clerk hired mid-hour takes the head of the line at once. One let go mid-service finishes there and then; their line joins the others' at that desk. A desk with no clerk left: those in line go on without, as before the queue. Nobody is served before the moment of the change: time already spent in line stays a wait.
+  - **Check-ins come first.** A guest come down to complain is heard when a clerk is free of them (complaints in the order they got there), so a complaint never makes anyone checking in wait longer. A clerk can sit idle a few minutes for someone already walking in.
+  - On screen: the line at the desk, each clerk's in front of them, in the order they'll be served; a clock filling red over anyone past half their patience. The Staff panel's "Front desk today": in line now, checked in (average wait), gave up, complaints, with advice when people give up (another clerk, or another desk once every seat is taken). The guest card: "Waited 24 min in line to check in".
+- **Voice.** Vocal 25 / typical 55 / stoic 20.
+  - **Who speaks up.** A vocal guest complains once irritated (below 47), a typical one once angry (below 42), a stoic one never. These lines replace the old incident threshold (35) for the night's noise complaint too.
+  - **By day, in person.** A guest awake in their room below their line walks down to the desk (at a hashed moment in the first half hour), waits their turn, takes a clerk for a quarter of an hour, and walks back, all in their waking hours. Not on their last day, while they've friends round, while something's already being dealt with, or with nobody at the desk. In person needs the desk queue: with Patience off, complaints are calls only.
+  - **Heard.** +5 mood, a toast and a story line naming what's wrong: whatever costs them most (last night's noise, the room's condition, it not being cleaned, something about the room, the lift, a favourite that let them down today), else "their stay". The first such complaint about a cause each day carries advice ("Housekeeping is behind: more housekeepers, or clean every day."). It isn't an incident: it uses none of the day's story budget.
+  - **At night, a call.** The noise complaint, and the complaint about a neighbour's visitors (a vocal neighbour 1.6x as likely, a stoic one never). A telephone over the room for an hour.
+  - **One complaint a stay,** in person or by phone. A trip down cut short before the counter (no clerk left) doesn't count, and they turn back at once.
+  - **Stoic guests** mind 1.15x in their review (vocal and typical 0.9625x: on average the same), their bad review is twice as likely to be the one that spreads, and their mood shows as "?" on their card and no face on the floor plan. The doc's 1.3x cost a hotel about 3% by itself: it fattened the tail of reviews below the line where a bad review spreads (89 a run became 98), each one a 30% dip in arrivals for two days.
+  - On screen: a speech bubble over someone on their way down; the guest card's "Complained at the front desk about the state of the room (14:20)" or "Rang the front desk...".
+- **Balance** (400 days, mean valuation; balanced 36 seeds, understaffed and hoarder 24, overstaffed 12):
+
+  | Bot | Off | Patience | Voice | Both |
+  |---|---|---|---|---|
+  | Balanced (36 seeds) | $4.49M | $4.49M (-0.1%) | $4.39M (-2.4%) | $4.44M (-1.3%) |
+  | Overstaffed (12) | $4.41M | $4.18M (-5.3%) | $4.37M (-0.8%) | $4.42M (+0.2%) |
+  | Understaffed (24) | $1.67M | $1.63M (-2.6%) | $1.71M (+2.5%) | $1.54M (-7.8%) |
+  | Hoarder (24) | $1.48M | $1.47M (-0.6%) | $1.49M (+1.1%) | $1.51M (+2.6%) |
+
+  - Differences are paired by seed. The standard error is about 1.7 points for the balanced bot, 3-5 for overstaffed and understaffed, and 1.5 for the hoarder, so only the understaffed bot's -7.8% (about 2 standard errors) stands out. That bot sees 2-3 complaints and about 9 give-ups in 300 days: the gap is its growth path diverging (Voice draws the incident pick even with nobody to pick, so its hotels end up 14 or 33 rooms), not the desk. With both on, the order holds and nobody goes bankrupt. Mean reviews barely move (balanced 6.70 / 6.68).
+  - The first sweep, before the review's fixes and with the doc's 1.3x stoic weight, had the balanced bot at -6.1% (36 seeds).
+  - In a balanced-bot hotel over 200 days: 7-8% of guests wait to check in (the longest 17-18 minutes), 14-18 give up, 13-24 walk down to complain (about half about the room's condition, a quarter to a half about last night's noise), and about 40 ring at night. The trip down and back takes one to two hours in a big hotel: guests walk about 4 minutes a tile.
+- **Review.** Two adversarial rounds, each reviewer's finding checked by a skeptic.
+  - **The first** (5 reviewers) confirmed 17 distinct problems, all fixed:
+    - the desk wasn't first come, first served: lane time went to whoever was booked first, so a complaint planned the hour before could hold up an arrival who got there first (now: check-ins first, then complaints, each in the order they got there);
+    - a clerk hired mid-hour "served" people in the past: they jumped from the line to halfway to their room, and their wait was lost;
+    - a reroute while someone was at the counter split the stay in two, so a check-in was counted twice and a complaint heard twice;
+    - a complaint trip cut short before the counter used up the guest's one complaint;
+    - with Voice on and Patience off, complaints took no clerk's time;
+    - any noise at all last night named the complaint "the noise", even in a broken room;
+    - a family who booked smaller and gave up counted as a couple;
+    - a re-seat could move someone to a clerk at another desk facing the same spot;
+    - the line was drawn mirrored against the clerks at a desk facing up or sideways, two desks facing one spot merged their lines, and the back of a long line piled onto one pixel;
+    - with the queue off, the card said "checking in at the front desk" where it used to say "arriving";
+    - five test gaps (no pinned run with just these two off; the lift multiplier test couldn't fail; alignment check O filtered rather than asserted; one complaint a stay and the stoic visitor rule untested; the cut of a fired clerk's service untested).
+  - One finding was refuted (a duplicate, judged not a defect).
+  - **The second** (3 reviewers, on the fixes) found the ordering itself sound (in a probe of nearly 5,000 mid-hour hires, firings and rebuilds: no lane served two at once, nobody served out of turn or in the past). It found 9 more, all fixed or settled (6 checked by a skeptic, all confirmed; 3 low ones past the cap fixed without one):
+    - someone about to give up was drawn ahead of people who got to the line first;
+    - two families of four at the two clerks were drawn half a pixel apart;
+    - two desks at right angles facing one spot drew crossing lines;
+    - someone asking at the desk, or staff waiting there, could stand on the line;
+    - nothing tested the line's layout (test/render.test.ts now drives the real renderer);
+    - four assertions in the new tests couldn't fail;
+    - the legend showed the complaint bubble with Patience off;
+    - a save from before 2b had no "last night" for the noise (now: their average night);
+    - a clerk let go mid-hour can leave people in the merged line waiting past their patience. Left as it is: patience is judged as they join the line. It happened to 5 of 1,231 check-ins in a probe of constant mid-hour changes, and never in bot runs.
+  - 73 of 74 mutations caught. The other is equivalent: the turn a complaint trip waits for after a reroute, which the re-seat that always follows recomputes.
+- **Not done from 2b:**
+  - A complaint in person isn't an incident (no grace period, nothing escalates), and the night's calls are as before.
+  - The Staff panel's check-in capacity doesn't count the clerks' time spent on complaints.
+  - A concierge reading stoic guests waits for Specialty (phase 5).

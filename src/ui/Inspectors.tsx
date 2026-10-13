@@ -17,7 +17,8 @@ import { RoomSuits } from './RoomSuits';
 import { guestTags, describeRhythm, describeTemperament, sleepHours, favoriteOf, describeFavorite } from '../simulation/Profile';
 import { housekeepingPrefOf, describeHousekeeping } from '../simulation/CleaningPreference';
 import { isAsleepAt, isHosting, theVisitors, visitorCount } from '../simulation/Visitors';
-import { describeVisitors, canAskVisitorsToLeave } from '../simulation/HostedNights';
+import { describeVisitors, canAskVisitorsToLeave, clockTime } from '../simulation/HostedNights';
+import { moodHidden } from '../simulation/Voice';
 import { describeLoyalty } from '../simulation/Loyalty';
 import { guestMood } from '../simulation/Mood';
 import { getOpenFacilities } from '../simulation/Layout';
@@ -210,15 +211,36 @@ function dailyStatus(cleaning: RoomCleaning): string {
   return `daily clean due (${describeWait(cleaning.wait!)})`;
 }
 
+/** "12 min so far". */
+function minutesSince(t: number, from: number): string {
+  return `${Math.max(1, Math.round((t - from) * 60))} min so far`;
+}
+
 /** A time of day, to the hour: "18:00". */
 function formatClock(t: number): string {
   return `${String(Math.round(t) % 24).padStart(2, '0')}:00`;
 }
 
-function guestWhereabouts(guest: Guest, state: HotelState, t: number): string | null {
+export function guestWhereabouts(guest: Guest, state: HotelState, t: number): string | null {
   const trip = guest.trip;
   if (!trip || trip.length === 0 || t >= legsEnd(trip)) return null;
-  if (guest.tripKind === 'arrival') return t < trip[0].start ? 'arriving soon' : 'arriving';
+  if (guest.tripKind === 'arrival') {
+    // In line at the front desk, or at the counter
+    const leg = t >= trip[0].start ? positionAt(trip, t)?.leg : undefined;
+    if (leg?.kind === 'stay' && leg.activity === 'wait' && leg.lane) return `in line at the front desk (${minutesSince(t, leg.start)})`;
+    if (leg?.kind === 'stay' && leg.activity === 'check_in' && leg.lane) return 'checking in at the front desk';
+    return t < trip[0].start ? 'arriving soon' : 'arriving';
+  }
+  if (guest.tripKind === 'complaint') {
+    // Down to the front desk to complain, and back
+    if (t < trip[0].start) return null;
+    const leg = positionAt(trip, t)?.leg;
+    const counter = trip.find(l => l.kind === 'stay' && l.activity === 'complain');
+    const about = guest.complaint?.about ?? 'their stay';
+    if (leg?.kind === 'stay' && leg.activity === 'complain') return `complaining at the front desk about ${about}`;
+    if (leg?.kind === 'stay' && leg.activity === 'wait') return `waiting at the front desk to complain about ${about}`;
+    return counter && t < counter.start ? `on the way to the front desk to complain about ${about}` : 'on the way back from the front desk';
+  }
   if (t < trip[0].start) return null; // not set out yet
   if (guest.tripKind === 'move') return 'moving rooms';
   if (guest.tripKind === 'outing') {
@@ -267,6 +289,12 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
   const asleep = GUEST_PROFILE.enabled && !where && isAsleepAt(state, guest, c.gameTime);
   const visitors = describeVisitors(state, guest.id, c.gameTime);
   const housekeeping = describeHousekeeping(guest);
+  // How long they waited to check in, and their complaint this stay
+  const waited = guest.checkInWait !== undefined && guest.checkInWait >= 5 / 60 ? `Waited ${Math.round(guest.checkInWait * 60)} min in line to check in` : null;
+  const complained = guest.complaint?.at !== undefined
+    ? `${guest.complaint.via === 'phone' ? 'Rang the front desk' : 'Complained at the front desk'} about ${guest.complaint.about} (${clockTime(guest.complaint.at)})`
+    : null;
+  const hidden = moodHidden(guest);
   // Which night of the stay: before they wake, they're still in the night that began yesterday
   const night = Math.min(guest.stayLength, Math.max(1, state.day - guest.checkInDay + (state.hour < sleepHours(guest)[1] ? 0 : 1)));
   const fit = room ? roomFit(profileRoom(room), guest) : null;
@@ -278,6 +306,8 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
     `Night ${night} of ${guest.stayLength}${LOYALTY.enabled ? ` \u00b7 ${describeLoyalty(guest)}` : ''}`,
     ...(favoriteLine ? [favoriteLine] : []),
     ...(housekeeping ? [housekeeping] : []),
+    ...(waited ? [waited] : []),
+    ...(complained ? [complained] : []),
     ...(guest.profile ? [describeRhythm(guest, state)] : []),
     ...describeTemperament(guest),
     // Without a profile (an older save), what the trait says
@@ -292,7 +322,7 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
           {fit.dislikes.length > 0 && <span class="warn-text">Doesn't like {listFeatures(fit.dislikes)}.</span>}
         </div>
       )}
-      <pre class="stats">{`Mood:  ${formatBar(guest.satisfaction)} ${Math.floor(guest.satisfaction)}%${MOOD.enabled ? ` ${guestMood(guest)}` : ''}`}</pre>
+      <pre class="stats">{hidden ? 'Mood:  ? (keeps it to themselves)' : `Mood:  ${formatBar(guest.satisfaction)} ${Math.floor(guest.satisfaction)}%${MOOD.enabled ? ` ${guestMood(guest)}` : ''}`}</pre>
       {visitors && (
         <div class="small visitors">
           {visitors}{' '}<AskVisitorsButton hostId={guest.id} state={state} />

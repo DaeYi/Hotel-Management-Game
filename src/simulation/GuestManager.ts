@@ -1,7 +1,7 @@
-import type { Guest, GuestTrait, Room, HotelState, Booking, GameEvent, ReturningGuestProfile } from './types.js';
+import type { Guest, GuestTrait, Room, HotelState, Booking, GameEvent, ReturningGuestProfile, PartyKind } from './types.js';
 import type { PRNG } from './prng.js';
 import { cleanlinessTerm } from './CleaningPreference.js';
-import { ECONOMY, GUEST_TRAITS, REVIEW, STAFF, AMENITIES, GUEST_NAMES, SATISFACTION, STORY, PARTIES, GUEST_PROFILE, LOYALTY, GUEST_FAVORITES, FACILITY_CONFIG } from '../config/balance.js';
+import { ECONOMY, GUEST_TRAITS, REVIEW, STAFF, AMENITIES, GUEST_NAMES, SATISFACTION, STORY, PARTIES, GUEST_PROFILE, LOYALTY, GUEST_FAVORITES, FACILITY_CONFIG, VOICE } from '../config/balance.js';
 import { getDecorReviewPenalty } from './DecorManager.js';
 import { getCampaignDemandMultiplier } from './MarketingManager.js';
 import { getCheckInCapacity } from './Layout.js';
@@ -12,8 +12,12 @@ import { getExpectationMultiplier, getPartyFairPrice, getPriceMultiplier, getSta
 import { profileRoom, fitsParty } from './RoomProfile.js';
 import { partyOf, rollParty, withParty, smallerParty, partyLabel, PartyLabel, describeParty, numberWord, sharesBeds } from './Party.js';
 import { hash01 } from './Movement.js';
+import { queueOn, lanesOf, deskArrivalTimes, laneBookings, quoteLane, book, patienceHours } from './DeskQueue.js';
+import { voiceOn, voiceOf } from './Voice.js';
+import { CHECK_IN_HOURS, roomTile } from './GuestMovement.js';
+import { findRoute } from './Layout.js';
 import { rollPurpose } from './Purpose.js';
-import { rollProfile, checkoutHour, wantsLateCheckout, lateCheckoutPolicy } from './Profile.js';
+import { rollProfile, checkoutHour, wantsLateCheckout, lateCheckoutPolicy, guestPace } from './Profile.js';
 import { returnEntry, addToPool, dueIndexes, pickDue, tierOf, staysOf, ordinal, expectationMultFor, bookingWeightFor, isLostRegular, personIdOf } from './Loyalty.js';
 import { moodOf } from './Mood.js';
 import { roomFit, type RoomFeature } from './Preferences.js';
@@ -147,11 +151,92 @@ function anyFits(rooms: Room[], guest: Guest): boolean {
 }
 
 export interface ArrivalResult {
-  checkedIn: Array<{ guest: Guest; roomId: string }>;
+  checkedIn: Array<{ guest: Guest; roomId: string; desk?: DeskSlot }>; // desk: their place in the queue (with the desk queue on)
   turnedAway: number;
   events: GameEvent[];
   returningGuestPool: ReturningGuestProfile[]; // after any pulls this hour
-  walkIns: Array<{ guest: Guest; outcome: 'impatient' | 'turned_away' }>; // came in but didn't stay
+  walkIns: Array<{ guest: Guest; outcome: 'impatient' | 'turned_away'; desk?: { arriveAt: number; lane?: string; leaveAt?: number; wanted?: PartyKind } }>; // came in but didn't stay
+}
+
+/** A guest's place in the front desk queue: the clerk, when they reach the desk, and when they're served. */
+export interface DeskSlot { lane: string; arriveAt: number; start: number }
+
+/**
+ * A guest at the counter: the room they'll take -- a party too big for any free
+ * room mostly books smaller (or goes elsewhere: noFit), a regular asks for
+ * their old room first, then whatever suits at a price they'll pay -- or none.
+ */
+function matchAtCounter(state: HotelState, guest: Guest, remainingRooms: Room[], priceTolerance: number): { guest: Guest; room: Room | null; wanted?: PartyKind; inOldRoom: boolean; noFit?: true } {
+  // No free room takes a party this big, but one would take one or two of
+  // them: most book smaller, the rest go elsewhere
+  const party = partyOf(guest);
+  let wanted: PartyKind | undefined; // the party they were, if they book smaller
+  if (!anyFits(remainingRooms, guest)) {
+    const smaller = withParty(guest, smallerParty(party, guest.id));
+    const fallback = anyFits(remainingRooms, smaller) ? smaller
+      : smaller.party!.size > 1 ? withParty(guest, { kind: 'solo', size: 1 }) : smaller;
+    if (fallback.party!.size < party.size && anyFits(remainingRooms, fallback)) {
+      if (hash01(`${guest.id}#party-reroll`) < PARTIES.rerollChance) {
+        guest = fallback;
+        wanted = party.kind;
+      } else {
+        return { guest, room: null, inOldRoom: false, noFit: true };
+      }
+    }
+  }
+  // A regular asks for their old room first (the same room, still the same kind)
+  const regular = LOYALTY.enabled && guest.loyalty?.lastRoomId && tierOf(staysOf(guest)) !== 'returning' && tierOf(staysOf(guest)) !== 'first';
+  const oldRoom = regular ? remainingRooms.find(r => r.id === guest.loyalty!.lastRoomId && r.type === guest.loyalty!.lastRoomType) : undefined;
+  const inOldRoom = oldRoom ? matchGuestToRoom(guest, [oldRoom], priceTolerance, state.starRating) : null;
+  if (inOldRoom) guest = { ...guest, loyalty: { ...guest.loyalty!, oldRoom: true } };
+  const room = inOldRoom ?? matchGuestToRoom(guest, remainingRooms, priceTolerance, state.starRating);
+  return { guest, room, ...(wanted ? { wanted } : {}), inOldRoom: !!inOldRoom };
+}
+
+/** A party no free room takes, even booking smaller: turned away (in at `arriveAt` to ask, with the desk queue on). */
+function turnAwayNoFit(result: ArrivalResult, guest: Guest, arriveAt?: number): void {
+  const party = partyOf(guest);
+  result.turnedAway++;
+  result.walkIns.push({ guest, outcome: 'turned_away', ...(arriveAt !== undefined ? { desk: { arriveAt } } : {}) });
+  const need = sharesBeds(party) ? `no room for ${numberWord(party.size)}` : `no room with ${numberWord(party.size)} beds`;
+  result.events.push({
+    type: 'party_turned_away',
+    message: `${PartyLabel(guest)} was turned away: ${need}`,
+    data: { guestId: guest.id, partyKind: party.kind, size: party.size, reason: 'no_fit' },
+  });
+}
+
+/** No room at a price they'd pay: turned away (in at `arriveAt` to ask, with the desk queue on). */
+function turnAwayOverPrice(result: ArrivalResult, guest: Guest, wanted?: PartyKind, arriveAt?: number): void {
+  const who = partyOf(guest);
+  result.turnedAway++;
+  result.walkIns.push({ guest, outcome: 'turned_away', ...(arriveAt !== undefined ? { desk: { arriveAt } } : {}) });
+  result.events.push({
+    type: 'guest_turned_away',
+    message: who.size > 2 ? `${PartyLabel(guest)} turned away (no room at a price they would pay)` : 'Guest turned away (no room at a price they would pay)',
+    data: { guestId: guest.id, partyKind: who.kind, size: who.size, reason: 'price', ...(wanted ? { wanted } : {}) },
+  });
+}
+
+/** A guest with a room: arriving (and, someone back, returning). */
+function announceArrival(result: ArrivalResult, guest: Guest, room: Room, wanted: PartyKind | undefined, inOldRoom: boolean): void {
+  const who = partyOf(guest);
+  result.events.push({
+    type: 'guest_arrived',
+    message: who.size > 2 ? `${PartyLabel(guest)} arriving for a ${profileRoom(room).label}` : `Guest arriving for a ${room.type} room`,
+    data: { guestId: guest.id, roomId: room.id, trait: guest.trait, partyKind: who.kind, size: who.size, ...(wanted ? { wanted } : {}) },
+  });
+  if (guest.isReturning) {
+    const stays = staysOf(guest);
+    const which = stays > 2 ? `their ${ordinal(stays)} stay` : 'another stay';
+    result.events.push({
+      type: 'guest_returned',
+      // The guest who stayed before, by name: who they bring this time is new
+      message: `${guest.name} is back for ${which}${who.size > 2 ? (who.kind === 'family' ? ', with the family' : ', with friends') : ''}${inOldRoom ? ', in their old room' : ''}!`,
+      // (a second stay with loyalty on gets no story: its toast must show whatever's open)
+      data: { guestId: guest.id, roomId: room.id, stays, ...(inOldRoom ? { oldRoom: true } : {}), ...(LOYALTY.enabled && stays < LOYALTY.regularFrom ? { unlogged: true } : {}) },
+    });
+  }
 }
 
 export function processArrivals(
@@ -180,6 +265,9 @@ export function processArrivals(
   const booked = new Set<string>();
   let checkedInThisHour = 0;
   let pool = [...state.returningGuestPool];
+  const lanes = queueOn() ? lanesOf(state) : [];
+  const queue = lanes.length > 0 ? lanes : null; // (no lanes: nobody to queue for, as before)
+  const waiting: Array<{ guest: Guest; pulled: ReturningGuestProfile | null; priceTolerance: number }> = [];
   // Guest ids come from a random draw, so two can clash: give a clash a suffix
   // (no extra draw, so the random stream stays the same) -- everything that
   // follows a guest around (their trip, their room) is keyed by id
@@ -218,12 +306,21 @@ export function processArrivals(
       const rowdiness = partyOf(guest).kind === 'family' ? guest.profile.rowdiness : pulled.profile.rowdiness;
       // (someone first here before housekeeping preferences has one now)
       const housekeeping = pulled.profile.housekeeping ?? guest.profile.housekeeping;
-      guest = { ...guest, profile: { ...pulled.profile, rowdiness, ...(housekeeping ? { housekeeping } : {}) } };
+      const patience = pulled.profile.patience ?? guest.profile.patience;
+      const voice = pulled.profile.voice ?? guest.profile.voice;
+      guest = { ...guest, profile: { ...pulled.profile, rowdiness, ...(housekeeping ? { housekeeping } : {}), ...(patience ? { patience } : {}), ...(voice ? { voice } : {}) } };
     }
     // Turned away (desk, room, price): with loyalty on, they'll try again another day
     const requeue = () => {
       if (pulled && LOYALTY.enabled) pool = addToPool(pool, { ...pulled, dueDay: state.day + 2 });
     };
+
+    // With the desk queue on, everyone is decided first -- the same draws for each,
+    // whatever the desk does -- and served at the desk below, in the order they arrive
+    if (queue) {
+      waiting.push({ guest, pulled, priceTolerance: 1 + prng.next() * ECONOMY.priceToleranceSpread });
+      continue;
+    }
 
     // Front desk at capacity: guest leaves impatiently
     if (checkedInThisHour >= checkInCapacity) {
@@ -240,71 +337,66 @@ export function processArrivals(
 
     const remainingRooms = available.filter(r => !booked.has(r.id));
     const priceTolerance = 1 + prng.next() * ECONOMY.priceToleranceSpread;
-
-    // No free room takes a party this big, but one would take one or two of
-    // them: most book smaller, the rest go elsewhere
-    const party = partyOf(guest);
-    let wanted: string | undefined; // the party they were, if they book smaller
-    if (!anyFits(remainingRooms, guest)) {
-      const smaller = withParty(guest, smallerParty(party, guest.id));
-      const fallback = anyFits(remainingRooms, smaller) ? smaller
-        : smaller.party!.size > 1 ? withParty(guest, { kind: 'solo', size: 1 }) : smaller;
-      if (fallback.party!.size < party.size && anyFits(remainingRooms, fallback)) {
-        if (hash01(`${guest.id}#party-reroll`) < PARTIES.rerollChance) {
-          guest = fallback;
-          wanted = party.kind;
-        } else {
-          result.turnedAway++;
-          result.walkIns.push({ guest, outcome: 'turned_away' });
-          const need = sharesBeds(party) ? `no room for ${numberWord(party.size)}` : `no room with ${numberWord(party.size)} beds`;
-          result.events.push({
-            type: 'party_turned_away',
-            message: `${PartyLabel(guest)} was turned away: ${need}`,
-            data: { guestId: guest.id, partyKind: party.kind, size: party.size, reason: 'no_fit' },
-          });
-          requeue();
-          continue;
-        }
-      }
+    const match = matchAtCounter(state, guest, remainingRooms, priceTolerance);
+    if (match.noFit) {
+      turnAwayNoFit(result, guest);
+      requeue();
+      continue;
     }
-
-    // A regular asks for their old room first (the same room, still the same kind)
-    const regular = LOYALTY.enabled && guest.loyalty?.lastRoomId && tierOf(staysOf(guest)) !== 'returning' && tierOf(staysOf(guest)) !== 'first';
-    const oldRoom = regular ? remainingRooms.find(r => r.id === guest.loyalty!.lastRoomId && r.type === guest.loyalty!.lastRoomType) : undefined;
-    const inOldRoom = oldRoom ? matchGuestToRoom(guest, [oldRoom], priceTolerance, state.starRating) : null;
-    if (inOldRoom) guest = { ...guest, loyalty: { ...guest.loyalty!, oldRoom: true } };
-    const room = inOldRoom ?? matchGuestToRoom(guest, remainingRooms, priceTolerance, state.starRating);
-    const who = partyOf(guest);
-    if (room) {
-      booked.add(room.id);
+    guest = match.guest;
+    if (match.room) {
+      booked.add(match.room.id);
       checkedInThisHour++;
-      result.checkedIn.push({ guest, roomId: room.id });
-      result.events.push({
-        type: 'guest_arrived',
-        message: who.size > 2 ? `${PartyLabel(guest)} arriving for a ${profileRoom(room).label}` : `Guest arriving for a ${room.type} room`,
-        data: { guestId: guest.id, roomId: room.id, trait: guest.trait, partyKind: who.kind, size: who.size, ...(wanted ? { wanted } : {}) },
-      });
-      if (guest.isReturning) {
-        const stays = staysOf(guest);
-        const which = stays > 2 ? `their ${ordinal(stays)} stay` : 'another stay';
-        result.events.push({
-          type: 'guest_returned',
-          // The guest who stayed before, by name: who they bring this time is new
-          message: `${guest.name} is back for ${which}${who.size > 2 ? (who.kind === 'family' ? ', with the family' : ', with friends') : ''}${inOldRoom ? ', in their old room' : ''}!`,
-          // (a second stay with loyalty on gets no story: its toast must show whatever's open)
-          data: { guestId: guest.id, roomId: room.id, stays, ...(inOldRoom ? { oldRoom: true } : {}), ...(LOYALTY.enabled && stays < LOYALTY.regularFrom ? { unlogged: true } : {}) },
-        });
-      }
+      result.checkedIn.push({ guest, roomId: match.room.id });
+      announceArrival(result, guest, match.room, match.wanted, match.inOldRoom);
     } else {
-      result.turnedAway++;
-      result.walkIns.push({ guest, outcome: 'turned_away' });
-      result.events.push({
-        type: 'guest_turned_away',
-        message: who.size > 2 ? `${PartyLabel(guest)} turned away (no room at a price they would pay)` : 'Guest turned away (no room at a price they would pay)',
-        data: { guestId: guest.id, partyKind: who.kind, size: who.size, reason: 'price', ...(wanted ? { wanted } : {}) },
-      });
+      turnAwayOverPrice(result, guest, match.wanted);
       requeue();
     }
+  }
+
+  // The desk queue: in the order they reach the desk, each takes a room (as
+  // ever: the party fits, a regular's old room, the price) and then the first
+  // free clerk -- unless the wait would outlast their patience, when they stand
+  // in line that long and walk out, and the room is the next guest's
+  if (queue) {
+    const T = (state.day - 1) * 24 + hour + 1;
+    const arriveAt = deskArrivalTimes(state, queue, T);
+    const busy = laneBookings(state, T, undefined, true); // (check-ins first: complaints are fitted round them)
+    waiting.forEach(({ guest: arriving, pulled, priceTolerance }, i) => {
+      let guest = arriving;
+      const requeue = () => {
+        if (pulled && LOYALTY.enabled) pool = addToPool(pool, { ...pulled, dueDay: state.day + 2 });
+      };
+      const at = arriveAt(guest.id, i, waiting.length);
+      const match = matchAtCounter(state, guest, available.filter(r => !booked.has(r.id)), priceTolerance);
+      if (match.noFit) {
+        turnAwayNoFit(result, guest, at);
+        requeue();
+        return;
+      }
+      guest = match.guest;
+      const room = match.room;
+      if (!room) {
+        turnAwayOverPrice(result, guest, match.wanted, at);
+        requeue();
+        return;
+      }
+      const pace = guestPace(guest);
+      const slot = quoteLane(queue, busy, () => at, CHECK_IN_HOURS, lane => !!findRoute(state, lane.front, roomTile(room), pace))!;
+      const patience = patienceHours(guest);
+      if (slot.start - at > patience + 1e-9) {
+        // (the toast comes as they walk out: DeskQueue.recordGiveUps)
+        result.turnedAway++;
+        result.walkIns.push({ guest, outcome: 'impatient', desk: { arriveAt: at, lane: slot.lane.key, leaveAt: at + patience, ...(match.wanted ? { wanted: match.wanted } : {}) } });
+        requeue();
+        return;
+      }
+      book(busy, slot.lane.key, slot.start, slot.start + CHECK_IN_HOURS);
+      booked.add(room.id);
+      result.checkedIn.push({ guest, roomId: room.id, desk: { lane: slot.lane.key, arriveAt: at, start: slot.start } });
+      announceArrival(result, guest, room, match.wanted, match.inOldRoom);
+    });
   }
 
   result.returningGuestPool = pool;
@@ -485,7 +577,8 @@ export function calculateGuestReviewBreakdown(
 
   // Apply star expectation multiplier to penalties
   // Higher star = penalties are amplified, bonuses stay the same
-  const expectation = getExpectationMultiplier(state.starRating) * expectationMultFor(guest); // the loyal forgive more
+  // (the loyal forgive more; a stoic guest, saying nothing at the time, minds more)
+  const expectation = getExpectationMultiplier(state.starRating) * expectationMultFor(guest) * (voiceOn() ? VOICE.reviewPenaltyMult[voiceOf(guest)] : 1);
   const penalties = noisePenalty + decorPenalty + elevatorPenalty + Math.max(0, -conditionBonus) + Math.max(0, -cleanlinessBonus) + amenityPenalty;
   const expectationAdjustment = penalties * (expectation - 1);
 

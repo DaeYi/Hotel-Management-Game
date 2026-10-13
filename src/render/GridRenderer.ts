@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { HotelState, RoomType, FacilityType, GuestTrait, Direction, Room, StaffPlan } from '../simulation/types';
-import { GRID, ECONOMY, NOISE, FACILITY_CONFIG, DECOR, GUEST_PROFILE, GUEST_HOUSEKEEPING } from '../config/balance';
+import { GRID, ECONOMY, NOISE, FACILITY_CONFIG, DECOR, GUEST_PROFILE, GUEST_HOUSEKEEPING, VOICE } from '../config/balance';
 import { calculateRoomNoise, nightRoomNoise } from '../simulation/NoiseManager';
 import { formatRoomLabel, isRoomReachable, isFacilityOpen } from '../simulation/HotelState';
 import { profileRoom, profileFurnishing, defaultFurnishing, rectToWorld, bedSpot, sleepSpots, wallBar, pillowRect } from '../simulation/RoomProfile';
@@ -11,7 +11,8 @@ import { roomCleaningAt, GRUBBY_BELOW } from '../simulation/CleaningStatus';
 import { getGuestDotColor, isChild } from './figures';
 import { partyOf, sharesBeds, guestsById } from '../simulation/Party';
 import { isSleepHour, quirkOf } from '../simulation/Profile';
-import { drawQuirk, drawSleepZ, drawMoodFace, drawHanger, RING_COLORS, SELECTED_COLOR, VISITORS_COLOR } from './quirks';
+import { drawQuirk, drawSleepZ, drawMoodFace, drawHanger, drawPhone, RING_COLORS, SELECTED_COLOR, VISITORS_COLOR } from './quirks';
+import { moodHidden } from '../simulation/Voice';
 import { housekeepingPrefOf } from '../simulation/CleaningPreference';
 import { isAsleepAt, visitorsAt } from '../simulation/Visitors';
 import { ringTierOf } from './figures';
@@ -437,6 +438,10 @@ export class GridRenderer {
       const dotColor = getGuestDotColor(guest.purpose);
       // Asleep (in their sleep hours, and in -- not up with friends round): the room dims, and a "z" by them
       const asleep = GUEST_PROFILE.enabled && room.status === 'occupied' && (t === undefined ? isSleepHour(guest, state.hour) : isAsleepAt(state, guest, t));
+      // Just rang the front desk to complain (at night): a telephone over the room for a while
+      if (t !== undefined && guest.complaint?.via === 'phone' && guest.complaint.at !== undefined && t >= guest.complaint.at && t < guest.complaint.at + VOICE.phoneGlyphHours) {
+        drawPhone(this.guestGraphics, GRID_OFFSET_X + (room.gridX + 0.82) * TILE_SIZE, GRID_OFFSET_Y + (room.gridY + 0.2) * TILE_SIZE);
+      }
       // Friends round: a ring round the room, pulsing with the noise
       if (t !== undefined && visitorsAt(state, guest.id, t) > 0) {
         const pulse = (Math.sin(Date.now() / 220) + 1) / 2;
@@ -478,7 +483,7 @@ export class GridRenderer {
           const clampY = (v: number) => Math.min(top + TILE_SIZE - 6, Math.max(top + 6, v));
           if (quirk) drawQuirk(this.guestGraphics, clampX(x + 8), clampY(y - 9), quirk);
           // Irritated or angry: a face (lying awake, if it's their sleep hours); else asleep, a "z"
-          const face = moodFace(guestMood(guest));
+          const face = moodHidden(guest) ? null : moodFace(guestMood(guest)); // (a stoic guest's mood doesn't show)
           if (face) drawMoodFace(this.guestGraphics, clampX(x - 8), clampY(y - 9), face);
           else if (asleep) drawSleepZ(this.guestGraphics, clampX(x - 13), clampY(y - 14));
         }

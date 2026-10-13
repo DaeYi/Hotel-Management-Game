@@ -3,6 +3,7 @@ import { layoutKey } from './Layout.js';
 import { replanStaff, staffWorkKey } from './StaffManager.js';
 import { rerouteTrips, checkInLanes } from './GuestMovement.js';
 import { GUEST_HOUSEKEEPING } from '../config/balance.js';
+import { reseatLanes } from './DeskQueue.js';
 
 /** Who's checking guests in, and where. */
 function lanesKey(state: HotelState): string {
@@ -26,8 +27,9 @@ export function settleChanges(before: HotelState, after: HotelState, t: number):
   // Guests first, so the staff plan around where they'll really be (a do-not-disturb room is
   // cleaned only while they're out); with housekeeping preferences off, the old order
   const guestsFirst = GUEST_HOUSEKEEPING.enabled;
-  if (lanesChanged && guestsFirst) state = rerouteTrips(state, t);
+  // (with the desk queue on, everyone not yet at the counter is seated again on the clerks there now)
+  if (lanesChanged && guestsFirst) state = reseatLanes(rerouteTrips(state, t), t);
   if (workChanged) state = replanStaff(state, t);
-  if (lanesChanged && !guestsFirst) state = rerouteTrips(state, t);
+  if (lanesChanged && !guestsFirst) state = reseatLanes(rerouteTrips(state, t), t);
   return state;
 }

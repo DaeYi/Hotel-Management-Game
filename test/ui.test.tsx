@@ -5,6 +5,8 @@ import { createRef } from 'preact';
 import { GameController } from '../src/game/GameController';
 import { App } from '../src/ui/App';
 import { OBJECTIVES } from '../src/config/balance';
+import { guestWhereabouts } from '../src/ui/Inspectors';
+import { createStarterHotel } from '../src/simulation/HotelState';
 
 /** Render the interface around a controller; the world element is left empty (no renderer in tests). */
 function setup(options: { tutorialSeen?: boolean } = {}) {
@@ -625,5 +627,69 @@ describe('Guests and service', () => {
     fireEvent.click(screen.getByText(/About Kit/));
     flush();
     expect(screen.getByRole('dialog', { name: 'Kit' }).textContent).toContain('Do not disturb (cleaned only while out)');
+  });
+});
+
+describe('The front desk and complaints', () => {
+  it('the staff panel tells the desk’s day: the line now, check-ins and waits, give-ups (with advice), complaints heard', () => {
+    const { controller, flush } = setup();
+    controller.state = { ...controller.state, deskToday: { day: controller.state.day, checkedIn: 4, waitHours: 1, longestWait: 0.5, gaveUp: 2, complaints: 1 } };
+    controller.togglePanel('staff');
+    flush();
+    const desk = screen.getByLabelText('Front desk today').textContent!;
+    expect(desk).toContain('In line now: 0');
+    expect(desk).toContain('4 checked in today (average wait 15 min)');
+    expect(desk).toContain('2 gave up in line');
+    expect(desk).toContain('1 complaint at the desk');
+    expect(desk).toContain('another clerk would serve them'); // one clerk, a desk that seats two
+    controller.state = { ...controller.state, staff: { ...controller.state.staff, frontDesk: 2 } };
+    controller.togglePanel('staff');
+    controller.togglePanel('staff');
+    flush();
+    expect(screen.getByLabelText('Front desk today').textContent).toContain('build another desk'); // every seat taken
+  });
+
+  it('a guest card says "checking in at the front desk" at a clerk; with the desk queue off, "arriving" as it always did', () => {
+    const s = createStarterHotel();
+    const desk = s.fixtures.find(f => f.type === 'desk')!;
+    const at = { gridX: desk.gridX, gridY: desk.gridY + 1, floor: 0 };
+    const g = (lane?: string) => ({
+      id: 'g', name: 'G', budget: 300, stayLength: 3, trait: 'normal' as const, satisfaction: 60, checkInDay: 1, isReturning: false, hadNoiseComplaint: false, tripKind: 'arrival' as const,
+      trip: [{ kind: 'stay' as const, at, start: 10, end: 10.3, activity: 'check_in' as const, placeId: desk.id, ...(lane ? { lane } : {}) }],
+    });
+    expect(guestWhereabouts(g(`${desk.id}:0`), s, 10.1)).toBe('checking in at the front desk');
+    expect(guestWhereabouts(g(), s, 10.1)).toBe('arriving');
+  });
+
+  it('a guest card: how patient and how vocal, the wait to check in, the complaint; a stoic guest’s mood is a "?"', () => {
+    const { controller, flush } = setup();
+    controller.selectTool('standard');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.selectTool(null);
+    const room = { ...controller.state.rooms[0], status: 'occupied' as const, guestId: 'g1' };
+    const base = {
+      id: 'g1', name: 'Ines', budget: 300, stayLength: 3, trait: 'normal' as const, satisfaction: 44, checkInDay: 1, isReturning: false, hadNoiseComplaint: false,
+      checkInWait: 0.4, complaint: { about: 'the noise last night', via: 'desk' as const, at: (2 - 1) * 24 + 8.5 },
+    };
+    controller.state = {
+      ...controller.state, day: 2, hour: 12, rooms: [room],
+      guests: [{ ...base, profile: { chronotype: 'regular', mobility: 'normal', sleep: 'normal', rowdiness: 'normal', checkoutHour: 11, patience: 'impatient', voice: 'vocal' } }] as never,
+    };
+    controller.selectGuest('g1', { gridX: 5, gridY: 2 });
+    flush();
+    const card = () => screen.getByRole('dialog', { name: 'Ines' }).textContent!;
+    expect(card()).toContain('Impatient: waits about 10 minutes in line at most');
+    expect(card()).toContain('Speaks up when something is wrong');
+    expect(card()).toContain('Waited 24 min in line to check in');
+    expect(card()).toContain('Complained at the front desk about the noise last night (08:30)');
+    expect(card()).toContain('44%');
+    controller.state = { ...controller.state, guests: [{ ...base, profile: { chronotype: 'regular', mobility: 'normal', sleep: 'normal', rowdiness: 'normal', checkoutHour: 11, voice: 'stoic' } }] as never };
+    controller.selectGuest('g1', { gridX: 5, gridY: 2 });
+    flush();
+    expect(card()).toContain('Mood:  ? (keeps it to themselves)');
+    expect(card()).toContain('Keeps it to themselves');
+    expect(card()).not.toContain('44%');
+    expect(screen.getByRole('group', { name: 'Guest marks' }).textContent).toContain('Losing patience in line');
+    expect(screen.getByRole('group', { name: 'Guest marks' }).textContent).toContain('Going to complain');
   });
 });

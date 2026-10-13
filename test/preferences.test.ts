@@ -14,7 +14,7 @@ import { simulate } from '../src/simulation/simulate.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
 import { PRNG } from '../src/simulation/prng.js';
 import { hourStart, legsEnd } from '../src/simulation/Movement.js';
-import { GUEST_PURPOSES, ROOM_PREFERENCES, GUEST_OUTINGS, FACILITY_CONFIG, ECONOMY, REVIEW, PARTIES, GUEST_PROFILE, GUEST_FAVORITES, LOYALTY, MOOD, GUEST_HOUSEKEEPING, HOSTED_NIGHTS } from '../src/config/balance.js';
+import { GUEST_PURPOSES, ROOM_PREFERENCES, GUEST_OUTINGS, FACILITY_CONFIG, ECONOMY, REVIEW, PARTIES, GUEST_PROFILE, GUEST_FAVORITES, LOYALTY, MOOD, GUEST_HOUSEKEEPING, HOSTED_NIGHTS, PATIENCE, VOICE } from '../src/config/balance.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import type { ActiveIncident } from '../src/simulation/types.js';
 import type { PresetId } from '../src/config/furniture.js';
@@ -387,6 +387,7 @@ describe('Balance', () => {
     MOOD.enabled = false;
     GUEST_HOUSEKEEPING.enabled = false;
     HOSTED_NIGHTS.enabled = false;
+    // (Patience and Voice left on: they need profiles, so they mustn't leak into a game without them)
     try {
       const run = simulate(30, 9, undefined, STRATEGIES.balanced);
       // The same run before purposes and preferences existed (c0782c1). If an unrelated
@@ -409,6 +410,26 @@ describe('Balance', () => {
       GUEST_PURPOSES.enabled = true; ROOM_PREFERENCES.enabled = true; GUEST_PROFILE.enabled = true;
       GUEST_FAVORITES.enabled = true; LOYALTY.enabled = true; MOOD.enabled = true;
       GUEST_HOUSEKEEPING.enabled = true; HOSTED_NIGHTS.enabled = true;
+    }
+  }, 120000);
+
+  it('the front desk queue and Voice off: a run is exactly as it was before them', () => {
+    PATIENCE.enabled = false;
+    VOICE.enabled = false;
+    try {
+      // The same runs at ec57afc (housekeeping preferences and hosted nights), every other switch on
+      const run = simulate(60, 9, undefined, STRATEGIES.balanced);
+      expect(run.finalCash).toBeCloseTo(18715.7, 6);
+      expect(run.avgReviewScore).toBeCloseTo(7.8634516658876406, 9);
+      expect(run.totalRevenue).toBe(115602);
+      expect(run.totalTurnedAway).toBe(533);
+      const busy = simulate(45, 5, undefined, STRATEGIES.overstaffed);
+      expect(busy.finalCash).toBeCloseTo(9679.8, 6);
+      expect(busy.avgReviewScore).toBeCloseTo(7.7292829892741635, 9);
+      expect(busy.totalRevenue).toBe(67481);
+      expect(busy.totalTurnedAway).toBe(327);
+    } finally {
+      PATIENCE.enabled = true; VOICE.enabled = true;
     }
   }, 120000);
 

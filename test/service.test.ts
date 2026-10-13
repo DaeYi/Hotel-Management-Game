@@ -109,8 +109,12 @@ describe('Housekeeping preference: who wants what', () => {
       return undefined;
     };
     const fresh = back({ ...s, returningGuestPool: pool(with_({ favorite: 'gym' })) })!;
-    expect(fresh.profile!.housekeeping).toBe(rollProfile(fresh.id, fresh.party!, fresh.purpose, fresh.trait)!.housekeeping);
-    expect(back({ ...s, returningGuestPool: pool(with_({ housekeeping: 'makeup' })) })!.profile!.housekeeping).toBe('makeup');
+    const rolled = rollProfile(fresh.id, fresh.party!, fresh.purpose, fresh.trait)!;
+    expect(fresh.profile!.housekeeping).toBe(rolled.housekeeping);
+    // (and a patience and a voice, for someone first here before those)
+    expect([fresh.profile!.patience, fresh.profile!.voice]).toEqual([rolled.patience, rolled.voice]);
+    expect(rolled.patience && rolled.voice).toBeTruthy();
+    expect(back({ ...s, returningGuestPool: pool(with_({ housekeeping: 'makeup', patience: 'patient', voice: 'stoic' })) })!.profile).toMatchObject({ housekeeping: 'makeup', patience: 'patient', voice: 'stoic' });
     expect(LOYALTY.enabled).toBe(true);
   });
 });

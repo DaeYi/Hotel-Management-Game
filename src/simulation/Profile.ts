@@ -1,5 +1,5 @@
-import type { Chronotype, FacilityType, Guest, GuestProfile, GuestTrait, HotelState, LateCheckoutPolicy, Mobility, Party, Purpose, Rowdiness, SleepSensitivity } from './types.js';
-import { ECONOMY, GUEST_PROFILE, NOISE, TRAVEL, GUEST_FAVORITES, GUEST_HOUSEKEEPING } from '../config/balance.js';
+import type { Chronotype, FacilityType, Guest, GuestProfile, GuestTrait, HotelState, LateCheckoutPolicy, Mobility, Party, Patience, Purpose, Rowdiness, SleepSensitivity, Voice } from './types.js';
+import { ECONOMY, GUEST_PROFILE, NOISE, TRAVEL, GUEST_FAVORITES, GUEST_HOUSEKEEPING, PATIENCE, VOICE } from '../config/balance.js';
 import { hash01 } from './Movement.js';
 import { pick } from './Party.js';
 
@@ -29,7 +29,13 @@ export function rollProfile(id: string, party: Party, purpose: Purpose | undefin
   // When they want their room cleaned (a business traveller made up daily, a getaway left alone)
   const housekeepingLean = lean === 'business' ? 'business' : purpose === 'getaway' ? 'getaway' : 'base';
   const housekeeping = GUEST_HOUSEKEEPING.enabled ? pick(GUEST_HOUSEKEEPING.byLean[housekeepingLean], hash01(`${id}#housekeeping`)) : undefined;
-  return { chronotype, mobility, sleep, rowdiness, checkoutHour, ...(favorite ? { favorite } : {}), ...(housekeeping ? { housekeeping } : {}) };
+  // How long they'll wait in line (a business traveller has somewhere to be), and how they complain
+  const patience = PATIENCE.enabled ? pick(PATIENCE.byLean[lean === 'business' ? 'business' : 'base'], hash01(`${id}#patience`)) : undefined;
+  const voice = VOICE.enabled ? pick(VOICE.weights, hash01(`${id}#voice`)) : undefined;
+  return {
+    chronotype, mobility, sleep, rowdiness, checkoutHour, ...(favorite ? { favorite } : {}), ...(housekeeping ? { housekeeping } : {}),
+    ...(patience ? { patience } : {}), ...(voice ? { voice } : {}),
+  };
 }
 
 /** A guest's favourite facility (none: no favourite, or favourites off). */
@@ -151,6 +157,12 @@ const CHRONOTYPE_LABELS: Record<Chronotype, string> = { early: 'Early bird', reg
 const MOBILITY_LABELS: Record<Mobility, string> = { brisk: 'Walks briskly', normal: 'Walks at an easy pace', limited: 'Walks slowly (minds a wait for the lift)' };
 const SLEEP_LABELS: Record<SleepSensitivity, string> = { heavy: 'Heavy sleeper', normal: 'Sleeps normally', light: 'Light sleeper' };
 const ROWDINESS_LABELS: Record<Rowdiness, string> = { quiet: 'Quiet', normal: '', rowdy: 'Rowdy, loudest 22:00-02:00' };
+const PATIENCE_LABELS: Record<Patience, string> = {
+  patient: 'Patient: waits up to an hour in line, minds the lift less',
+  normal: '',
+  impatient: 'Impatient: waits about 10 minutes in line at most, minds the lift more',
+};
+const VOICE_LABELS: Record<Voice, string> = { vocal: 'Speaks up when something is wrong', typical: '', stoic: 'Keeps it to themselves' };
 
 const hh = (h: number) => `${String(h).padStart(2, '0')}:00`;
 
@@ -170,5 +182,8 @@ export function describeTemperament(guest: Pick<Guest, 'profile' | 'nightNoise'>
   const wokenText = woken > 0 ? `woken ${woken === 1 ? 'one night' : `${woken} nights`}` : '';
   // A normal sleeper is only worth a line if the noise has woken them
   const sleep = p.sleep === 'normal' ? (wokenText ? `Woken by noise ${wokenText.slice(6)}` : '') : `${SLEEP_LABELS[p.sleep]}${wokenText ? `, ${wokenText}` : ''}`;
-  return [MOBILITY_LABELS[p.mobility], sleep, ROWDINESS_LABELS[p.rowdiness]].filter(Boolean);
+  return [
+    MOBILITY_LABELS[p.mobility], sleep, ROWDINESS_LABELS[p.rowdiness],
+    PATIENCE.enabled && p.patience ? PATIENCE_LABELS[p.patience] : '', VOICE.enabled && p.voice ? VOICE_LABELS[p.voice] : '',
+  ].filter(Boolean);
 }

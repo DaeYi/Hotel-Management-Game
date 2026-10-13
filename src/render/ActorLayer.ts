@@ -6,7 +6,7 @@ import { positionAt, legsEnd, hash01 } from '../simulation/Movement';
 import { guestFigures, type Figure } from './figures';
 import { BREAK_ROOM } from '../config/balance';
 import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE } from './GridRenderer';
-import { drawQuirk, drawMoodFace, RING_COLORS, SELECTED_COLOR } from './quirks';
+import { drawClock, drawComplaint, drawQuirk, drawMoodFace, RING_COLORS, SELECTED_COLOR } from './quirks';
 
 // People in the building, drawn exactly where the simulation has them. Nothing
 // here moves anyone: guests' trips (arriving, out at a facility, moving rooms),
@@ -21,6 +21,11 @@ export const ACTOR_COLORS = {
   maintenance: 0xe67e22,
   frontDesk: 0x3498db,
 };
+
+/** Across a desk, given which way its front is along x (0: above or below it): where its two clerks, and their lines, sit side by side. */
+function acrossDesk(towardX: number): [number, number] {
+  return towardX === 0 ? [1, 0] : [0, 1];
+}
 
 // Where people sit or stand when several share a tile (fractions of the tile)
 const SEATS: Array<[number, number]> = [
@@ -118,13 +123,19 @@ export class ActorLayer {
     g.clear();
     this.drawn = [];
 
-    // Front desk staff behind their counters (two per desk at most)
+    // Front desk staff behind their counters (two per desk at most), side by side across the desk from
+    // the spot in front of it, seat 0 first -- the way their lines are laid out (layOutLines)
     let seated = getMannedDeskStaff(state);
     for (const desk of getAccessibleDesks(state)) {
+      const front = getFixtureFront(state, desk);
+      const fx = front ? Math.sign(front.gridX - desk.gridX) : 0;
+      const fy = front && fx === 0 ? Math.sign(front.gridY - desk.gridY) || 1 : 0;
+      const [ax, ay] = acrossDesk(fx);
       for (let seat = 0; seat < 2 && seated > 0; seat++, seated--) {
         if (desk.floor !== currentFloor) continue;
-        const cx = GRID_OFFSET_X + desk.gridX * TILE_SIZE + TILE_SIZE * (seat === 0 ? 0.33 : 0.67);
-        const cy = GRID_OFFSET_Y + desk.gridY * TILE_SIZE + TILE_SIZE * 0.3;
+        const off = seat === 0 ? -0.17 : 0.17;
+        const cx = GRID_OFFSET_X + (desk.gridX + 0.5 + ax * off - fx * 0.2) * TILE_SIZE;
+        const cy = GRID_OFFSET_Y + (desk.gridY + 0.5 + ay * off - fy * 0.2) * TILE_SIZE;
         this.drawFigure(cx, cy, { id: 'desk', kind: 'staff', color: ACTOR_COLORS.frontDesk, x: 0, y: 0, floor: currentFloor, settled: true });
       }
     }
@@ -134,9 +145,11 @@ export class ActorLayer {
     // them. Walkers get a small fixed offset so two on the same path don't
     // merge into one.
     const onFloor = figures.filter(f => f.floor === currentFloor);
+    // The front desk: each clerk's line, laid out (who's being served at the counter, the rest behind)
+    const lineSpots = this.layOutLines(onFloor.filter(f => f.settled && f.line));
     const byTile = new Map<string, Figure[]>();
     for (const f of onFloor) {
-      if (!f.settled) continue;
+      if (!f.settled || f.line) continue;
       const key = `${Math.round(f.x)},${Math.round(f.y)}`;
       byTile.set(key, [...(byTile.get(key) ?? []), f]);
     }
@@ -154,6 +167,23 @@ export class ActorLayer {
       if (group.length === 1 && !gatheringTiles.has(key)) {
         const f = group[0];
         this.drawFigure(GRID_OFFSET_X + (Math.round(f.x) + 0.5) * TILE_SIZE, GRID_OFFSET_Y + (Math.round(f.y) + 0.5) * TILE_SIZE, f);
+        continue;
+      }
+      const lined = lineSpots.get(key);
+      if (lined) {
+        // Beside a front desk line (asking, or staff waiting there): the seat farthest from anyone in it, and from each other
+        const used = [...lined];
+        for (const f of group) {
+          let best = 0;
+          let far = -1;
+          SEATS.forEach(([sx, sy], i) => {
+            const d = Math.min(9, ...used.map(([ux, uy]) => Math.hypot(sx - ux, sy - uy)));
+            if (d > far + 1e-9) { far = d; best = i; }
+          });
+          const [sx, sy] = SEATS[best];
+          used.push([sx, sy]);
+          this.drawFigure(GRID_OFFSET_X + (Math.round(f.x) + sx) * TILE_SIZE, GRID_OFFSET_Y + (Math.round(f.y) + sy) * TILE_SIZE, f);
+        }
         continue;
       }
       const taken = new Map<number, number>(); // seat -> people in it
@@ -177,11 +207,90 @@ export class ActorLayer {
       const oy = (hash01(`${f.id}y`) - 0.5) * TILE_SIZE * 0.3;
       this.drawFigure(GRID_OFFSET_X + (f.x + 0.5) * TILE_SIZE + ox, GRID_OFFSET_Y + (f.y + 0.5) * TILE_SIZE + oy, f);
     }
-    // Quirk icons last, so a neighbour's dot never covers one
+    // Quirk icons last, so a neighbour's dot never covers one; on the left, a clock running
+    // out in line, else a complaint on its way, else a mood face
     for (const { figure, x, y } of this.drawn) {
       if (figure.quirk) drawQuirk(g, x + 6, y - 7, figure.quirk);
-      if (figure.mood) drawMoodFace(g, x - 6, y - 7, figure.mood);
+      if (figure.clock !== undefined) drawClock(g, x - 6, y - 7, figure.clock);
+      else if (figure.complaining) drawComplaint(g, x - 6, y - 8);
+      else if (figure.mood) drawMoodFace(g, x - 6, y - 7, figure.mood);
     }
+  }
+
+  /**
+   * The front desk tile: whoever is at the counter stands under their clerk,
+   * and the rest queue behind them in that clerk's line in the order they'll
+   * be served (someone who'll give up first stays behind everyone who got
+   * there before them), a party together, inside its clerk's half; a long
+   * line squeezes up to fit the tile. Two desks facing one tile keep to their
+   * own parts of it. Where they stand on the tile is drawing only: the
+   * simulation has them all on it. Returns where everyone stood on each tile
+   * (fractions of it), for seating anyone else there clear of the lines.
+   */
+  private layOutLines(figures: Figure[]): Map<string, Array<[number, number]>> {
+    const spots = new Map<string, Array<[number, number]>>();
+    const byTile = new Map<string, Figure[]>();
+    for (const f of figures) {
+      const key = `${Math.round(f.x)},${Math.round(f.y)}`;
+      byTile.set(key, [...(byTile.get(key) ?? []), f]);
+    }
+    for (const [key, group] of byTile) {
+      const [tx, ty] = key.split(',').map(Number);
+      const here: Array<[number, number]> = [];
+      spots.set(key, here);
+      // Each clerk's line: parties, the one at the counter first, then in the order they'll get there
+      type Party = { figs: Figure[]; serving: boolean; turn: number; leaves: boolean; since: number; id: string };
+      const lines = new Map<string, Party[]>();
+      const parties = new Map<string, Figure[]>();
+      for (const f of group) parties.set(f.group ?? f.id, [...(parties.get(f.group ?? f.id) ?? []), f]);
+      for (const [id, figs] of parties) {
+        const lead = figs[0].line!;
+        const list = lines.get(lead.lane) ?? [];
+        list.push({ figs: figs.sort((a, b) => (a.member ?? 0) - (b.member ?? 0)), serving: lead.serving, turn: lead.turn, leaves: !!lead.leaves, since: Math.min(...figs.map(f => f.since ?? 0)), id });
+        lines.set(lead.lane, list);
+      }
+      // Toward each desk facing this tile
+      const toward = new Map<string, [number, number]>();
+      for (const f of group) {
+        const { deskX, deskY } = f.line!;
+        const dx = Math.sign(deskX - tx);
+        toward.set(`${deskX},${deskY}`, [dx, dx === 0 ? Math.sign(deskY - ty) || -1 : 0]);
+      }
+      const shared = toward.size > 1;
+      const span = shared ? 0.26 : 0.72; // from the counter to the back of the tile (or of its part)
+      for (const list of lines.values()) {
+        const { seat, deskX, deskY } = list[0].figs[0].line!;
+        // Toward the desk, and across it (the way its clerks sit)
+        const [dx, dy] = toward.get(`${deskX},${deskY}`)!;
+        const [ax, ay] = acrossDesk(dx);
+        // Another desk off to one side of this one's line (the two at right angles): this line keeps to the other side
+        let side = 0;
+        for (const [k, [ox, oy]] of toward) if (k !== `${deskX},${deskY}`) side -= ox * ax + oy * ay;
+        side = Math.max(-1, Math.min(1, side));
+        // Someone who'll give up before their turn stays behind everyone who got there first
+        let latest = -Infinity;
+        for (const party of [...list].sort((a, b) => a.since - b.since || (a.id < b.id ? -1 : 1))) {
+          if (party.leaves) party.turn = Math.max(party.turn, latest);
+          latest = Math.max(latest, party.turn);
+        }
+        list.sort((a, b) => Number(b.serving) - Number(a.serving) || a.turn - b.turn || a.since - b.since || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+        const half = side === 0 ? 0.2 : 0.1; // each clerk's half of the line's width
+        const across = side * 0.2 + (seat % 2 === 0 ? -half : half);
+        const step = Math.min(0.24, span / Math.max(1, list.length - 1));
+        list.forEach((party, k) => {
+          const depth = 0.3 - step * k; // nearest the counter first
+          const apart = Math.min(0.13, (half * 1.5) / Math.max(1, party.figs.length - 1)); // a party side by side, inside its clerk's half
+          party.figs.forEach((f, m) => {
+            const spread = (m - (party.figs.length - 1) / 2) * apart;
+            const ox = 0.5 + dx * depth + ax * (across + spread);
+            const oy = 0.5 + dy * depth + ay * (across + spread);
+            here.push([ox, oy]);
+            this.drawFigure(GRID_OFFSET_X + (tx + ox) * TILE_SIZE, GRID_OFFSET_Y + (ty + oy) * TILE_SIZE, f);
+          });
+        });
+      }
+    }
+    return spots;
   }
 
   /** Guests are dots (children smaller) and staff are squares, both outlined in white; the selected guest's party is circled in gold. */

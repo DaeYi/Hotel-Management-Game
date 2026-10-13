@@ -1,8 +1,8 @@
 import type { Ref } from 'preact';
 import { PURPOSES, PURPOSE_LABELS } from '../simulation/Purpose';
 import { PURPOSE_COLORS, NO_PURPOSE_COLOR } from '../render/figures';
-import { GUEST_PURPOSES, GUEST_PROFILE, MOOD, LOYALTY, GUEST_HOUSEKEEPING, HOSTED_NIGHTS } from '../config/balance';
-import { QUIRK_GLYPHS, MOOD_COLORS, RING_COLORS, HANGER_COLORS, VISITORS_COLOR } from '../render/quirks';
+import { GUEST_PURPOSES, GUEST_PROFILE, MOOD, LOYALTY, GUEST_HOUSEKEEPING, HOSTED_NIGHTS, PATIENCE, VOICE } from '../config/balance';
+import { QUIRK_GLYPHS, MOOD_COLORS, RING_COLORS, HANGER_COLORS, VISITORS_COLOR, DESK_GLYPHS } from '../render/quirks';
 import type { GameController, PanelId } from '../game/GameController';
 import { GameContext, useController, useControllerVersion } from './context';
 import { calculateValuation } from '../simulation/ObjectivesManager';
@@ -167,6 +167,29 @@ function MoodGlyph({ mood }: { mood: 'irritated' | 'angry' }) {
   );
 }
 
+/** The clock over someone running out of patience in line (quirks.drawClock). */
+function ClockGlyph() {
+  return (
+    <svg class="legend-face" width="12" height="12" viewBox="-5 -5 10 10" aria-hidden="true">
+      <circle r="4.5" fill="#1b1b2b" opacity="0.9" />
+      <circle r="3.4" fill="#f5f5f5" />
+      <path d="M0 0 L0 -3.4 A3.4 3.4 0 0 1 3.4 0 Z" fill="#e74c3c" />
+    </svg>
+  );
+}
+
+/** The speech bubble over someone on their way to complain (quirks.drawComplaint). */
+function BubbleGlyph() {
+  return (
+    <svg class="legend-face" width="12" height="12" viewBox="-5 -5 10 11" aria-hidden="true">
+      <rect x="-4.5" y="-4" width="9" height="7" rx="2" fill="#f5f5f5" stroke="#1b1b2b" stroke-width="1" />
+      <path d="M-2 3 L1 3 L-3 6 Z" fill="#f5f5f5" />
+      <rect x="-0.6" y="-2.8" width="1.3" height="3" fill="#e74c3c" />
+      <rect x="-0.6" y="0.9" width="1.3" height="1.2" fill="#e74c3c" />
+    </svg>
+  );
+}
+
 function Legend() {
   const c = useController();
   return (
@@ -204,6 +227,14 @@ function Legend() {
             </>
           )}
           {HOSTED_NIGHTS.enabled && <><span class="swatch ring" style={{ borderColor: toCss(VISITORS_COLOR) }} />Friends round (noisy)</>}
+          {PATIENCE.enabled && <><ClockGlyph />Losing patience in line</>}
+          {VOICE.enabled && (
+            <>
+              {PATIENCE.enabled && <><BubbleGlyph />Going to complain</>}
+              <span class="legend-mark">{DESK_GLYPHS.phone}</span>Rang the desk
+              <span class="legend-mark">?</span>Keeps it to themselves (card)
+            </>
+          )}
           <span class="dim">(click a guest for more)</span>
         </span>
       )}

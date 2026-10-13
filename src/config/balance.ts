@@ -319,6 +319,50 @@ export const GUEST_HOUSEKEEPING = {
 };
 
 /**
+ * Patience (docs/designs/guest-staff-personalities.md, Temperament #7;
+ * DeskQueue.ts): how long a guest will wait in line at the front desk, and
+ * how much a wait for the lift bothers them. Guests reach the desk spread
+ * over the hour and are served first come, first served by the first free
+ * clerk; one whose wait would outlast their patience stands in line that
+ * long and walks out.
+ */
+export const PATIENCE = {
+  enabled: true,
+  byLean: {
+    base: [['patient', 0.25], ['normal', 0.55], ['impatient', 0.2]],
+    business: [['patient', 0.15], ['normal', 0.5], ['impatient', 0.35]], // a business traveller has somewhere to be
+  } as Record<string, Array<[PatienceName, number]>>,
+  hours: { patient: 1, normal: 0.3, impatient: 0.15 } as Record<PatienceName, number>, // the longest they'll wait in line
+  liftMult: { patient: 0.6, normal: 1, impatient: 1.5 } as Record<PatienceName, number>, // how much a wait for the lift bothers them
+  arrivalSpread: 1, // the hour's arrivals reach the desk over this long, in the order they booked
+  clockAt: 0.5, // a clock shows over someone in line once they've used this share of their patience
+  waitMood: 4, // mood lost for a wait as long as their patience (in proportion; nothing for a short one)
+  waitGrace: 0.05, // hours in line nobody minds
+};
+
+/**
+ * Voice (docs/designs/guest-staff-personalities.md, Temperament #8;
+ * Complaints.ts): how a guest complains. A vocal guest walks down to the
+ * front desk to complain once they're irritated, a typical one once they're
+ * angry, a stoic one never -- but minds more in their review. Complaints at
+ * night are phoned in (the noise complaint, the complaint about visitors).
+ */
+export const VOICE = {
+  enabled: true,
+  weights: [['vocal', 0.25], ['typical', 0.55], ['stoic', 0.2]] as Array<[VoiceName, number]>,
+  complainBelow: { vocal: 47, typical: 42 } as Record<'vocal' | 'typical', number>, // the mood bands: irritated, angry
+  complainHours: 0.25, // at the counter, being heard (a clerk's time)
+  setOffSpread: 0.5, // they set off over the first half of the hour
+  heardMood: 5, // being heard helps
+  // How hard they judge what went wrong (averages 1). The doc's x1.3 for stoic guests pushed enough more reviews
+  // under the line where a bad review spreads (each a 30% dip in arrivals for two days) to cost a hotel about 3%
+  reviewPenaltyMult: { vocal: 0.9625, typical: 0.9625, stoic: 1.15 } as Record<VoiceName, number>,
+  viralAuthorWeight: { vocal: 1, typical: 1, stoic: 2 } as Record<VoiceName, number>, // a stoic guest's bad review is likelier to spread
+  visitorComplaintMult: { vocal: 1.6, typical: 1, stoic: 0 } as Record<VoiceName, number>, // complaining about a neighbour's visitors (averages about 1)
+  phoneGlyphHours: 1, // a call to the desk shows over the room this long
+};
+
+/**
  * Hosted nights (docs/designs/guest-staff-personalities.md, Rowdiness;
  * Visitors.ts): on one night of their stay, half of rowdy guests have friends round.
  * They walk in from the street after 22:00, go up to the room and leave
@@ -345,6 +389,8 @@ type MobilityName = 'brisk' | 'normal' | 'limited';
 type SleepName = 'heavy' | 'normal' | 'light';
 type RowdinessName = 'quiet' | 'normal' | 'rowdy';
 type HousekeepingName = 'dnd' | 'standard' | 'makeup';
+type PatienceName = 'patient' | 'normal' | 'impatient';
+type VoiceName = 'vocal' | 'typical' | 'stoic';
 type PartyKindName = 'solo' | 'business' | 'couple' | 'friends' | 'family';
 type PurposeName = 'business' | 'sightseeing' | 'getaway';
 

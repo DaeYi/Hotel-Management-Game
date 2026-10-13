@@ -22,6 +22,10 @@ export type Mobility = 'brisk' | 'normal' | 'limited';
 export type SleepSensitivity = 'heavy' | 'normal' | 'light';
 /** How much noise a guest makes. */
 export type Rowdiness = 'quiet' | 'normal' | 'rowdy';
+/** How long a guest will wait in line at the front desk (see DeskQueue.ts). */
+export type Patience = 'patient' | 'normal' | 'impatient';
+/** How a guest complains: they speak up, they complain when it's bad, or they keep it to themselves (see Complaints.ts). */
+export type Voice = 'vocal' | 'typical' | 'stoic';
 /** When a guest wants their room cleaned: only while they're out (do not disturb), as the hotel does it, or every day (see CleaningPreference.ts). */
 export type HousekeepingPreference = 'dnd' | 'standard' | 'makeup';
 /** Who a guest is, beyond their trip: rolled once when they arrive and kept (see Profile.ts). */
@@ -33,6 +37,8 @@ export interface GuestProfile {
   checkoutHour: number; // when they'd like to leave on their last morning (an early bird's 07-10; 11 otherwise; a night owl asks for late checkout on top)
   favorite?: FacilityType | 'none'; // the facility they seek out (absent on 1a-era profiles: no preference either way)
   housekeeping?: HousekeepingPreference; // when they want their room cleaned (absent on older profiles: standard)
+  patience?: Patience; // how long they'll wait in line (absent on older profiles: normal)
+  voice?: Voice; // how they complain (absent on older profiles: typical)
 }
 /** How a guest feels right now, from their satisfaction (see Mood.ts). */
 export type Mood = 'delighted' | 'content' | 'irritated' | 'angry';
@@ -140,7 +146,7 @@ export interface Guest {
   // The night noise they've slept through (or not) this stay: the sum of the
   // noise over the threshold in their sleep hours, how many nights it woke
   // them, and the last of those nights (see NoiseManager.accrueNightNoise)
-  nightNoise?: { exposure: number; woken: number; lastWokenNight: number };
+  nightNoise?: { exposure: number; woken: number; lastWokenNight: number; lastNight?: number }; // lastNight: the noise over their threshold the last night it woke them
   // Who they are to the hotel: absent for a first stay (see Loyalty.ts)
   loyalty?: GuestLoyalty;
   // Days their favourite facility let them down (missing, or full): the last such day and how many
@@ -151,7 +157,7 @@ export interface Guest {
   // back, to a new room): absolute game-hour legs. Once the last leg ends -- or
   // with no trip -- the guest is in their room. See Movement.ts.
   trip?: Leg[] | null;
-  tripKind?: 'arrival' | 'visit' | 'move' | 'outing'; // what the trip is for (an arriving guest isn't in the building before it starts)
+  tripKind?: 'arrival' | 'visit' | 'move' | 'outing' | 'complaint'; // what the trip is for (an arriving guest isn't in the building before it starts)
   // Facilities this guest actually used this stay (best level used, and the
   // day of the last visit): the facility part of their review. See FacilityManager.ts.
   facilitiesUsed?: Partial<Record<FacilityType, { level: number; day: number; today?: number; visits?: number; lastAt?: number }>>; // (today/visits/lastAt: their favourite only)
@@ -159,6 +165,10 @@ export interface Guest {
   cleans?: { done: number; missed: number };
   // The night they have friends round (see Visitors.ts): the day it began, how many came, and when the front desk asked them to leave
   hostedNight?: { day: number; visitors: number; keptDownAt?: number; complainedBy?: string };
+  // How long they stood in line to check in (hours; see DeskQueue.ts)
+  checkInWait?: number;
+  // Their complaint this stay (see Complaints.ts): what about, in person or by phone, and when it was heard (absent: on their way)
+  complaint?: { about: string; cause?: string; via: 'desk' | 'phone'; at?: number };
 }
 
 /** A tile in the building: (gridX, gridY) on a floor. A `door` means the tile is entered through that side only (a room or facility). */
@@ -183,7 +193,7 @@ export interface WalkLeg {
   hoursPerTile: number; // walking pace (a ride costs TRAVEL.hoursPerFloor per floor)
 }
 
-export type StayActivity = 'clean' | 'repair' | 'rest' | 'wait' | 'check_in' | 'inquire' | 'visit' | 'in_room' | 'away'; // away: out of the building
+export type StayActivity = 'clean' | 'repair' | 'rest' | 'wait' | 'check_in' | 'inquire' | 'visit' | 'in_room' | 'away' | 'complain'; // away: out of the building; complain: at the front desk, being heard
 
 export interface StayLeg {
   kind: 'stay';
@@ -195,6 +205,7 @@ export interface StayLeg {
   job?: 'turnover' | 'daily' | 'repair'; // what the stay works on, for staff
   credited?: boolean; // a facility visit whose bonus and sale have been counted (once the guest got there)
   out?: 'beach' | 'breakfast' | 'lunch' | 'dinner'; // an outing instead of a facility the hotel doesn't have
+  lane?: string; // the front desk clerk ("deskId:seat") a check-in or complaint takes, and whose line a wait is in (see DeskQueue.ts)
 }
 
 export type Leg = WalkLeg | StayLeg;
@@ -214,6 +225,8 @@ export interface Walker {
   stays?: number; // their stays with the hotel (the ring's colour)
   mood?: Mood; // how they left
   hostId?: string; // a visitor: the guest they've come to see
+  waited?: number; // gave up in line at the front desk: how long they waited (hours)
+  wanted?: PartyKind; // gave up in line: the party they came as, if they'd booked a room for fewer
 }
 
 export type StaffRole = 'housekeeper' | 'maintenance';
@@ -331,6 +344,8 @@ export interface NoiseSource {
 
 export interface HotelState {
   lateCheckout?: LateCheckoutPolicy; // absent: deny (see Profile.lateCheckoutPolicy)
+  // Today at the front desk so far (for the Staff panel): checked in, hours waited, the longest wait, gave up in line, complaints heard
+  deskToday?: { day: number; checkedIn: number; waitHours: number; longestWait: number; gaveUp: number; complaints: number };
   visitorPolicy?: VisitorPolicy; // absent: ask (see Visitors.visitorPolicy)
   // Today's let-downs at facilities, so far (recorded in dailyStats at the end of the day)
   facilityDemand?: { day: number; wanted: Partial<Record<FacilityType, number>>; full: Partial<Record<FacilityType, number>>; tooFar: Partial<Record<FacilityType, number>>; fullAt?: Record<string, number> };
@@ -446,7 +461,7 @@ export interface TickResult {
 }
 
 export interface GameEvent {
-  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'party_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked' | 'renovation_complete' | 'campaign_ended' | 'floor_built' | 'regular_lost' | 'visitors_asked_to_leave' | 'dnd_rooms_left';
+  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'party_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked' | 'renovation_complete' | 'campaign_ended' | 'floor_built' | 'regular_lost' | 'visitors_asked_to_leave' | 'dnd_rooms_left' | 'guest_complained';
   message: string;
   data?: Record<string, unknown>;
 }

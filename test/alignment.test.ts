@@ -16,7 +16,9 @@ import { STAFF, TRAVEL } from '../src/config/balance.js';
 import type { HotelState, Leg } from '../src/simulation/types.js';
 import { guestPace } from '../src/simulation/Profile.js';
 import { housekeepingPrefOf } from '../src/simulation/CleaningPreference.js';
-import { isGuestAway } from '../src/simulation/GuestMovement.js';
+import { patienceHours, readyAt } from '../src/simulation/DeskQueue.js';
+import { isSleepHour } from '../src/simulation/Profile.js';
+import { isGuestAway, checkInLanes } from '../src/simulation/GuestMovement.js';
 
 function contiguous(legs: Leg[]): boolean {
   for (let i = 1; i < legs.length; i++) if (Math.abs(legs[i].start - legs[i - 1].end) > 1e-6) return false;
@@ -38,6 +40,9 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
   let partyTrips = 0;
   let dndCleans = 0;
   let visitorNights = 0;
+  let queued = 0;
+  let gaveUp = 0;
+  let complaintTrips = 0;
   for (const seed of [1, 2]) {
     let s: HotelState = createStarterHotel();
     // Doubles, and rooms for friends and families, so parties of every size stay
@@ -117,8 +122,64 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
       }
       const r = tickSimulation(before, prng);
       const after = r.state;
-      // M: visitors walk in from the street, and are drawn in a room only while it's their host's and the host is in
       const T1v = hourStart(after);
+      // O: the front desk queue. Arrivals decided this tick set off no earlier than the hour they were decided
+      // at and wait no longer than their patience (as quoted when they join the line: a clerk let go later
+      // can slow it). At each desk everyone checking in is served in the order they
+      // got there, across hours, and so is everyone come to complain. Someone who gave up stood in their
+      // clerk's line exactly their patience, then left by an entrance.
+      const had = new Set(before.guests.map(g => g.id));
+      for (const g of after.guests) {
+        if (had.has(g.id) || g.tripKind !== 'arrival' || !g.trip) continue;
+        if (g.trip[0].start < T1v - 1e-9) bad('set off before the hour they were decided at', g.id);
+        const k = g.trip.findIndex(l => l.kind === 'stay' && l.activity === 'check_in' && l.lane);
+        if (k < 0) continue;
+        const ready = readyAt(g.trip, k);
+        if (g.trip[k].start > ready + 1e-9) queued++;
+        if (g.trip[k].start - ready > patienceHours(g) + 1e-9) bad('waited in line past their patience', g.id);
+      }
+      for (const activity of ['check_in', 'complain'] as const) {
+        const served: Array<{ desk: string; arrive: number; start: number; who: string }> = [];
+        for (const g of after.guests) {
+          const k = g.trip ? g.trip.findIndex(l => l.kind === 'stay' && l.activity === activity && l.lane && l.end > T1v - 1) : -1;
+          if (k < 0) continue;
+          served.push({ desk: (g.trip![k] as any).placeId, arrive: readyAt(g.trip!, k), start: g.trip![k].start, who: g.id });
+        }
+        for (const a of served) for (const b of served) {
+          if (a.desk === b.desk && a.arrive < b.arrive - 1e-9 && a.start > b.start + 1e-9) bad(`served out of turn (${activity})`, `${b.who} before ${a.who}`);
+        }
+      }
+      const walkedIn = new Set((before.walkers ?? []).map(w => w.id));
+      for (const w of after.walkers ?? []) {
+        if (w.reason !== 'impatient' || walkedIn.has(w.id)) continue;
+        if (w.trip[0].start < T1v - 1e-9) bad('set off before the hour they were decided at', w.id);
+        const line = w.trip.find(l => l.kind === 'stay' && l.activity === 'wait' && (l as any).lane) as any;
+        if (!line) continue;
+        gaveUp++;
+        if (Math.abs(line.end - line.start - patienceHours(w)) > 1e-9) bad('gave up after other than their patience', w.id);
+        if (w.trip.some(l => l.kind === 'stay' && l.activity === 'check_in')) bad('gave up but checked in', w.id);
+        const last = w.trip[w.trip.length - 1];
+        if (last.kind !== 'walk' || !isEntranceTile(after, last.path[last.path.length - 1])) bad('gave up but did not walk out', w.id);
+      }
+      // Q: complaint trips go from the room to a clerk at a desk and back, awake all the way
+      for (const g of after.guests) {
+        if (g.tripKind !== 'complaint' || !g.trip || g.trip[0].start < T1v - 1e-9) continue;
+        complaintTrips++;
+        const room = after.rooms.find(r => r.guestId === g.id)!;
+        const first = g.trip[0];
+        const start = first.kind === 'walk' ? first.path[0] : first.at;
+        if (start.gridX !== room.gridX || start.gridY !== room.gridY || start.floor !== room.floor) bad('complaint trip not from their room', g.id);
+        const said = g.trip.filter(l => l.kind === 'stay' && l.activity === 'complain') as any[];
+        if (said.length !== 1 || !checkInLanes(after).some(l => `${l.desk.id}:${l.seat}` === said[0].lane && l.front.gridX === said[0].at.gridX && l.front.gridY === said[0].at.gridY)) bad('complaint not at a clerk', g.id);
+        for (let h = Math.floor(g.trip[0].start); h <= Math.floor(legsEnd(g.trip)); h++) if (isSleepHour(g, ((h % 24) + 24) % 24)) bad('complaining in their sleep hours', g.id);
+      }
+      // R: a complaint is heard only once they've got to the counter
+      for (const e of r.events) {
+        if (e.type !== 'guest_complained') continue;
+        const g = after.guests.find(x => x.id === e.data?.guestId);
+        if (!g?.complaint?.at || g.complaint.at >= T1v - 1e-9) bad('heard before they got to the desk', String(e.data?.guestId));
+      }
+      // M: visitors walk in from the street, and are drawn in a room only while it's their host's and the host is in
       for (const w of after.walkers ?? []) {
         if (w.reason !== 'visitor') continue;
         const first = w.trip[0];
@@ -160,11 +221,11 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
         }
       }
       // E/G: guest trips
-      const checkIns: Array<{ desk: string; a: number; b: number; front: string }> = [];
+      const checkIns: Array<{ desk: string; a: number; b: number; front: string; lane?: string; who: string }> = [];
       for (const g of after.guests) {
         if (!g.trip) continue;
         if (!contiguous(g.trip)) bad('guest trip not contiguous', g.id);
-        for (const l of g.trip) if (l.kind === 'stay' && l.activity === 'check_in') checkIns.push({ desk: l.placeId!, a: l.start, b: l.end, front: `${l.at.gridX},${l.at.gridY}` });
+        for (const l of g.trip) if (l.kind === 'stay' && (l.activity === 'check_in' || l.activity === 'complain')) checkIns.push({ desk: l.placeId!, a: l.start, b: l.end, front: `${l.at.gridX},${l.at.gridY}`, lane: l.lane, who: g.id });
         const room = after.rooms.find(x => x.guestId === g.id);
         const last = g.trip[g.trip.length - 1];
         const end = last.kind === 'walk' ? last.path[last.path.length - 1] : last.at;
@@ -173,10 +234,16 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
       // K: everyone walks at their own pace (a slow walker slowly, a party with them)
       for (const g of after.guests) for (const l of g.trip ?? []) if (l.kind === 'walk' && Math.abs(l.hoursPerTile - guestPace(g)) > 1e-12) bad('guest walking at the wrong pace', g.id);
       for (const w of after.walkers ?? []) for (const l of w.trip) if (l.kind === 'walk' && Math.abs(l.hoursPerTile - guestPace(w)) > 1e-12) bad('walker walking at the wrong pace', w.id);
-      // per desk, check-ins overlap at most staffPerDesk at once
+      // N: one clerk serves one person at a time (check-ins and complaints on a lane never overlap), and at
+      // any moment a desk serves no more people than it has clerks seated (2 at most; the seats now, for
+      // what's still to come)
       for (const c of checkIns) {
-        const overlap = checkIns.filter(d => d.desk === c.desk && d.a < c.b - 1e-9 && c.a < d.b - 1e-9).length;
-        if (overlap > 2) bad('more check-ins at once than seats', c.desk);
+        if (c.lane && checkIns.some(d => d !== c && d.lane === c.lane && d.a < c.b - 1e-9 && c.a < d.b - 1e-9)) bad('two people at one clerk at once', `${c.lane} ${c.who}`);
+        const at = c.a + 1e-6;
+        const serving = checkIns.filter(d => d.desk === c.desk && d.a <= at && at < d.b).length;
+        const seats = at >= T1v + 1e-9 ? checkInLanes(after).filter(l => l.desk.id === c.desk).length : 2;
+        if (serving > Math.max(seats, at >= T1v + 1e-9 ? 0 : 2)) bad('more people served at a desk than clerks seated', `${c.desk} ${serving} > ${seats}`);
+        if (c.lane && c.a >= T1v - 1e-9 && !checkInLanes(after).some(l => `${l.desk.id}:${l.seat}` === c.lane)) bad('served by a clerk who is not there', c.lane);
       }
       // F: capacity, counting parties by size -- the visits planned there, and the people drawn there
       for (const f of after.facilities) {
@@ -239,5 +306,8 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
   expect(partyTrips).toBeGreaterThan(50); // parties of three or more came and went
   expect(dndCleans).toBeGreaterThan(20); // do-not-disturb rooms were cleaned (while their guests were out)
   expect(visitorNights).toBeGreaterThan(20); // rowdy guests had friends round
+  expect(queued).toBeGreaterThan(20); // people waited their turn at the desk
+  expect(gaveUp).toBeGreaterThan(0); // and some gave up
+  expect(complaintTrips).toBeGreaterThan(3); // and some walked down to complain
   expect(problems, JSON.stringify(examples)).toEqual({});
 }, 300000);
