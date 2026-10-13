@@ -392,20 +392,22 @@ describe('Balance', () => {
       const run = simulate(30, 9, undefined, STRATEGIES.balanced);
       // The same run before purposes and preferences existed (c0782c1). If an unrelated
       // balance change moves these, re-record them from a run with both switches off.
-      expect(run.finalCash).toBeCloseTo(10843.2, 6);
-      expect(run.avgReviewScore).toBeCloseTo(7.829402384430483, 9);
-      expect(run.totalRevenue).toBe(36831);
-      expect(run.totalTurnedAway).toBe(246);
+      // (Re-recorded for the housekeeping rebalance: ec57afc with the same rebalance, these
+      // switches off, gives exactly these numbers.)
+      expect(run.finalCash).toBeCloseTo(15227.6, 6);
+      expect(run.avgReviewScore).toBeCloseTo(7.867091349367429, 9);
+      expect(run.totalRevenue).toBe(38883);
+      expect(run.totalTurnedAway).toBe(233);
       expect(run.avgRoomFit).toBe(0);
       expect(run.likedShare).toBe(0);
       expect(run.dislikedShare).toBe(0);
       expect(run.returningArrivals).toBe(0);
       // A run where staff meet guests walking out of rooms (overstaffed), from the same commit
       const busy = simulate(45, 5, undefined, STRATEGIES.overstaffed);
-      expect(busy.finalCash).toBeCloseTo(14783.5, 6);
-      expect(busy.avgReviewScore).toBeCloseTo(7.651394734368281, 9);
-      expect(busy.totalRevenue).toBe(66779);
-      expect(busy.totalTurnedAway).toBe(317);
+      expect(busy.finalCash).toBeCloseTo(11527.8, 6);
+      expect(busy.avgReviewScore).toBeCloseTo(7.6941713433319014, 9);
+      expect(busy.totalRevenue).toBe(62427);
+      expect(busy.totalTurnedAway).toBe(330);
     } finally {
       GUEST_PURPOSES.enabled = true; ROOM_PREFERENCES.enabled = true; GUEST_PROFILE.enabled = true;
       GUEST_FAVORITES.enabled = true; LOYALTY.enabled = true; MOOD.enabled = true;
@@ -418,16 +420,17 @@ describe('Balance', () => {
     VOICE.enabled = false;
     try {
       // The same runs at ec57afc (housekeeping preferences and hosted nights), every other switch on
+      // (re-recorded for the housekeeping rebalance: ec57afc with the same rebalance gives exactly these)
       const run = simulate(60, 9, undefined, STRATEGIES.balanced);
-      expect(run.finalCash).toBeCloseTo(18715.7, 6);
-      expect(run.avgReviewScore).toBeCloseTo(7.8634516658876406, 9);
-      expect(run.totalRevenue).toBe(115602);
-      expect(run.totalTurnedAway).toBe(533);
+      expect(run.finalCash).toBeCloseTo(17884.3, 6);
+      expect(run.avgReviewScore).toBeCloseTo(7.628574278989811, 9);
+      expect(run.totalRevenue).toBe(113516);
+      expect(run.totalTurnedAway).toBe(500);
       const busy = simulate(45, 5, undefined, STRATEGIES.overstaffed);
-      expect(busy.finalCash).toBeCloseTo(9679.8, 6);
-      expect(busy.avgReviewScore).toBeCloseTo(7.7292829892741635, 9);
-      expect(busy.totalRevenue).toBe(67481);
-      expect(busy.totalTurnedAway).toBe(327);
+      expect(busy.finalCash).toBeCloseTo(12479.2, 6);
+      expect(busy.avgReviewScore).toBeCloseTo(7.722093941564708, 9);
+      expect(busy.totalRevenue).toBe(62895);
+      expect(busy.totalTurnedAway).toBe(358);
     } finally {
       PATIENCE.enabled = true; VOICE.enabled = true;
     }

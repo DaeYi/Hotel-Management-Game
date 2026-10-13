@@ -323,6 +323,9 @@ export const balancedStrategy = managedStrategy({ priceMultiplier: 1.0, cashRese
 export const greedyStrategy = managedStrategy({ priceMultiplier: 1.6, cashReserve: 8000, expandAtOccupancy: 0.9, ...ALL_SINKS });
 /** Balanced play that never renovates, upgrades, or markets -- just banks the cash. */
 export const hoarderStrategy = managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...NO_SINKS });
+/** Balanced play with housekeepers hired at `staffing` times the estimated need, for measuring a staffing curve. */
+export const staffedStrategy = (staffing: number): Strategy =>
+  managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...ALL_SINKS, staffing });
 
 export const STRATEGIES: Record<string, Strategy> = {
   idle: idleStrategy,
@@ -330,8 +333,8 @@ export const STRATEGIES: Record<string, Strategy> = {
   greedy: greedyStrategy,
   hoarder: hoarderStrategy,
   // Housekeeping staffed below / above the estimated need, for checking there's a right amount
-  understaffed: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...ALL_SINKS, staffing: 0.6 }),
-  overstaffed: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...ALL_SINKS, staffing: 1.6 }),
+  understaffed: staffedStrategy(0.6),
+  overstaffed: staffedStrategy(1.6),
   // One sink at a time, for measuring what each is worth
   renovateOnly: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...NO_SINKS, renovate: true }),
   upgradeOnly: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...NO_SINKS, upgrade: true }),

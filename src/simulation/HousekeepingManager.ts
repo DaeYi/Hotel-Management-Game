@@ -164,13 +164,21 @@ export function processDailyHousekeeping(state: HotelState): { state: HotelState
 const AVERAGE_STAY_NIGHTS = (ECONOMY.guestMinStay + ECONOMY.guestMaxStay) / 2;
 
 /**
+ * A housekeeper's walk to each job, in walks from a staff base. They take jobs
+ * by urgency, not by distance, so they walk from the last room (often on
+ * another floor), not from the closet: in bot hotels, 2.1 to 2.7 times the
+ * walk from a base, more as the hotel grows.
+ */
+const WALKS_PER_JOB = 2.5;
+
+/**
  * Housekeeper-hours a day of work needs at a given occupancy (0-1): turnovers
  * for the day's checkouts plus the daily-clean round, each with a walk there
- * (estimated as the average walk from a staff base).
+ * (WALKS_PER_JOB average walks from a staff base).
  */
 export function estimateHousekeepingHours(state: HotelState, occupancy: number): number {
   const walks = state.rooms.map(r => getStaffTravelHours(state, r)).filter(Number.isFinite);
-  const avgWalk = walks.length > 0 ? walks.reduce((a, b) => a + b, 0) / walks.length : 0;
+  const avgWalk = (walks.length > 0 ? walks.reduce((a, b) => a + b, 0) / walks.length : 0) * WALKS_PER_JOB;
   const occupied = state.rooms.length * occupancy;
   const checkouts = occupied / AVERAGE_STAY_NIGHTS;
   const turnover = HOUSEKEEPING.turnoverDuration[state.housekeeping.turnoverQuality] ?? HOUSEKEEPING.turnoverDuration.standard;
@@ -188,9 +196,13 @@ function expectedShare(pref: 'dnd' | 'standard' | 'makeup'): number {
   return (weights.find(([p]) => p === pref)?.[1] ?? 0) / weights.reduce((sum, [, w]) => sum + w, 0);
 }
 
-/** Housekeeper-hours available in a day: one per housekeeper per shift hour. */
+/**
+ * Housekeeper-hours available in a day: one per housekeeper per shift hour,
+ * from when the day's work is there (shift hours before the daily round is
+ * queued have only yesterday's leftovers to do).
+ */
 export function housekeepingHoursAvailable(housekeepers: number): number {
-  return housekeepers * (STAFF.housekeeping.workEndHour - STAFF.housekeeping.workStartHour);
+  return housekeepers * (STAFF.housekeeping.workEndHour - Math.max(STAFF.housekeeping.workStartHour, HOUSEKEEPING.dailyCleaningHour));
 }
 
 /** Housekeepers needed to keep up at a given occupancy. */

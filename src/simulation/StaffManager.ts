@@ -6,6 +6,7 @@ import { isGuestAway } from './GuestMovement.js';
 import { hourStart, makeWalk, makeStay, truncateLegs, sameTile, finalTile, positionAt, walkProgress, stepStillOpen, legsEnd } from './Movement.js';
 import { guestsById } from './Party.js';
 import { housekeepingPrefOf, dndOpening, dndCleanStart, dndSetOff } from './CleaningPreference.js';
+import { isSleepHour } from './Profile.js';
 
 // Housekeepers and maintenance workers are people with a place in the
 // building. Each hour boundary, every one of them gets an itinerary for the
@@ -111,14 +112,15 @@ function jobQueues(state: HotelState, done: { turnover: Map<string, number>; dai
   const guestOut = (r: Room) => state.guests.some(g => g.id === r.guestId && isGuestAway(g, T));
   const left = (r: Room, kind: 'turnover' | 'daily') =>
     (kind === 'turnover' ? r.cleaningHoursRemaining : r.dailyCleanHoursRemaining) - (done[kind].get(r.id) ?? 0);
-  const dailyRooms = state.rooms.filter(r => r.status === 'occupied' && left(r, 'daily') > 1e-9 && reachable(r));
+  const dailyRooms = state.rooms.filter(r => r.status === 'occupied' && left(r, 'daily') > 1e-9 && reachable(r) && !guestsAsleepIn(state, r));
   const housekeeping: Job[] = [
     // Turnovers first (they block bookings), soonest-finished first
     ...state.rooms.filter(r => r.status === 'cleaning' && left(r, 'turnover') > 1e-9 && reachable(r))
       .sort((a, b) => left(a, 'turnover') - left(b, 'turnover'))
       .map(room => ({ room, kind: 'turnover' as const, hours: left(room, 'turnover') })),
-    // Then the daily cleans queued at HOUSEKEEPING.dailyCleaningHour: rooms
-    // whose guest is out first (nobody to disturb), then dirtiest first
+    // Then the daily cleans queued at HOUSEKEEPING.dailyCleaningHour (none
+    // whose guests are asleep in them): rooms whose guest is out first
+    // (nobody to disturb), then dirtiest first
     ...(GUEST_HOUSEKEEPING.enabled ? dailyByPreference(state, dailyRooms, r => left(r, 'daily')) : dailyRooms
       .sort((a, b) => Number(!guestOut(a)) - Number(!guestOut(b)) || a.cleanliness - b.cleanliness))
       .map(room => ({ room, kind: 'daily' as const, hours: left(room, 'daily') })),
@@ -128,6 +130,17 @@ function jobQueues(state: HotelState, done: { turnover: Map<string, number>; dai
     .sort((a, b) => a.condition - b.condition) // worst condition first
     .map(room => ({ room, kind: 'repair' as const, hours: Infinity }));
   return { housekeeper: housekeeping, maintenance };
+}
+
+/**
+ * Whether a room's guests are in it and asleep this hour (with profiles on, by
+ * their sleep hours): housekeepers don't wake anyone for a daily clean. Since
+ * the round starts at 08:00, that's night owls till 09:00.
+ */
+export function guestsAsleepIn(state: HotelState, room: Room): boolean {
+  if (!GUEST_PROFILE.enabled || !room.guestId) return false;
+  const guest = state.guests.find(g => g.id === room.guestId);
+  return !!guest && isSleepHour(guest, state.hour) && !isGuestAway(guest, hourStart(state));
 }
 
 /**

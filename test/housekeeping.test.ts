@@ -111,17 +111,19 @@ describe('Amenities are charged per occupied room', () => {
 });
 
 describe('Balance: there is a right amount of housekeeping', () => {
-  it('staffing to the workload beats under-staffing by far, and over-staffing buys nothing', () => {
+  it('staffing to the workload beats under-staffing by far, and over-staffing too', () => {
     const runs = 6;
     const median = (name: string) => {
       const vals = Array.from({ length: runs }, (_, i) => simulate(400, i, undefined, STRATEGIES[name]).finalValuation).sort((a, b) => a - b);
       return (vals[2] + vals[3]) / 2;
     };
     const right = median('balanced');
+    // Measured over 24 seeds x 400 days: 0.6x the housekeepers ends about 39% lower (turnovers pile up,
+    // daily cleans go undone), 1.6x about 30% lower (idle wages hold back building); 1.0x to 1.2x is
+    // the top of the curve. In each run of six of those seeds (0-5, 6-11, ...), staffing to the workload
+    // beat 0.6x by 1.58x or more and 1.6x by 1.31x or more.
     expect(right).toBeGreaterThan(median('understaffed') * 1.5);
-    // 1.6x the housekeepers: within noise of staffing to the workload (measured over 12 seeds x 400 days,
-    // anything from 1.0x to 1.6x lands within about 3% either way), so the wages buy nothing worth having
-    expect(right).toBeGreaterThan(median('overstaffed') * 0.95);
+    expect(right).toBeGreaterThan(median('overstaffed') * 1.15);
   }, 240000);
 });
 

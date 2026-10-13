@@ -148,19 +148,35 @@ describe('Make up daily', () => {
   it('a make-up guest minds cleanliness 1.6x as much either side of a well-kept room: it costs them when a clean is missed', () => {
     const std = guest('s');
     const mk = guest('m', { profile: with_({ housekeeping: 'makeup' }) });
-    expect(cleanlinessTerm(70, std)).toBeCloseTo((70 - 50) / 100 * 0.8, 12);
+    const weight = HOUSEKEEPING.cleanlinessWeight;
+    const missed = GUEST_HOUSEKEEPING.makeupExpects - HOUSEKEEPING.cleanlinessDecayPerDay; // a clean missed: another night on
+    expect(cleanlinessTerm(70, std)).toBeCloseTo((70 - 50) / 100 * weight, 12);
     expect(cleanlinessTerm(GUEST_HOUSEKEEPING.makeupExpects, mk)).toBeCloseTo(cleanlinessTerm(GUEST_HOUSEKEEPING.makeupExpects, std), 12);
-    expect(cleanlinessTerm(76, mk) - cleanlinessTerm(76, std)).toBeCloseTo(-(GUEST_HOUSEKEEPING.makeupExpects - 76) / 100 * 0.8 * 0.6, 12);
+    expect(cleanlinessTerm(missed, mk) - cleanlinessTerm(missed, std)).toBeCloseTo(-(GUEST_HOUSEKEEPING.makeupExpects - missed) / 100 * weight * 0.6, 12);
     expect(cleanlinessTerm(100, mk)).toBeGreaterThan(cleanlinessTerm(100, std));
-    withSwitch(GUEST_HOUSEKEEPING, false, () => expect(cleanlinessTerm(76, mk)).toBe(cleanlinessTerm(76, std)));
+    withSwitch(GUEST_HOUSEKEEPING, false, () => expect(cleanlinessTerm(missed, mk)).toBe(cleanlinessTerm(missed, std)));
     // In the review, and in the mood
     const s = hotel([std, mk]);
-    const dirty = { ...s, rooms: s.rooms.map(r => ({ ...r, cleanliness: 70, condition: 100 })) };
+    const dirty = { ...s, rooms: s.rooms.map(r => ({ ...r, cleanliness: missed, condition: 100 })) };
     const review = (g: Guest) => calculateGuestReviewBreakdown(roomOf(dirty, g.id), dirty, g, new PRNG(1));
-    expect(review(mk).cleanlinessBonus).toBeCloseTo(cleanlinessTerm(70, mk), 12);
+    expect(review(mk).cleanlinessBonus).toBeCloseTo(cleanlinessTerm(missed, mk), 12);
     expect(review(mk).finalScore).toBeLessThan(review(std).finalScore);
     const drifted = driftSatisfaction(dirty).guests;
     expect(drifted[1].satisfaction).toBeLessThan(drifted[0].satisfaction);
+  });
+
+  it('nobody is woken for a daily clean: a night owl\'s room waits till they\'re up (profiles off: as ever)', () => {
+    let s = hotel([guest('o', { profile: with_({ chronotype: 'night' }) }), guest('r')], { hour: 8, staff: { ...createStarterHotel().staff, housekeepers: 2 } });
+    s = due(s);
+    const cleaned = (st: HotelState) => dailyStays(planStaff(st)).map(l => l.placeId);
+    expect(GUEST_PROFILE.sleepHours.night[1]).toBeGreaterThan(8); // (still asleep at 08:00)
+    expect(cleaned(s)).toEqual([roomOf(s, 'r').id]);
+    expect(describeWait(roomCleaningAt(s, hourStart(s) + 0.5).get(roomOf(s, 'o').id)!.wait!)).toBe('the guests are asleep');
+    expect(cleaned({ ...s, hour: GUEST_PROFILE.sleepHours.night[1] }).sort()).toEqual(s.rooms.map(r => r.id).sort());
+    // Out of the room, asleep or not, nobody's disturbed
+    const out = { ...s, guests: s.guests.map(g => (g.id === 'o' ? outing(s, g, hourStart(s) - 1, hourStart(s) + 4) : g)) };
+    expect(cleaned(out).sort()).toEqual(s.rooms.map(r => r.id).sort());
+    withSwitch(GUEST_PROFILE, false, () => expect(cleaned(s).sort()).toEqual(s.rooms.map(r => r.id).sort()));
   });
 
   it('the staffing estimate counts make-up rooms on the off days', () => {

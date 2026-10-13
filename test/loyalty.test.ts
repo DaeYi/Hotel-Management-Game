@@ -373,11 +373,12 @@ describe('Loyalty', () => {
 
   it('a regular whose stay was a letdown is lost at checkout (a second stay is not); one who walks out is lost too', () => {
     const regular = guest('r', { checkInDay: 1, stayLength: 2, isReturning: true, loyalty: { personId: 'mei', stays: 4, lastReview: 9.9 }, satisfaction: 90 });
-    const s = hotel([regular], { hour: 10 });
+    const unkept = (st: HotelState) => ({ ...st, rooms: st.rooms.map(x => ({ ...x, cleanliness: 40 })) }); // the room wasn't made up
+    const s = unkept(hotel([regular], { hour: 10 }));
     const r = processDepartures(s, new PRNG(1));
     expect(r.events.find(e => e.type === 'regular_lost')!.data).toMatchObject({ personId: 'mei', stays: 4, roomId: s.rooms[0].id });
     expect(r.returningGuestPool).toEqual([]);
-    const second = processDepartures(hotel([{ ...regular, loyalty: { personId: 'mei', stays: 2, lastReview: 9.9 } }], { hour: 10 }), new PRNG(1));
+    const second = processDepartures(unkept(hotel([{ ...regular, loyalty: { personId: 'mei', stays: 2, lastReview: 9.9 } }], { hour: 10 })), new PRNG(1));
     expect(second.events.some(e => e.type === 'regular_lost')).toBe(false);
     // Walking out mid-stay after a breakdown, with nowhere to move them: lost, with a story
     const walker = { ...regular, checkInDay: 2, stayLength: 3 };

@@ -2,7 +2,7 @@ import type { HotelState, Room, StaffPlan } from './types.js';
 import { HOUSEKEEPING, STAFF, ECONOMY, GUEST_HOUSEKEEPING, TRAVEL } from '../config/balance.js';
 import { checkoutHour } from './Profile.js';
 import { isRoomReachable } from './HotelState.js';
-import { getStaffPlan, getRoster, isOnShift } from './StaffManager.js';
+import { getStaffPlan, getRoster, isOnShift, guestsAsleepIn } from './StaffManager.js';
 import { hourStart } from './Movement.js';
 import { isGuestAway } from './GuestMovement.js';
 import { housekeepingPrefOf, dndOpening } from './CleaningPreference.js';
@@ -16,8 +16,8 @@ import { housekeepingPrefOf, dndOpening } from './CleaningPreference.js';
 export type CleaningJob = 'turnover' | 'daily';
 /** In the room now; walking there (or due there later this hour); or nobody's on it this hour. */
 export type CleaningPhase = 'cleaning' | 'on_the_way' | 'waiting';
-/** Why a room is waiting: nobody to do it, nobody can get there, the shift's over, the new hires aren't in yet, a do-not-disturb room's guests are in, or everyone's busy. */
-export type CleaningWait = 'no_housekeepers' | 'unreachable' | 'off_shift' | 'arriving' | 'guest_in' | 'busy';
+/** Why a room is waiting: nobody to do it, nobody can get there, the shift's over, the new hires aren't in yet, a do-not-disturb room's guests are in, its guests are asleep, or everyone's busy. */
+export type CleaningWait = 'no_housekeepers' | 'unreachable' | 'off_shift' | 'arriving' | 'guest_in' | 'asleep' | 'busy';
 
 export interface RoomCleaning {
   job: CleaningJob; // a turnover between guests, or a daily clean during a stay
@@ -102,6 +102,7 @@ function waitReason(state: HotelState, room: Room, staffed: boolean, t: number, 
     const guest = state.guests.find(g => g.id === room.guestId);
     if (guest && housekeepingPrefOf(guest) === 'dnd' && (!isGuestAway(guest, t) || dndOpening(guest, room, t, hourStart(state) + 1, hoursLeft + 2 * TRAVEL.hoursPerTile) === null)) return 'guest_in';
   }
+  if (room.status === 'occupied' && guestsAsleepIn(state, room)) return 'asleep';
   return 'busy';
 }
 
@@ -113,6 +114,7 @@ export function describeWait(wait: CleaningWait): string {
     case 'off_shift': return `housekeepers start at ${STAFF.housekeeping.workStartHour}:00`;
     case 'arriving': return 'new housekeepers start next hour';
     case 'guest_in': return 'do not disturb: waiting for the guests to be out long enough';
+    case 'asleep': return 'the guests are asleep';
     case 'busy': return 'all housekeepers busy';
   }
 }

@@ -111,6 +111,7 @@
 ## Completed
 
 - **HTML interface** (2026-10-10): GameController owns state and actions, Phaser only draws the world, the interface is Preact + CSS with DOM tests. See docs/designs/html-interface.md
+- **Staffing to the estimate is the optimum** (2026-10-12): the daily round starts with the shift (never waking anyone), the estimate counts real walks, a missed daily clean costs a review, housekeepers cost $70. Under- and over-staffing both cost again. See docs/designs/housekeeping-balance.md
 - **Housekeeping balance** (2026-10-10): one housekeeping pool for turnovers and daily cleans, demand with diminishing returns on size, amenities per occupied room, demand-based bot staffing. Right-sized staffing now beats under- and over-staffing. See docs/designs/housekeeping-balance.md
 - **Staff travel time** (2026-10-10): staff walk from the lobby or a staff closet; the walk costs cleaning and repair time. See docs/designs/hallways-and-people.md
 - **Hallways, check-in desks, and people** (2026-10-10): hallway-connected rooms, desks staffed by front desk, walking guests and staff, bulldoze tool. See docs/designs/hallways-and-people.md

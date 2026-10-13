@@ -313,7 +313,7 @@ export const GUEST_HOUSEKEEPING = {
     getaway: [['dnd', 0.35], ['standard', 0.5], ['makeup', 0.15]], // a getaway wants to be left alone
   } as Record<string, Array<[HousekeepingName, number]>>,
   makeupWeight: 1.6, // how much more a make-up guest minds cleanliness...
-  makeupExpects: 92, // ...either side of this: a thoroughly turned-over room a night on (so it only costs them when a clean is missed)
+  makeupExpects: 70, // ...either side of this: a thoroughly turned-over room a night on (100 - HOUSEKEEPING.cleanlinessDecayPerDay; so it only costs them when a clean is missed)
   dndMaxWait: 0.25, // a housekeeper waits at a do-not-disturb door this long (hours) for its guests to finish going out
   rowdyMessMult: 1.5, // a rowdy guest's room gets dirty faster
 };
@@ -473,17 +473,22 @@ export const HOUSEKEEPING = {
     thorough: 36,
   } as Record<string, number>,
 
-  // Daily cleaning: happens during guest stay
-  dailyCleaningHour: 10, // housekeeping comes at 10 AM
-  dailyCleaningBoost: 15, // cleanliness points restored per daily clean
+  // Daily cleaning: happens during guest stay. The round is queued as the
+  // housekeepers come in (at the end of this hour, so worked from 08:00), and
+  // the morning before the 11:00 checkouts goes on it. Queued at 10:00 it was
+  // worked from 11:00, with the checkouts, and the morning went idle.
+  dailyCleaningHour: 7,
+  dailyCleaningBoost: 45, // cleanliness points restored per daily clean (more than a night takes)
   dailyCleaningCost: 5, // cost per room per daily cleaning
 
-  // Cleanliness degradation
-  cleanlinessDecayPerDay: 8, // how much cleanliness drops per day while occupied
+  // Cleanliness degradation: a night's use. A room made up every day is at 70
+  // by checkout; one missed clean leaves it at 40, below the midpoint, where
+  // it costs the guest's review (and more at high stars).
+  cleanlinessDecayPerDay: 30, // how much cleanliness drops per day while occupied
   initialCleanliness: 100,
 
   // Rating impact
-  cleanlinessWeight: 0.8, // how much cleanliness affects rating (same scale as condition)
+  cleanlinessWeight: 2.0, // how much cleanliness affects rating (same scale as condition): a room made up daily reviews about as it did at 0.8 with 8 a night (+0.4 at checkout), and a missed clean costs about 0.6
   cleanlinessMidpoint: 50,
   cleanlinessScale: 100,
 
@@ -549,7 +554,7 @@ export const STAFF = {
     workEndHour: 22, // maintenance shift ends
   },
   housekeeping: {
-    dailyWage: 60, // per housekeeper per day
+    dailyWage: 70, // per housekeeper per day
     dailyCleanRoomsPerHour: 2, // rooms a housekeeper can daily-clean per hour
     workStartHour: 7, // nothing checks out before 11:00, so the day starts a little later...
     workEndHour: 21, // ...and ends before the night

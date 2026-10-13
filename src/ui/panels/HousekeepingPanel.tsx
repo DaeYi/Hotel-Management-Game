@@ -101,7 +101,7 @@ export function HousekeepingPanel() {
         ))}
       </div>
       <div class="dim tiny" style={{ marginTop: '4px' }}>
-        Daily cleans are queued at {HOUSEKEEPING.dailyCleaningHour}:00 and done after checkout cleaning.
+        Daily cleans are queued at {HOUSEKEEPING.dailyCleaningHour}:00 and done after checkout cleaning, never while the guests are asleep.
         {GUEST_HOUSEKEEPING.enabled && GUEST_PROFILE.enabled && <> Hangers on the doors: green, make up the room every day (first, and on the off days too); red, do not disturb (only while they're out).</>}
       </div>
 
