@@ -312,10 +312,11 @@ export function tripStillWalkable(state: HotelState, legs: Leg[], t: number, fro
 
 /**
  * Carry on with a trip from time t in the building as it now is: keep what's
- * been done, head for each stop still ahead that still makes sense (a desk to
- * check in at, a facility to visit) and finally the destination -- the
- * guest's room, or the street for someone leaving. A trip that hasn't begun
- * starts as planned, from the street (arrivals) or the room (visits).
+ * been done, carry on with the stop they're at (if it still makes sense), head
+ * for each stop still ahead that still makes sense (a desk to check in at, a
+ * facility to visit) and finally the destination -- the guest's room, or the
+ * street for someone leaving. A trip that hasn't begun starts as planned, from
+ * the street (arrivals) or the room (visits).
  */
 function continueTrip(state: HotelState, legs: Leg[], t: number, destination: TilePos | 'street', fromStreetTrip: boolean, pace: number): Leg[] {
   const notStarted = legs.length > 0 && t <= legs[0].start;
@@ -339,6 +340,18 @@ function continueTrip(state: HotelState, legs: Leg[], t: number, destination: Ti
     fromStreet = false;
     return true;
   };
+  // A stop under way at t carries on as the one stay it was, not two halves: its start, its fields and
+  // whether it's been counted kept, at its tile as it is now (a host's door turned, back in from town by
+  // another entrance). So a visit, a check-in or a complaint is counted once, a wait in line is the whole
+  // wait, and whoever's been somewhere longest keeps their seat there.
+  const carryOn = (leg: StayLeg, begin: number, end: number) => {
+    const last = out[out.length - 1];
+    if (last && last.kind === 'stay' && last.activity === leg.activity && last.placeId === leg.placeId && Math.abs(last.end - begin) < 1e-9) {
+      out[out.length - 1] = { ...leg, start: last.start, end };
+    } else {
+      out.push({ ...leg, start: begin, end });
+    }
+  };
 
   for (const original of legs) {
     let leg = original;
@@ -357,7 +370,7 @@ function continueTrip(state: HotelState, legs: Leg[], t: number, destination: Ti
     if (leg.activity === 'away' && !notStarted && leg.start < t) {
       // Already out in town: they come back in by this entrance at the same time
       pos = leg.at;
-      out.push({ ...leg, start: time, end: leg.end });
+      carryOn(leg, time, leg.end);
       time = leg.end;
       continue;
     }
@@ -368,15 +381,8 @@ function continueTrip(state: HotelState, legs: Leg[], t: number, destination: Ti
     const atCounter = leg.activity === 'check_in' || leg.activity === 'complain'; // (their turn at the desk, booked)
     if (start > time && atCounter) out.push(makeStay(leg.at, time, start, 'wait', { placeId: leg.placeId, ...(leg.lane ? { lane: leg.lane } : {}) }));
     const begin = atCounter ? start : time;
-    // A visitor carrying on in their host's room, or someone at the front desk counter or in a clerk's
-    // line: one stay, not two halves (the visit is one stay for the noise and the desk; a check-in or a
-    // complaint is counted once, a wait in line is the whole wait). Other stops are left as they always were.
-    const last = out[out.length - 1];
-    if (ongoing && (leg.activity === 'in_room' || leg.lane !== undefined) && last && last.kind === 'stay' && last.activity === leg.activity && last.placeId === leg.placeId && Math.abs(last.end - begin) < 1e-9) {
-      out[out.length - 1] = { ...leg, start: last.start, end: begin + length };
-    } else {
-      out.push({ ...leg, start: begin, end: begin + length });
-    }
+    if (ongoing) carryOn(leg, begin, begin + length);
+    else out.push({ ...leg, start: begin, end: begin + length });
     time = begin + length;
     pos = leg.at;
   }

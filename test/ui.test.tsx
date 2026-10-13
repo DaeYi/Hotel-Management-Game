@@ -4,9 +4,13 @@ import { render, screen, fireEvent, cleanup, act } from '@testing-library/preact
 import { createRef } from 'preact';
 import { GameController } from '../src/game/GameController';
 import { App } from '../src/ui/App';
-import { OBJECTIVES } from '../src/config/balance';
+import { OBJECTIVES, TRAVEL } from '../src/config/balance';
 import { guestWhereabouts } from '../src/ui/Inspectors';
-import { createStarterHotel } from '../src/simulation/HotelState';
+import { createStarterHotel, addRoom, addFacility } from '../src/simulation/HotelState';
+import { findRoute } from '../src/simulation/Layout';
+import { makeWalk, makeStay } from '../src/simulation/Movement';
+import { rerouteTrips, roomTile } from '../src/simulation/GuestMovement';
+import type { HotelState, Leg } from '../src/simulation/types';
 
 /** Render the interface around a controller; the world element is left empty (no renderer in tests). */
 function setup(options: { tutorialSeen?: boolean } = {}) {
@@ -627,6 +631,25 @@ describe('Guests and service', () => {
     fireEvent.click(screen.getByText(/About Kit/));
     flush();
     expect(screen.getByRole('dialog', { name: 'Kit' }).textContent).toContain('Do not disturb (cleaned only while out)');
+  });
+
+  it('a guest card says "at the Shop" all through the visit, even once something is built across their way back', () => {
+    let s: HotelState = { ...createStarterHotel(), cash: 1_000_000, peakStarRating: 5 };
+    s = addRoom(s, 'standard', 3, 2, 0, 'up')!;
+    s = addFacility(s, 'shop', 8, 0, 0, 'down')!;
+    const [room, shop] = [s.rooms[0], s.facilities[0]];
+    const at = { gridX: shop.gridX, gridY: shop.gridY, floor: 0, door: shop.door };
+    const pace = TRAVEL.guestHoursPerTile;
+    const there = makeWalk(findRoute(s, roomTile(room), at, pace)!.path, 10, pace);
+    const trip: Leg[] = [there, makeStay(at, there.end, 10.9, 'visit', { placeId: shop.id }), makeWalk(findRoute(s, at, roomTile(room), pace)!.path, 10.9, pace)];
+    s = {
+      ...s, rooms: [{ ...room, status: 'occupied', guestId: 'g' }],
+      guests: [{ id: 'g', name: 'G', budget: 300, stayLength: 3, trait: 'normal', satisfaction: 60, checkInDay: 1, isReturning: false, hadNoiseComplaint: false, trip, tripKind: 'visit' }],
+    };
+    const after = rerouteTrips(addRoom(s, 'standard', 6, 1, 0, 'up')!, 10.6); // across the corridor back to their room
+    expect(after.guests[0].trip).not.toEqual(trip);
+    expect(guestWhereabouts(after.guests[0], after, 10.7)).toBe('at the Shop');
+    expect(guestWhereabouts(after.guests[0], after, 10.95)).toBe('back from the Shop');
   });
 });
 

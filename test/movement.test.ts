@@ -2,14 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { createStarterHotel, addRoom, addFacility, addFixture, buildFloor, addElevator, demolishFacility, demolishElevator, demolishFixture, setRoomDoor } from '../src/simulation/HotelState.js';
 import { findRoute, isEntranceTile, getFixtureFront, doorTile } from '../src/simulation/Layout.js';
 import { makeWalk, makeStay, positionAt, truncateLegs, legsEnd, hourStart, hash01 } from '../src/simulation/Movement.js';
-import { planArrivalTrips, checkInLanes, CHECK_IN_HOURS, departureWalker, isGuestAway, rerouteTrips, tripStillWalkable, guestTileAt } from '../src/simulation/GuestMovement.js';
+import { planArrivalTrips, checkInLanes, CHECK_IN_HOURS, departureWalker, isGuestAway, rerouteTrips, tripStillWalkable, guestTileAt, roomTile } from '../src/simulation/GuestMovement.js';
 import { planFacilityVisits, creditFacilityVisits, facilityCapacity, facilityReviewBonus, guestsInFacility, visitChance } from '../src/simulation/FacilityManager.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import { PRNG } from '../src/simulation/prng.js';
 import { TRAVEL, FACILITY_CONFIG, FACILITY_LEVELS, FACILITY_VISITS, GUEST_OUTINGS, STARTER_LAYOUT } from '../src/config/balance.js';
 import { planOutings } from '../src/simulation/OutingManager.js';
 import { getStaffPlan } from '../src/simulation/StaffManager.js';
-import type { HotelState, Guest, Leg } from '../src/simulation/types.js';
+import type { HotelState, Guest, Leg, StayLeg, WalkLeg } from '../src/simulation/types.js';
 
 const rich = (s: HotelState): HotelState => ({ ...s, cash: 1_000_000, peakStarRating: 5 });
 
@@ -217,6 +217,37 @@ describe('Facility visits: guests really go, and only visitors get the bonus', (
     s = rerouteTrips(s, leave + 0.01);
     expect(s.guests[0].trip?.some(l => l.kind === 'stay' && l.activity === 'visit') ?? false).toBe(false);
     expect(creditFacilityVisits(s, leave + 2).guests[0].facilitiesUsed?.gym).toBeUndefined();
+  });
+
+  it('building across a guest’s way back mid-visit: the visit carries on as the one stay, credited once', () => {
+    const s = addFacility(withGuests(1), 'shop', 8, 0, 0, 'down')!;
+    const planned = withChance('shop', 1, () => planFacilityVisits(s));
+    const [, visit, back] = planned.guests[0].trip! as [Leg, StayLeg, WalkLeg];
+    const T1 = hourStart(planned) + 1; // the hour's visits are credited then
+    const t = (visit.start + Math.min(visit.end, T1)) / 2; // in the shop, before that
+    // A room built on a tile of their way back (not at either door), with a way round it
+    let built: HotelState | null = null;
+    for (const tile of back.path.slice(2, -2)) {
+      built = addRoom(planned, 'standard', tile.gridX, tile.gridY, 0, 'up');
+      if (built && !tripStillWalkable(built, built.guests[0].trip!, t) && findRoute(built, visit.at, roomTile(planned.rooms[0]))) break;
+      built = null;
+    }
+    expect(built).toBeTruthy();
+    const after = rerouteTrips(built!, t);
+    const trip = after.guests[0].trip!;
+    expect(tripStillWalkable(after, trip, t)).toBe(true);
+    for (let i = 1; i < trip.length; i++) expect(trip[i].start).toBeCloseTo(trip[i - 1].end, 9);
+    // Still the one visit: its start, its shop, not yet counted
+    const visits = trip.filter((l): l is StayLeg => l.kind === 'stay' && l.activity === 'visit');
+    expect(visits).toHaveLength(1);
+    expect(visits[0]).toMatchObject({ start: visit.start, at: visit.at, placeId: visit.placeId });
+    expect(visits[0].end).toBeCloseTo(visit.end, 9);
+    expect(visits[0].credited).toBeUndefined();
+    expect(guestsInFacility(after, visit.placeId!, t + 0.01).map(g => g.id)).toEqual([after.guests[0].id]);
+    // One sale at the end of the hour, and nothing more after
+    const credited = creditFacilityVisits(after, T1);
+    expect(credited.cash - after.cash).toBeCloseTo(FACILITY_CONFIG.shop.spendPerVisit, 9);
+    expect(creditFacilityVisits(credited, T1 + 1)).toBe(credited);
   });
 
   it('never more guests inside than the facility holds', () => {
