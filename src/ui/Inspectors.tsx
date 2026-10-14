@@ -19,6 +19,7 @@ import { housekeepingPrefOf, describeHousekeeping } from '../simulation/Cleaning
 import { isAsleepAt, isHosting, theVisitors, visitorCount } from '../simulation/Visitors';
 import { describeVisitors, canAskVisitorsToLeave, clockTime } from '../simulation/HostedNights';
 import { moodHidden } from '../simulation/Voice';
+import { spendingOn, spendingOf, spentHere, saleFor } from '../simulation/Spending';
 import { describeLoyalty } from '../simulation/Loyalty';
 import { guestMood } from '../simulation/Mood';
 import { getOpenFacilities } from '../simulation/Layout';
@@ -32,6 +33,35 @@ import { facilityCapacity, facilityLoad, peopleInFacility, openingHours } from '
 import { roomCleaningAt, describeWait, type RoomCleaning } from '../simulation/CleaningStatus';
 import { useController, useLiveClock } from './context';
 import { formatBar, formatMoney, formatWalk, capitalize } from './format';
+
+/** What a visit to the shop or a table at the restaurant costs a party of one or two, and a big spender's (spending styles on). */
+function spendLines(facility: Facility): string[] {
+  if (facility.type !== 'shop' && facility.type !== 'restaurant') return [];
+  const each = saleFor(facility.type, facility.level, 1, 'standard');
+  const big = saleFor(facility.type, facility.level, 1, 'splurger');
+  return facility.type === 'shop'
+    ? [`Spend/visit:    ${formatMoney(each)} for one or two (big spenders ${formatMoney(big)}; thrifty guests don't shop)`]
+    : [`Spend/visit:    ${formatMoney(each)} a table for one or two (big spenders ${formatMoney(big)}; thrifty guests eat out)`];
+}
+
+/** How a guest spends, for their card: "Big spender: spent $84 here this stay (restaurant $60, shop $24)", and what it makes them mind. */
+function describeSpending(guest: Guest): string[] {
+  const total = spentHere(guest);
+  const parts = [
+    guest.spent?.restaurant ? `restaurant ${formatMoney(guest.spent.restaurant)}` : '',
+    guest.spent?.shop ? `shop ${formatMoney(guest.spent.shop)}` : '',
+  ].filter(Boolean);
+  switch (spendingOf(guest)) {
+    case 'splurger':
+      return [total > 0 ? `Big spender: spent ${formatMoney(total)} here this stay (${parts.join(', ')})` : 'Big spender: nothing spent here yet', 'Notices the amenities, and tired decor'];
+    case 'thrifty': {
+      const n = guest.dinnersOut?.count ?? 0;
+      return [`Watches the pennies: no shop, eats in town${n > 0 ? ` (out to dinner ${n} night${n === 1 ? '' : 's'})` : ''}`, 'Minds a high price more than the frills'];
+    }
+    default:
+      return total > 0 ? [`Spent ${formatMoney(total)} here this stay`] : [];
+  }
+}
 
 /** The inspector for whatever's selected on the grid, if anything. */
 export function Inspector() {
@@ -279,6 +309,7 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
       <TileCard tile={anchor} title={PartyLabel({ id: guestId, name: walker.name ?? 'Guest', party: walker.party })}>
         <div class="small">{walker.reason === 'walked_out' ? 'Checked out early' : 'Checked out'}, on their way out.</div>
         {booking && <div class="small">Their review: {booking.reviewScore.toFixed(1)}/10</div>}
+        {walker.spent ? <div class="small">Spent {formatMoney(walker.spent)} here</div> : null}
       </TileCard>
     );
   }
@@ -310,8 +341,9 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
     ...(complained ? [complained] : []),
     ...(guest.profile ? [describeRhythm(guest, state)] : []),
     ...describeTemperament(guest),
-    // Without a profile (an older save), what the trait says
-    ...(guest.profile ? (guest.trait === 'big_spender' ? ['Big spender'] : []) : guestTags(guest).map(capitalize)),
+    // How they spend (without a profile -- an older save -- what the trait says)
+    ...(!guest.profile ? (spendingOn() ? [...guestTags(guest).filter(t => t !== 'big spender').map(capitalize), ...describeSpending(guest)] : guestTags(guest).map(capitalize))
+      : spendingOn() ? describeSpending(guest) : guest.trait === 'big_spender' ? ['Big spender'] : []),
   ];
   return (
     <TileCard tile={anchor} title={PartyLabel(guest)}>
@@ -372,7 +404,7 @@ function FacilityInspector({ facility, state }: { facility: Facility; state: Hot
           ...(popularWith(facility.type).length > 0 ? [`Popular with:   ${popularWith(facility.type).join(', ')}`] : []),
           ...(GUEST_FAVORITES.enabled ? [`Fans staying:   ${state.guests.filter(g => favoriteOf(g) === facility.type).length}`] : []),
           ...(turnedBack ? [`Turned back today: ${turnedBack}`] : []),
-          ...(config.spendPerVisit > 0 ? [`Spend/visit:    ${formatMoney(config.spendPerVisit * level.revenueMult)}`] : []),
+          ...(spendingOn() ? spendLines(facility) : config.spendPerVisit > 0 ? [`Spend/visit:    ${formatMoney(config.spendPerVisit * level.revenueMult)}`] : []),
           `Operating cost: ${formatMoney(operating)}/day`,
           `Decor:          ${facility.decor.toFixed(0)}%${facility.decor < DECOR.freshThreshold ? ' (stale)' : ''}`,
           ...(isFacilityOpen(state, facility) ? [] : ['Door blocked: guests can\'t get in!']),

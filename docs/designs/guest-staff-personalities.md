@@ -867,3 +867,68 @@ Patience with the front desk queue, and Voice with complaint trips, behind two s
   - A complaint in person isn't an incident (no grace period, nothing escalates), and the night's calls are as before.
   - The Staff panel's check-in capacity doesn't count the clerks' time spent on complaints.
   - A concierge reading stoic guests waits for Specialty (phase 5).
+
+### Phase 3a as shipped (2026-10-14)
+
+Spending style, behind one switch, `SPENDING` (it needs guest profiles). With it off the game is the committed game exactly: a fourth pinned run in `test/preferences.test.ts` (160 days, long enough for the balanced bot's restaurant) and 400-day runs of all four bots match ca7ad40 seed for seed. Spotlight guests and event-goers follow as 3b.
+
+- **Who spends how.** A big spender (the legacy trait, 20%, drawn from the shared random stream as ever) splurges; of everyone else, 3 in 8 are thrifty (30% of guests), hashed from the booking; the rest spend as before. No star lean: the doc's 5 more splurgers a star above 2 was worth +19% to +68% valuation on its own. So every splurger is a big spender, and every rule keyed to that trait (outings, liking deluxe rooms) stays right. A returning guest spends as they did; one first here before 3a gets a roll now. A thrifty guest is never a fan of the shop or restaurant, not even one remembered from before 3a.
+- **Budget and price.** Thrifty guests have 0.7x to spend, and go only half as far over a fair price: at most 1.4x, against 1.8x for most and 2.2x for big spenders. The same random draws, only scaled: 3a adds no draws.
+- **A big spender's room.** Of the rooms they'd take at all, the best that suits them, at no more than their price tolerance over the cheapest that would do:
+  - first a room with no beds they'd pay for and not use (a couple never takes the family room a family needs, nor twin beds);
+  - then the best type, then the highest floor, then the cheaper.
+  - Uncapped, half of them took suites and the cash-limited bots gained up to 55%.
+  - A regular still asks for their old room first; at the desk the first in line gets the suite.
+  - Everyone else takes the cheapest room they'll pay for, as ever.
+- **Money on site.** The restaurant now charges: $12 a table for one or two (+30% a head beyond, x the restaurant's level revenue), so it roughly pays for itself. The shop as before. Big spenders pay twice as much (three times at the shop when delighted); thrifty guests nothing. Each sale is rounded to the dollar and goes at once to cash, the guest's tally and the hotel's takings.
+  - **Takings count as revenue** (`SPENDING.onSiteIsRevenue`): in the Finance panel, in valuation (30 days' revenue x 6) and in "A Good Month", as room bills do. Shop sales used to be cash only, an inconsistency 3a would have grown. Kept as cash only, the cash-limited bots read about 3-7 points lower (the design panel's estimate). Set it false to measure the old way.
+- **Thrifty guests.**
+  - **No shop or restaurant:** in an hour their pick is one of those, they stay in. The other facilities' rolls are untouched. Letting them take the gym or pool instead had the cash-limited bots gain up to 9%, and failed the staffing gate on seeds 6-11.
+  - **Dinner in town:** in their evening (18:00-20:00 for a regular, two hours earlier for an early bird, two later for a night owl), half the time, out to the street, an hour or two in town, back in their room by 22:00 (shifted alike). Once a day; not on their last day, nor the night their friends come round. Counted on their card once they're out. No mood credit, as with the 1b outings.
+- **Reviews.** A thrifty guest minds being overcharged 1.5x as much (on what an overpriced room falls short by; priced under fair, as anyone). Amenities count 0.8x for thrifty guests and 1.1x for big spenders (the amenity penalty alike); big spenders mind tired decor 1.1x. The doc's 0.5x and 1.2-1.3x averaged about 1 but spread reviews wider: about a quarter more fell under the line where a bad review spreads, the 2b stoic lesson again. The review stores the price fairness as the guest felt it, so the story names the cause they felt. The overcharge weight is not a lever against overpricing: a thrifty guest past their tolerance doesn't book at all.
+- **On screen.**
+  - A pale green "$" over big spenders (after the moon and the note; they never clash, as all three come from the one trait roll), and in the legend.
+  - The guest card: "Big spender: spent $84 here this stay (restaurant $60, shop $24)" and "Notices the amenities, and tired decor"; "Watches the pennies: no shop, eats in town (out to dinner 2 nights)" and "Minds a high price more than the frills"; anyone else "Spent $26 here this stay". A leaving guest's card: "Spent $84 here". The room card tags "big spender" or "thrifty".
+  - The facility card: "Spend/visit: $12 a table for one or two (big spenders $24; thrifty guests eat out)", and the shop's alike.
+  - The Finance panel: "Revenue, last 30 days: $32,816 (rooms $30,727, on site $2,089)", then "On site: restaurant $X, shop $Y · 44% from big spenders".
+  - The story: "Malik ran up a $210 restaurant tab." A big tab for the restaurant's level, the day's first only; not an incident.
+- **Balance** (400 days, mean valuation, paired by seed; balanced 36 seeds, the others 24):
+
+  | Bot | 3a off | 3a on |
+  |---|---|---|
+  | Balanced (36 seeds) | $4.35M | $4.20M (-3.4%) |
+  | Overstaffed (24) | $3.06M | $3.15M (+3.2%) |
+  | Understaffed (24) | $2.69M | $2.76M (+2.6%) |
+  | Hoarder (24) | $1.38M | $1.38M (+0.4%) |
+
+  - Standard errors of the paired differences: 1.9 / 4.2 / 3.8 / 2.4 points, so only the balanced bot's cost is clearly real. The order holds and nobody goes bankrupt. The 3a-off figures are ca7ad40's: the housekeeping rebalance there moved the bots (overstaffed $4.41M at 2b, $3.06M now).
+  - The staffing gate (housekeeping.test.ts) holds in every six-seed block: balanced beats understaffed by 1.53-1.73x (needs 1.5) and overstaffed by 1.23-1.47x (needs 1.15).
+  - First sweep (the doc's review weights, thrifty guests taking the gym or pool instead): -5.9% / +2.1% / -5.3% / +3.7%, with the staffing gate failing on seeds 6-11.
+  - In a balanced-bot hotel (4 seeds x 400 days): check-ins are 28% big spenders, 52% standard, 19% thrifty (thrifty guests are 30% of arrivals, but turned away on price more). Big spenders have 69% of suite stays (a suite is 10% of stays either way), thrifty guests none. 0.59 dinners in town per thrifty stay. On-site takings are 4.2% of revenue. A big tab makes the story on about one day in nine with a restaurant. Mean review 7.54 -> 7.65; reviews under 3.0: 0.86% -> 0.87%.
+
+- **Review.** Two adversarial rounds, each reviewer's finding checked by a skeptic.
+  - **The first** (5 reviewers) confirmed 12 distinct problems, all fixed or written up:
+    - the review weights fattened the tail of bad reviews (softened);
+    - the staffing gate passed only on its own seeds (the skip variant and the softer weights pass every six-seed block);
+    - a couple took a twin junior suite as a snug fit;
+    - the dinner skip for a hosting night also caught early birds, and applied with hosted nights off;
+    - a dinner was counted when planned, not when the guest got out;
+    - the tab story claimed the day's biggest but told the first;
+    - the restaurant card's "per cover" was a table's price;
+    - the Finance panel showed negative room revenue on the first day, and misread with takings left out of revenue;
+    - test gaps (the shop card, levels, the 30-day baseline, the "$" drawing, the amenity penalty weight, the purpose in the dinner chance);
+    - and the thrifty overcharge weight is no counter to overpricing (noted above).
+  - Five findings were refuted, among them that thrifty guests' dinners rarely happen in big hotels.
+  - Four lower-severity findings were fixed without a skeptic: an older save's guest showing no spending, a stray doc comment, a false "staff jump" in alignment check B when the hour boundary falls on a lift ride, and the review weights showing nowhere a player reads (now on the card).
+  - **The second** (3 reviewers, on the fixes) confirmed 8 more, all fixed, and 2 more fixed without a skeptic; none refuted:
+    - the shop and restaurant lines quoted a party of one or two as if it were any table;
+    - on the first day the Finance panel showed $0 for the month while the shop's takings were already revenue;
+    - an older save's big spender showed no "what they mind" line;
+    - with the switch off, the separate-beds advice read "most book" (now as before: the off game matches ca7ad40 to the word);
+    - alignment check B's lift exception was broader than the one ride it's for (narrowed; it never fires in practice);
+    - test gaps: the skip itself, a returning guest who isn't thrifty, the thrifty-visit gate, a stale test title.
+  - 64 of 64 mutations caught (every rule above broken in turn).
+- **Not done from 3a:**
+  - The doc's "Who stays" table and the room card's recent stays (to read "my price chooses who comes" at a glance).
+  - Prices by meal at the restaurant, and a kitchen cost.
+  - The bots price every room at fair, so they can't use the new levers (price suites near deluxe to catch big spenders; price standard rooms up to turn thrifty guests away).

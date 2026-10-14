@@ -13,11 +13,14 @@ import { isEntranceTile } from '../src/simulation/Layout.js';
 import { partyOf, partyLoad } from '../src/simulation/Party.js';
 import { guestFigures } from '../src/render/figures.js';
 import { STAFF, TRAVEL } from '../src/config/balance.js';
-import type { HotelState, Leg } from '../src/simulation/types.js';
+import type { HotelState, Leg, OnSiteTakings } from '../src/simulation/types.js';
 import { guestPace } from '../src/simulation/Profile.js';
 import { housekeepingPrefOf } from '../src/simulation/CleaningPreference.js';
 import { patienceHours, readyAt } from '../src/simulation/DeskQueue.js';
-import { isSleepHour } from '../src/simulation/Profile.js';
+import { isSleepHour, activityHour, activityOffset } from '../src/simulation/Profile.js';
+import { spendingOf, spentHere } from '../src/simulation/Spending.js';
+import { isCheckoutDay } from '../src/simulation/GuestManager.js';
+import { hostsTonight } from '../src/simulation/Visitors.js';
 import { isGuestAway, checkInLanes } from '../src/simulation/GuestMovement.js';
 
 function contiguous(legs: Leg[]): boolean {
@@ -43,6 +46,9 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
   let queued = 0;
   let gaveUp = 0;
   let complaintTrips = 0;
+  let charges = 0;
+  let dinners = 0;
+  let thriftyTrips = 0;
   for (const seed of [1, 2]) {
     let s: HotelState = createStarterHotel();
     // Doubles, and rooms for friends and families, so parties of every size stay
@@ -179,6 +185,56 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
         const g = after.guests.find(x => x.id === e.data?.guestId);
         if (!g?.complaint?.at || g.complaint.at >= T1v - 1e-9) bad('heard before they got to the desk', String(e.data?.guestId));
       }
+      // S: money follows the visits: a guest's spending grows only when they've got to a shop or restaurant this
+      // hour (never a thrifty guest), and the hotel's takings by exactly what its guests spent, those leaving included
+      let spentNow = 0;
+      for (const g of before.guests) {
+        const now = after.guests.find(x => x.id === g.id);
+        const left = now ? undefined : (after.walkers ?? []).find(w => w.guestId === g.id);
+        const was = spentHere(g);
+        const is = now ? spentHere(now) : left ? left.spent ?? 0 : was;
+        if (is < was - 1e-9) bad('spending went down', g.id);
+        if (is <= was + 1e-9) continue;
+        charges++;
+        spentNow += is - was;
+        const reached = (g.trip ?? []).some(l => l.kind === 'stay' && l.activity === 'visit' && !l.credited && l.start < T1v
+          && ['shop', 'restaurant'].includes(before.facilities.find(f => f.id === l.placeId)?.type ?? ''));
+        if (!reached) bad('charged without a visit', g.id);
+        if (spendingOf(g) === 'thrifty') bad('a thrifty guest charged', g.id);
+      }
+      // ... and everyone else who got to one this hour paid
+      for (const g of before.guests) {
+        if (spendingOf(g) === 'thrifty') continue;
+        const paid = (g.trip ?? []).some(l => l.kind === 'stay' && l.activity === 'visit' && !l.credited && l.start < T1v
+          && ['shop', 'restaurant'].includes(before.facilities.find(f => f.id === l.placeId)?.type ?? ''));
+        if (!paid) continue;
+        const now = after.guests.find(x => x.id === g.id);
+        const left = now ? undefined : (after.walkers ?? []).find(w => w.guestId === g.id);
+        if ((now ? spentHere(now) : left?.spent ?? 0) <= spentHere(g) + 1e-9) bad('went to the shop or restaurant and paid nothing', g.id);
+      }
+      const takings = (o?: OnSiteTakings) => (o?.shop ?? 0) + (o?.restaurant ?? 0);
+      if (Math.abs(takings(after.onSite) - takings(before.onSite) - spentNow) > 1e-6) bad('takings differ from what guests spent', `${takings(after.onSite) - takings(before.onSite)} vs ${spentNow}`);
+      // T: a thrifty guest never goes to the shop or the restaurant
+      for (const g of after.guests) {
+        if (spendingOf(g) !== 'thrifty' || !g.trip || g.trip[0].start < T1v - 1e-9) continue;
+        if (g.tripKind === 'visit') thriftyTrips++;
+        if (g.trip.some(l => l.kind === 'stay' && l.activity === 'visit' && ['shop', 'restaurant'].includes(after.facilities.find(f => f.id === l.placeId)?.type ?? ''))) bad('a thrifty guest at the shop or restaurant', g.id);
+      }
+      // U: a thrifty guest's dinner in town: set off in their evening (18:00-20:00 by their clock), at least an hour
+      // out, back in their room by 22:00 by their clock, awake all the way, not on their last day or a night with friends round
+      for (const g of after.guests) {
+        if (spendingOf(g) !== 'thrifty' || g.tripKind !== 'outing' || !g.trip || g.trip[0].start < T1v - 1e-9) continue;
+        const away = g.trip.find(l => l.kind === 'stay' && l.activity === 'away') as (Leg & { out?: string }) | undefined;
+        if (!away || away.out !== 'dinner') continue;
+        dinners++;
+        const h = activityHour(g, after.hour);
+        if (h < 18 || h >= 20) bad('dinner out of their evening', `${g.id} ${h}`);
+        if (away.end - away.start < 1 - 1e-9) bad('dinner under an hour', g.id);
+        if (legsEnd(g.trip) > (after.day - 1) * 24 + 22 + activityOffset(g) + 1e-9) bad('back from dinner late', g.id);
+        for (let hh = Math.floor(g.trip[0].start); hh <= Math.floor(legsEnd(g.trip) - 1e-9); hh++) if (isSleepHour(g, ((hh % 24) + 24) % 24)) bad('out to dinner in their sleep hours', g.id);
+        if (isCheckoutDay(g, after.day)) bad('dinner on their last day', g.id);
+        if (hostsTonight(g, after.day)) bad('dinner on a night with friends round', g.id);
+      }
       // M: visitors walk in from the street, and are drawn in a room only while it's their host's and the host is in
       for (const w of after.walkers ?? []) {
         if (w.reason !== 'visitor') continue;
@@ -217,7 +273,10 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
         const goneEnd = it.legs.length > 0 && legsEnd(it.legs) <= T + 1 && !it.end.at;
         const notYet = nx.legs.length > 0 && nx.legs[0].start > T + 1 + 1e-6;
         if (endPos && startPos && !goneEnd && !notYet) {
-          if (Math.abs(endPos.x - startPos.x) > 0.6 || Math.abs(endPos.y - startPos.y) > 0.6 || endPos.floor !== startPos.floor) bad('staff jumps at the hour boundary', `${it.staffId} ${JSON.stringify([endPos.x, endPos.y, endPos.floor])} -> ${JSON.stringify([startPos.x, startPos.y, startPos.floor])}`);
+          // (the same lift ride, carried over, changing floor at the very boundary: one ride, not a jump)
+          const sameRide = endPos.leg.kind === 'walk' && startPos.leg.kind === 'walk' && endPos.leg.start === startPos.leg.start && endPos.leg.path.length === startPos.leg.path.length;
+          const inLift = sameRide && Math.abs(endPos.x - startPos.x) < 1e-6 && Math.abs(endPos.y - startPos.y) < 1e-6 && after.elevators.some(e => e.gridX === Math.round(endPos.x) && e.gridY === Math.round(endPos.y));
+          if (Math.abs(endPos.x - startPos.x) > 0.6 || Math.abs(endPos.y - startPos.y) > 0.6 || (endPos.floor !== startPos.floor && !inLift)) bad('staff jumps at the hour boundary', `${it.staffId} ${JSON.stringify([endPos.x, endPos.y, endPos.floor])} -> ${JSON.stringify([startPos.x, startPos.y, startPos.floor])}`);
         }
       }
       // E/G: guest trips
@@ -309,5 +368,8 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
   expect(queued).toBeGreaterThan(20); // people waited their turn at the desk
   expect(gaveUp).toBeGreaterThan(0); // and some gave up
   expect(complaintTrips).toBeGreaterThan(3); // and some walked down to complain
+  expect(charges).toBeGreaterThan(1500); // guests spent money at the shop and the restaurant
+  expect(dinners).toBeGreaterThan(200); // thrifty guests ate in town
+  expect(thriftyTrips).toBeGreaterThan(300); // (and went to the gym and pool)
   expect(problems, JSON.stringify(examples)).toEqual({});
 }, 300000);

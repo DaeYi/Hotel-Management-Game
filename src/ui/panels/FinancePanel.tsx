@@ -1,4 +1,6 @@
-import type { DailyStat } from '../../simulation/types';
+import type { DailyStat, OnSiteTakings } from '../../simulation/types';
+import { SPENDING } from '../../config/balance';
+import { spendingOn } from '../../simulation/Spending';
 import { calculateValuation, getRecentRevenue } from '../../simulation/ObjectivesManager';
 import { useController } from '../context';
 import { formatMoney, formatMoneyShort } from '../format';
@@ -12,6 +14,20 @@ const PAD = { left: 30, right: 18, top: 10, bottom: 14 };
 /** Revenue earned each day, from the cumulative end-of-day snapshots (the first day has no prior snapshot). */
 function dailyRevenue(stats: DailyStat[]): number[] {
   return stats.slice(1).map((s, i) => s.totalRevenue - stats[i].totalRevenue);
+}
+
+/**
+ * The shop and restaurant takings over the last 30 days, from the cumulative
+ * end-of-day snapshots (from zero where there's none that far back: a save
+ * from before spending styles), and the room bills the rest of the revenue.
+ */
+function recentOnSite(stats: DailyStat[], now: OnSiteTakings | undefined, revenue: number) {
+  if (!now) return null;
+  const before = (stats.length > DAYS ? stats[stats.length - DAYS - 1].onSite : undefined) ?? { shop: 0, restaurant: 0, splurgers: 0 };
+  const shop = now.shop - before.shop;
+  const restaurant = now.restaurant - before.restaurant;
+  const total = shop + restaurant;
+  return { shop, restaurant, total, splurgers: now.splurgers - before.splurgers, rooms: SPENDING.onSiteIsRevenue ? revenue - total : revenue };
 }
 
 /** Polyline points for values scaled into the plot area, right-aligned to the last DAYS days. */
@@ -30,6 +46,9 @@ export function FinancePanel() {
   const reviews = recent.slice(-revenue.length).map(s => s.reviewScore).filter((r): r is number => r !== undefined);
   const maxRevenue = Math.max(1, ...revenue);
   const plotH = H - PAD.top - PAD.bottom;
+  // (before the first day is recorded, the revenue so far: on-site takings can come in on the first day)
+  const month = state.dailyStats.length === 0 ? state.totalRevenue : getRecentRevenue(state, 30);
+  const onSite = spendingOn() ? recentOnSite(state.dailyStats, state.onSite, month) : null;
 
   return (
     <PanelCard title="FINANCE: LAST 30 DAYS">
@@ -51,7 +70,16 @@ export function FinancePanel() {
         <span class="gold">{'—'} Review score</span>
       </div>
       <hr class="divider" />
-      <div class="body small">Revenue, last 30 days: {formatMoney(getRecentRevenue(state, 30))}</div>
+      <div class="body small">
+        Revenue, last 30 days: {formatMoney(month)}
+        {onSite && (SPENDING.onSiteIsRevenue ? ` (rooms ${formatMoney(onSite.rooms)}, on site ${formatMoney(onSite.total)})` : ` (rooms; on site ${formatMoney(onSite.total)} more)`)}
+      </div>
+      {onSite && onSite.total > 0 && (
+        <div class="body small" aria-label="On-site takings">
+          On site: {[onSite.restaurant > 0 ? `restaurant ${formatMoney(onSite.restaurant)}` : '', onSite.shop > 0 ? `shop ${formatMoney(onSite.shop)}` : ''].filter(Boolean).join(', ')}
+          {' \u00b7 '}{Math.round(onSite.splurgers / onSite.total * 100)}% from big spenders
+        </div>
+      )}
       <div class="body small">Total revenue: {formatMoney(state.totalRevenue)}</div>
       <div class="body small">Hotel worth: {formatMoneyShort(calculateValuation(state))}</div>
     </PanelCard>

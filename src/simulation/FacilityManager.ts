@@ -1,5 +1,6 @@
 import type { HotelState, Guest, Facility, FacilityType, Leg } from './types.js';
-import { FACILITY_CONFIG, FACILITY_LEVELS, FACILITY_VISITS, TRAVEL, GUEST_PROFILE, GUEST_FAVORITES, MOOD } from '../config/balance.js';
+import { FACILITY_CONFIG, FACILITY_LEVELS, FACILITY_VISITS, TRAVEL, GUEST_PROFILE, GUEST_FAVORITES, MOOD, SPENDING } from '../config/balance.js';
+import { spendingOn, spendingOf, saleFor } from './Spending.js';
 import { findRoute, getOpenFacilities } from './Layout.js';
 import { getCurrentSeason } from './SeasonManager.js';
 import { hourStart, makeWalk, makeStay, isUnderway, hash01 } from './Movement.js';
@@ -147,6 +148,9 @@ export function planFacilityVisits(state: HotelState): HotelState {
       if (u < p && (!best || u / p < best.score)) best = { type, score: u / p };
     }
     if (!best) continue;
+    // A thrifty guest pays for nothing here: set on the shop or the restaurant this hour, they stay in
+    // (handing the hour to the gym or pool instead had the cash-limited bots gain up to 9%)
+    if ((best.type === 'shop' || best.type === 'restaurant') && spendingOf(guest) === 'thrifty') continue;
     if (!openTypes.includes(best.type)) {
       // Their favourite isn't here: a letdown once the hotel's stars allow one; a swimmer heads for
       // the beach and a foodie out to dinner instead
@@ -259,10 +263,15 @@ function mayGoAgain(guest: Guest, type: FacilityType, day: number, T: number): b
 export function creditFacilityVisits(state: HotelState, t: number): HotelState {
   let cash = state.cash;
   let changed = false;
+  // With spending styles on: what each guest spends, in whole dollars, kept with them and in the day's takings
+  const money = spendingOn();
+  let onSite = state.onSite ?? { shop: 0, restaurant: 0, splurgers: 0 };
+  let takings = 0;
   const guests = state.guests.map(g => {
     if (!g.trip?.some(l => l.kind === 'stay' && l.activity === 'visit' && !l.credited && l.start < t)) return g;
     let facilitiesUsed = g.facilitiesUsed;
     let satisfaction = g.satisfaction;
+    let spent = g.spent;
     const trip = g.trip.map(l => {
       if (l.kind !== 'stay' || l.activity !== 'visit' || l.credited || l.start >= t) return l;
       const f = state.facilities.find(x => x.id === l.placeId);
@@ -276,16 +285,29 @@ export function creditFacilityVisits(state: HotelState, t: number): HotelState {
         facilitiesUsed = { ...facilitiesUsed, [f.type]: { level: Math.max(used?.level ?? 0, f.level), day, ...count } };
         // A delighted guest spends more at the shop
         const splurge = MOOD.enabled && guestMood({ satisfaction }) === 'delighted' && f.type === 'shop' ? MOOD.delightedShopMult : 1;
-        cash += FACILITY_CONFIG[f.type].spendPerVisit * FACILITY_LEVELS[f.level - 1].revenueMult * perPersonFactor(partySize(g)) * splurge;
+        if (!money) cash += FACILITY_CONFIG[f.type].spendPerVisit * FACILITY_LEVELS[f.level - 1].revenueMult * perPersonFactor(partySize(g)) * splurge;
+        else if (f.type === 'shop' || f.type === 'restaurant') {
+          const style = spendingOf(g);
+          const sale = saleFor(f.type, f.level, partySize(g), style, splurge);
+          if (sale > 0) {
+            cash += sale;
+            takings += sale;
+            spent = { shop: spent?.shop ?? 0, restaurant: spent?.restaurant ?? 0 };
+            spent[f.type] += sale;
+            onSite = { ...onSite, [f.type]: onSite[f.type] + sale, splurgers: onSite.splurgers + (style === 'splurger' ? sale : 0) };
+          }
+        }
         // Enjoying it lifts their mood, their favourite most
         if (GUEST_FAVORITES.enabled) satisfaction = Math.min(100, satisfaction + (fan ? GUEST_FAVORITES.favoriteVisitMood : GUEST_FAVORITES.visitMood));
       }
       return { ...l, credited: true };
     });
     changed = true;
-    return { ...g, trip, facilitiesUsed, satisfaction };
+    return { ...g, trip, facilitiesUsed, satisfaction, ...(spent ? { spent } : {}) };
   });
-  return changed ? { ...state, guests, cash } : state;
+  if (!changed) return state;
+  if (!money || takings === 0) return { ...state, guests, cash };
+  return { ...state, guests, cash, onSite, ...(SPENDING.onSiteIsRevenue ? { totalRevenue: state.totalRevenue + takings } : {}) };
 }
 
 /**

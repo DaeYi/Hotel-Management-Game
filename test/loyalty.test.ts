@@ -14,7 +14,7 @@ import { ToastQueue } from '../src/game/ToastQueue.js';
 import { guestFigures } from '../src/render/figures.js';
 import { hourStart, makeStay } from '../src/simulation/Movement.js';
 import { PRNG } from '../src/simulation/prng.js';
-import { GUEST_FAVORITES, LOYALTY, MOOD, SATISFACTION, FACILITY_CONFIG, FACILITY_LEVELS, FACILITY_VISITS, STORY } from '../src/config/balance.js';
+import { GUEST_FAVORITES, LOYALTY, MOOD, SATISFACTION, FACILITY_CONFIG, FACILITY_LEVELS, FACILITY_VISITS, STORY, SPENDING } from '../src/config/balance.js';
 import type { Booking, Guest, GuestProfile, HotelState, Leg, Party, PartyKind, ReturningGuestProfile, FacilityType } from '../src/simulation/types.js';
 
 const P = (kind: PartyKind, size: number): Party => ({ kind, size });
@@ -50,7 +50,14 @@ describe('Favourite facilities', () => {
       for (let i = 0; i < 4000; i++) if (rollProfile(`g${i}`, party, purpose, 'normal')!.favorite === f) n++;
       return n / 4000;
     };
-    expect(share(P('solo', 1), 'sightseeing', 'none')).toBeCloseTo(0.55, 1);
+    SPENDING.enabled = false;
+    try { expect(share(P('solo', 1), 'sightseeing', 'none')).toBeCloseTo(0.55, 1); } finally { SPENDING.enabled = true; }
+    // A thrifty guest is never a fan of what they won't pay for: more have none
+    for (let i = 0; i < 4000; i++) {
+      const p = rollProfile(`g${i}`, P('solo', 1), 'sightseeing', 'normal')!;
+      if (p.spending === 'thrifty') expect(['shop', 'restaurant']).not.toContain(p.favorite);
+    }
+    expect(share(P('solo', 1), 'sightseeing', 'none')).toBeGreaterThan(0.6);
     expect(share(P('business', 1), 'business', 'gym')).toBeGreaterThan(share(P('solo', 1), 'sightseeing', 'gym'));
     expect(share(P('family', 4), 'sightseeing', 'pool')).toBeGreaterThan(share(P('solo', 1), 'sightseeing', 'pool'));
     expect(share(P('business', 1), 'business', 'pool')).toBe(0);
@@ -295,7 +302,7 @@ describe('Loyalty', () => {
     let s = { ...hotel([]), day: 30, hour: 15, staff: { ...createStarterHotel().staff, frontDesk: 6 } };
     for (let x = 0; x < 4; x++) s = addRoom(s, 'standard', x + 3, 2, 0, 'up')!;
     const old = s.rooms[2];
-    const me: GuestProfile = { ...PROFILE, chronotype: 'night', favorite: 'gym', housekeeping: 'makeup', patience: 'patient', voice: 'stoic' };
+    const me: GuestProfile = { ...PROFILE, chronotype: 'night', favorite: 'gym', housekeeping: 'makeup', patience: 'patient', voice: 'stoic', spending: 'thrifty' };
     s = { ...s, returningGuestPool: [{ name: 'Mei', trait: 'normal', roomType: old.type, personId: 'mei', stays: 2, profile: me, lastRoomId: old.id, lastReview: 8, dueDay: 20 }] };
     let back: Guest | undefined;
     let roomId = '';

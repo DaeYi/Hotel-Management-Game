@@ -195,6 +195,7 @@ export function recordDailyStat(state: HotelState): HotelState {
     reviewScore: state.reviewScore,
     // Guests let down by a facility today (favourites)
     ...(state.facilityDemand?.day === state.day ? { wanted: state.facilityDemand.wanted, full: state.facilityDemand.full, tooFar: state.facilityDemand.tooFar } : {}),
+    ...(state.onSite ? { onSite: { ...state.onSite } } : {}),
   };
   return {
     ...state,

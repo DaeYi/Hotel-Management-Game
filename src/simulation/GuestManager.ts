@@ -1,7 +1,7 @@
 import type { Guest, GuestTrait, Room, HotelState, Booking, GameEvent, ReturningGuestProfile, PartyKind } from './types.js';
 import type { PRNG } from './prng.js';
 import { cleanlinessTerm } from './CleaningPreference.js';
-import { ECONOMY, GUEST_TRAITS, REVIEW, STAFF, AMENITIES, GUEST_NAMES, SATISFACTION, STORY, PARTIES, GUEST_PROFILE, LOYALTY, GUEST_FAVORITES, FACILITY_CONFIG, VOICE } from '../config/balance.js';
+import { ECONOMY, GUEST_TRAITS, REVIEW, STAFF, AMENITIES, GUEST_NAMES, SATISFACTION, STORY, PARTIES, GUEST_PROFILE, LOYALTY, GUEST_FAVORITES, FACILITY_CONFIG, VOICE, SPENDING } from '../config/balance.js';
 import { getDecorReviewPenalty } from './DecorManager.js';
 import { getCampaignDemandMultiplier } from './MarketingManager.js';
 import { getCheckInCapacity } from './Layout.js';
@@ -9,7 +9,8 @@ import { getAvailableRooms, getElevatorWaitPenalty } from './HotelState.js';
 import { facilityReviewBonus } from './FacilityManager.js';
 import { reviewNoisePenalty } from './NoiseManager.js';
 import { getExpectationMultiplier, getPartyFairPrice, getPriceMultiplier, getStarDemandMultiplier } from './StarRatingManager.js';
-import { profileRoom, fitsParty } from './RoomProfile.js';
+import { profileRoom, fitsParty, classPriceFactor, partyPriceFactor } from './RoomProfile.js';
+import { spendingOn, spendingOf } from './Spending.js';
 import { partyOf, rollParty, withParty, smallerParty, partyLabel, PartyLabel, describeParty, numberWord, sharesBeds } from './Party.js';
 import { hash01 } from './Movement.js';
 import { queueOn, lanesOf, deskArrivalTimes, laneBookings, quoteLane, book, patienceHours } from './DeskQueue.js';
@@ -131,9 +132,12 @@ export function getExpectedArrivalsPerDay(state: HotelState): number {
  * can afford, and that they consider worth the price: no more than
  * `priceTolerance` x what the room is worth to them at the hotel's current
  * star level (getPartyFairPrice -- a family room is only a double to a couple).
+ * A big spender (spending styles on) takes the best of those instead: see
+ * bestRoomFor.
  */
 export function matchGuestToRoom(guest: Guest, availableRooms: Room[], priceTolerance: number, starRating: number): Room | null {
   const party = partyOf(guest);
+  if (spendingOf(guest) === 'splurger') return bestRoomFor(guest, availableRooms, priceTolerance, starRating);
   for (const room of availableRooms) {
     if (!fitsParty(profileRoom(room), party)) continue;
     const fairPrice = getPartyFairPrice(room, party, starRating);
@@ -142,6 +146,41 @@ export function matchGuestToRoom(guest: Guest, availableRooms: Room[], priceTole
     }
   }
   return null;
+}
+
+const TYPE_RANK: Record<string, number> = { standard: 0, deluxe: 1, suite: 2 };
+
+/**
+ * A big spender's room: of the rooms they'd take at all, the best that suits
+ * them -- no beds they'd pay for and not use (so a couple never takes the
+ * family room a family needs), then the best type, then the highest floor,
+ * then the cheaper -- at no more than their tolerance over the cheapest that
+ * would do (SPENDING.tradeUpCap). Ties keep the list's order.
+ */
+function bestRoomFor(guest: Guest, availableRooms: Room[], priceTolerance: number, starRating: number): Room | null {
+  const party = partyOf(guest);
+  const ok = availableRooms.filter(room => fitsParty(profileRoom(room), party) && room.pricePerNight <= guest.budget
+    && room.pricePerNight <= getPartyFairPrice(room, party, starRating) * priceTolerance);
+  if (ok.length === 0) return null;
+  const cap = Math.min(...ok.map(r => r.pricePerNight)) * priceTolerance * SPENDING.tradeUpCap;
+  const sharing = party.kind === 'couple' || party.kind === 'family';
+  const rank = (room: Room): number[] => {
+    const profile = profileRoom(room);
+    const snug = partyPriceFactor(profile, party) === classPriceFactor(profile) && !(sharing && profile.layoutClass === 'twin');
+    return [snug ? 1 : 0, TYPE_RANK[profile.type] ?? 0, room.floor, -room.pricePerNight];
+  };
+  const above = (a: number[], b: number[]) => {
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] > b[i];
+    return false;
+  };
+  let best: Room | null = null;
+  let bestRank: number[] = [];
+  for (const room of ok) {
+    if (room.pricePerNight > cap + 1e-9) continue;
+    const r = rank(room);
+    if (!best || above(r, bestRank)) { best = room; bestRank = r; }
+  }
+  return best;
 }
 
 /** Whether any of these rooms would take this party at all (whatever it costs). */
@@ -239,6 +278,11 @@ function announceArrival(result: ArrivalResult, guest: Guest, room: Room, wanted
   }
 }
 
+/** How far over a fair price a guest may go, against anyone else: a thrifty guest half as far, a big spender half as far again. */
+function toleranceMult(guest: Guest): number {
+  return SPENDING.toleranceMult[spendingOf(guest)];
+}
+
 export function processArrivals(
   state: HotelState,
   hour: number,
@@ -308,7 +352,16 @@ export function processArrivals(
       const housekeeping = pulled.profile.housekeeping ?? guest.profile.housekeeping;
       const patience = pulled.profile.patience ?? guest.profile.patience;
       const voice = pulled.profile.voice ?? guest.profile.voice;
-      guest = { ...guest, profile: { ...pulled.profile, rowdiness, ...(housekeeping ? { housekeeping } : {}), ...(patience ? { patience } : {}), ...(voice ? { voice } : {}) } };
+      const spending = pulled.profile.spending ?? guest.profile.spending;
+      guest = { ...guest, profile: { ...pulled.profile, rowdiness, ...(housekeeping ? { housekeeping } : {}), ...(patience ? { patience } : {}), ...(voice ? { voice } : {}), ...(spending ? { spending } : {}) } };
+      // Someone first here before spending styles, thrifty now: no longer a fan of what they won't pay for
+      const fav = guest.profile!.favorite;
+      if (spending === 'thrifty' && (fav === 'shop' || fav === 'restaurant')) guest = { ...guest, profile: { ...guest.profile!, favorite: 'none' } };
+    }
+    // What they have to spend: the draw as ever, scaled by how they spend (a big spender's x1.5 is already in it)
+    if (spendingOn() && guest.profile?.spending) {
+      const legacy = guest.trait === 'big_spender' ? GUEST_TRAITS.bigSpenderBudgetMult : 1;
+      guest = { ...guest, budget: guest.budget * SPENDING.budgetMult[guest.profile.spending] / legacy };
     }
     // Turned away (desk, room, price): with loyalty on, they'll try again another day
     const requeue = () => {
@@ -318,7 +371,7 @@ export function processArrivals(
     // With the desk queue on, everyone is decided first -- the same draws for each,
     // whatever the desk does -- and served at the desk below, in the order they arrive
     if (queue) {
-      waiting.push({ guest, pulled, priceTolerance: 1 + prng.next() * ECONOMY.priceToleranceSpread });
+      waiting.push({ guest, pulled, priceTolerance: spendingOn() ? 1 + prng.next() * ECONOMY.priceToleranceSpread * toleranceMult(guest) : 1 + prng.next() * ECONOMY.priceToleranceSpread });
       continue;
     }
 
@@ -336,7 +389,7 @@ export function processArrivals(
     }
 
     const remainingRooms = available.filter(r => !booked.has(r.id));
-    const priceTolerance = 1 + prng.next() * ECONOMY.priceToleranceSpread;
+    const priceTolerance = spendingOn() ? 1 + prng.next() * ECONOMY.priceToleranceSpread * toleranceMult(guest) : 1 + prng.next() * ECONOMY.priceToleranceSpread;
     const match = matchAtCounter(state, guest, remainingRooms, priceTolerance);
     if (match.noFit) {
       turnAwayNoFit(result, guest);
@@ -490,7 +543,7 @@ export interface GuestReviewBreakdown {
   conditionBonus: number;
   cleanlinessBonus: number;
   amenityPenalty: number;
-  priceFairness: number; // raw fairness ratio (1 = perfect match, lower = worse in either direction)
+  priceFairness: number; // fairness ratio (1 = perfect match, lower = worse in either direction), as the guest felt it (a thrifty guest overcharged minds more)
   guestVariance: number;
   facilityBonus: number;
   amenityBonus: number;
@@ -516,7 +569,12 @@ export function calculateGuestReviewBreakdown(
   prng: PRNG
 ): GuestReviewBreakdown {
   const expectedPrice = getPartyFairPrice(room, partyOf(guest), state.starRating);
-  const priceFairness = 1 - Math.abs(room.pricePerNight - expectedPrice) / expectedPrice;
+  // How they spend (spending styles on) weighs a few things: a thrifty guest minds being overcharged
+  // more and the amenities less, a big spender the amenities and the decor more
+  const style = spendingOf(guest);
+  const fair = 1 - Math.abs(room.pricePerNight - expectedPrice) / expectedPrice;
+  const overcharge = style !== 'standard' && room.pricePerNight > expectedPrice ? SPENDING.review.overcharge[style] : 1;
+  const priceFairness = overcharge === 1 ? fair : 1 - (1 - fair) * overcharge; // (as they felt it)
 
   // Noise: the nights they slept through (or, with profiles off, the noise now)
   const noisePenalty = reviewNoisePenalty(room, state, guest);
@@ -524,7 +582,7 @@ export function calculateGuestReviewBreakdown(
   // Condition and cleanliness
   const conditionBonus = (room.condition - REVIEW.conditionMidpoint) / REVIEW.conditionScale * REVIEW.conditionWeight;
   const cleanlinessBonus = cleanlinessTerm(room.cleanliness, guest); // (a guest who wants the room made up daily minds more)
-  const decorPenalty = getDecorReviewPenalty(room.decor);
+  const decorPenalty = style === 'standard' ? getDecorReviewPenalty(room.decor) : getDecorReviewPenalty(room.decor) * SPENDING.review.decorPenalty[style];
   const elevatorPenalty = getElevatorWaitPenalty(state, room, guest);
 
   // Facilities the guest actually used this stay (gym, restaurant, pool, shop)
@@ -533,7 +591,7 @@ export function calculateGuestReviewBreakdown(
   // In-room amenities bonus
   const amenityTier = state.amenities[room.type];
   const amenityConfig = AMENITIES.tiers[amenityTier];
-  const amenityBonus = amenityConfig?.reviewBonus ?? 0;
+  const amenityBonus = style === 'standard' ? amenityConfig?.reviewBonus ?? 0 : (amenityConfig?.reviewBonus ?? 0) * SPENDING.review.amenityBonus[style];
 
   // Amenity expectation penalty: high-star hotels with low amenities get penalized
   let amenityPenalty = 0;
@@ -543,7 +601,7 @@ export function calculateGuestReviewBreakdown(
       const currentIdx = tierOrder.indexOf(amenityTier);
       const requiredIdx = tierOrder.indexOf(req.minimumTier);
       if (currentIdx < requiredIdx) {
-        amenityPenalty = req.penaltyIfBelow;
+        amenityPenalty = style === 'standard' ? req.penaltyIfBelow : req.penaltyIfBelow * SPENDING.review.amenityPenalty[style];
       }
       break;
     }

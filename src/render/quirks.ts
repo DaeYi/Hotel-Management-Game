@@ -2,14 +2,17 @@ import type Phaser from 'phaser';
 
 // The small marks drawn on guests (docs/designs/guest-staff-personalities.md,
 // Display budget): at most one quirk icon per guest -- a moon for a light
-// sleeper, a music note for a rowdy one -- and a "z" by a guest asleep in their
-// room. Graphics only (no text or textures), a few primitives each, drawn every
-// frame. The legend uses the same glyphs as text.
+// sleeper, a music note for a rowdy one, a "$" for a big spender -- and a "z"
+// by a guest asleep in their room. Graphics only (no text or textures), a few
+// primitives each, drawn every frame. The legend uses the same glyphs as text.
 
-export type Quirk = 'moon' | 'note';
+export type Quirk = 'moon' | 'note' | 'coin';
 
 /** The legend's text for each mark. */
-export const QUIRK_GLYPHS: Record<Quirk | 'asleep', string> = { moon: '☾', note: '♪', asleep: 'z' };
+export const QUIRK_GLYPHS: Record<Quirk | 'asleep', string> = { moon: '☾', note: '♪', coin: '$', asleep: 'z' };
+
+/** The colour of a big spender's "$" (pale green: never the VIP's gold). */
+export const COIN_COLOR = 0x82e0aa;
 
 const BACKING = 0x1b1b2b;
 
@@ -23,6 +26,15 @@ export function drawQuirk(g: Phaser.GameObjects.Graphics, x: number, y: number, 
     g.fillCircle(x, y, 2.8);
     g.fillStyle(BACKING, 1);
     g.fillCircle(x + 1.3, y - 1, 2.3);
+  } else if (quirk === 'coin') {
+    // A "$": an S of three bars joined at alternate ends, and the stroke through it
+    g.fillStyle(COIN_COLOR, 1);
+    g.fillRect(x - 1.8, y - 2.4, 3.6, 0.9);
+    g.fillRect(x - 1.8, y - 2.4, 0.9, 2.4);
+    g.fillRect(x - 1.8, y - 0.45, 3.6, 0.9);
+    g.fillRect(x + 0.9, y - 0.45, 0.9, 2.4);
+    g.fillRect(x - 1.8, y + 1.5, 3.6, 0.9);
+    g.fillRect(x - 0.35, y - 3.4, 0.7, 6.8);
   } else {
     // A quaver: head, stem, flag
     g.fillStyle(0xf5f5f5, 1);

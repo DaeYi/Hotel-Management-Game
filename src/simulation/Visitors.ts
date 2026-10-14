@@ -2,7 +2,7 @@ import type { Guest, HotelState, StayLeg, VisitorPolicy, Walker } from './types.
 import { hash01 } from './Movement.js';
 import { isSleepHour } from './Profile.js';
 import { partySize } from './Party.js';
-import { HOSTED_NIGHTS } from '../config/balance.js';
+import { HOSTED_NIGHTS, GUEST_PROFILE } from '../config/balance.js';
 
 // Hosted nights (docs/designs/guest-staff-personalities.md, Rowdiness): on one
 // night of their stay, half of rowdy guests have friends round. The visitors are
@@ -69,6 +69,11 @@ export function isHosting(state: Pick<HotelState, 'walkers'>, hostId: string, t:
 export function isAsleepAt(state: Pick<HotelState, 'walkers'>, guest: Pick<Guest, 'id' | 'profile'>, t: number): boolean {
   const hour = ((Math.floor(t) % 24) + 24) % 24;
   return isSleepHour(guest, hour) && visitorsAt(state, guest.id, t) === 0;
+}
+
+/** Whether a guest's friends are due round tonight (planVisitors' rule: hosted nights on, their night, and not in bed by then). */
+export function hostsTonight(guest: Pick<Guest, 'id' | 'profile' | 'checkInDay' | 'stayLength'>, day: number): boolean {
+  return HOSTED_NIGHTS.enabled && GUEST_PROFILE.enabled && hostingDay(guest) === day && !isSleepHour(guest, HOSTED_NIGHTS.startHour);
 }
 
 /** The day whose night a rowdy guest has friends round: half of them, one night of their stay, from their booking (null for anyone else). */

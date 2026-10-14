@@ -4,7 +4,7 @@ import { render, screen, fireEvent, cleanup, act } from '@testing-library/preact
 import { createRef } from 'preact';
 import { GameController } from '../src/game/GameController';
 import { App } from '../src/ui/App';
-import { OBJECTIVES, TRAVEL } from '../src/config/balance';
+import { OBJECTIVES, TRAVEL, SPENDING } from '../src/config/balance';
 import { guestWhereabouts } from '../src/ui/Inspectors';
 import { createStarterHotel, addRoom, addFacility } from '../src/simulation/HotelState';
 import { findRoute } from '../src/simulation/Layout';
@@ -714,5 +714,103 @@ describe('The front desk and complaints', () => {
     expect(card()).not.toContain('44%');
     expect(screen.getByRole('group', { name: 'Guest marks' }).textContent).toContain('Losing patience in line');
     expect(screen.getByRole('group', { name: 'Guest marks' }).textContent).toContain('Going to complain');
+  });
+});
+
+describe('How guests spend', () => {
+  const profile = (spending: 'thrifty' | 'standard' | 'splurger') => ({ chronotype: 'regular', mobility: 'normal', sleep: 'normal', rowdiness: 'normal', checkoutHour: 11, spending });
+
+  it('a guest card says how they spend; a leaving guest what they spent; the legend has the "$"', () => {
+    const { controller, flush } = setup();
+    controller.selectTool('standard');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.selectTool(null);
+    const room = { ...controller.state.rooms[0], status: 'occupied' as const, guestId: 'g1' };
+    const base = { id: 'g1', name: 'Malik', budget: 300, stayLength: 3, trait: 'big_spender', satisfaction: 60, checkInDay: 1, isReturning: false, hadNoiseComplaint: false };
+    const show = (guest: object) => {
+      controller.state = { ...controller.state, day: 2, hour: 12, rooms: [room], guests: [guest] as never };
+      controller.selectGuest('g1', { gridX: 5, gridY: 2 });
+      flush();
+      return screen.getByRole('dialog', { name: 'Malik' }).textContent!;
+    };
+    const big = show({ ...base, profile: profile('splurger'), spent: { shop: 24, restaurant: 60 } });
+    expect(big).toContain('Big spender: spent $84 here this stay (restaurant $60, shop $24)');
+    expect(big).toContain('Notices the amenities, and tired decor');
+    expect(show({ ...base, profile: profile('splurger') })).toContain('Big spender: nothing spent here yet');
+    const thrifty = show({ ...base, trait: 'normal', profile: profile('thrifty'), dinnersOut: { day: 2, count: 2 } });
+    expect(thrifty).toContain('Watches the pennies: no shop, eats in town (out to dinner 2 nights)');
+    expect(thrifty).toContain('Minds a high price more than the frills');
+    // A guest from an older save (no profile): what they've spent, too; a big spender what they mind
+    expect(show({ ...base, trait: 'normal', spent: { shop: 26, restaurant: 0 } })).toContain('Spent $26 here this stay');
+    const older = show({ ...base, spent: { shop: 26, restaurant: 0 } });
+    expect(older).toContain('Big spender: spent $26 here this stay (shop $26)');
+    expect(older).toContain('Notices the amenities, and tired decor');
+    const standard = show({ ...base, trait: 'normal', profile: profile('standard'), spent: { shop: 26, restaurant: 0 } });
+    expect(standard).toContain('Spent $26 here this stay');
+    expect(standard).not.toContain('Big spender');
+    expect(screen.getByRole('group', { name: 'Guest marks' }).textContent).toContain('Big spender');
+    // Checked out, on their way out
+    controller.state = {
+      ...controller.state, guests: [],
+      walkers: [{ id: 'w', trait: 'big_spender', isReturning: false, reason: 'checked_out', guestId: 'g1', name: 'Malik', spent: 84, trip: [makeStay({ gridX: 1, gridY: 4, floor: 0 }, 0, 999, 'wait')] }],
+    };
+    controller.selectGuest('g1', { gridX: 1, gridY: 4 });
+    flush();
+    expect(screen.getByRole('dialog', { name: 'Malik' }).textContent).toContain('Spent $84 here');
+  });
+
+  it('the restaurant’s card says what a cover costs, and who pays more or nothing; the Finance panel splits the month’s revenue', () => {
+    const { controller, flush } = setup();
+    controller.state = { ...controller.state, cash: 1_000_000, peakStarRating: 5, starRating: 5 };
+    controller.selectTool('restaurant');
+    controller.tileDown({ gridX: 7, gridY: 2 });
+    controller.selectTool(null);
+    controller.tileDown({ gridX: 7, gridY: 2 });
+    flush();
+    expect(screen.getByRole('dialog', { name: /Restaurant/ }).textContent).toContain('Spend/visit:    $12 a table for one or two (big spenders $24; thrifty guests eat out)');
+    // A shop at level 2: half as much again; with spending styles off, the card as before
+    controller.selectTool('shop');
+    controller.tileDown({ gridX: 8, gridY: 2 });
+    controller.selectTool(null);
+    controller.state = { ...controller.state, facilities: controller.state.facilities.map(f => (f.type === 'shop' ? { ...f, level: 2 } : f)) };
+    controller.tileDown({ gridX: 8, gridY: 2 });
+    flush();
+    const shop = () => screen.getByRole('dialog', { name: /Shop/ }).textContent!;
+    expect(shop()).toContain("Spend/visit:    $39 for one or two (big spenders $78; thrifty guests don't shop)");
+    SPENDING.enabled = false;
+    try {
+      controller.tileDown({ gridX: 8, gridY: 2 });
+      flush();
+      expect(shop()).toContain('Spend/visit:    $39');
+      expect(shop()).not.toContain('big spenders');
+    } finally { SPENDING.enabled = true; }
+    controller.state = { ...controller.state, totalRevenue: 10000, onSite: { shop: 300, restaurant: 700, splurgers: 600 }, dailyStats: [{ day: 1, occupancy: 0.5, totalRevenue: 0, valuation: 0 }] };
+    controller.togglePanel('finance');
+    flush();
+    expect(screen.getByText(/^Revenue, last 30 days:/).textContent).toBe('Revenue, last 30 days: $10,000 (rooms $9,000, on site $1,000)');
+    expect(screen.getByLabelText('On-site takings').textContent).toContain('On site: restaurant $700, shop $300 · 60% from big spenders');
+  });
+
+  it('the Finance panel\u2019s split covers the last 30 days (a save from before spending styles counts from zero); nothing before the first day ends', () => {
+    const { controller, flush } = setup();
+    const day = (d: number, revenue: number, onSite?: { shop: number; restaurant: number; splurgers: number }) => ({ day: d, occupancy: 0.5, totalRevenue: revenue, valuation: 0, ...(onSite ? { onSite } : {}) });
+    // 32 days: the baseline (31 back) had takings of 100 so far; the month since, 500 more
+    const stats = Array.from({ length: 32 }, (_, i) => day(i + 1, 1000 * i, i <= 1 ? { shop: 60, restaurant: 40, splurgers: 50 } : { shop: 60 + i * 10, restaurant: 40 + i * 5, splurgers: 50 }));
+    controller.state = { ...controller.state, dailyStats: stats, totalRevenue: 31000, onSite: { shop: 400, restaurant: 200, splurgers: 300 } };
+    controller.togglePanel('finance');
+    flush();
+    expect(screen.getByText(/^Revenue, last 30 days:/).textContent).toBe('Revenue, last 30 days: $30,000 (rooms $29,500, on site $500)');
+    // The baseline from before spending styles: counted from zero
+    controller.state = { ...controller.state, dailyStats: stats.map((s, i) => (i === 1 ? day(2, 1000) : s)) };
+    controller.togglePanel('finance');
+    controller.togglePanel('finance');
+    flush();
+    expect(screen.getByText(/^Revenue, last 30 days:/).textContent).toBe('Revenue, last 30 days: $30,000 (rooms $29,400, on site $600)');
+    // The first day, before it's recorded: the revenue so far
+    controller.state = { ...controller.state, dailyStats: [], totalRevenue: 52, onSite: { shop: 52, restaurant: 0, splurgers: 0 } };
+    controller.togglePanel('finance');
+    controller.togglePanel('finance');
+    flush();
+    expect(screen.getByText(/^Revenue, last 30 days:/).textContent).toBe('Revenue, last 30 days: $52 (rooms $0, on site $52)');
   });
 });

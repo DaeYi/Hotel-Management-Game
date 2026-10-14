@@ -14,7 +14,7 @@ import { simulate } from '../src/simulation/simulate.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
 import { PRNG } from '../src/simulation/prng.js';
 import { hourStart, legsEnd } from '../src/simulation/Movement.js';
-import { GUEST_PURPOSES, ROOM_PREFERENCES, GUEST_OUTINGS, FACILITY_CONFIG, ECONOMY, REVIEW, PARTIES, GUEST_PROFILE, GUEST_FAVORITES, LOYALTY, MOOD, GUEST_HOUSEKEEPING, HOSTED_NIGHTS, PATIENCE, VOICE } from '../src/config/balance.js';
+import { GUEST_PURPOSES, ROOM_PREFERENCES, GUEST_OUTINGS, FACILITY_CONFIG, ECONOMY, REVIEW, PARTIES, GUEST_PROFILE, GUEST_FAVORITES, LOYALTY, MOOD, GUEST_HOUSEKEEPING, HOSTED_NIGHTS, PATIENCE, VOICE, SPENDING } from '../src/config/balance.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import type { ActiveIncident } from '../src/simulation/types.js';
 import type { PresetId } from '../src/config/furniture.js';
@@ -335,7 +335,7 @@ describe('Telling the player', () => {
     expect(none.storyLog).toHaveLength(0);
     const one = recordRoomDislikes(s, [review('Priya', a, ['separateBeds']), review('Sam', c)]);
     expect(one.storyLog).toHaveLength(1);
-    expect(one.storyLog[0].message).toMatch(/^Priya didn't like separate beds in room [^ ]+\. Couples want to share a bed, but they book the cheapest free room that sleeps two/);
+    expect(one.storyLog[0].message).toMatch(/^Priya didn't like separate beds in room [^ ]+\. Couples want to share a bed, but most book the cheapest free room that sleeps two/);
     const two = recordRoomDislikes(s, [review('Priya', a, ['separateBeds']), review('the Okafor family', b, ['separateBeds'])]);
     expect(two.storyLog[0].message).toMatch(/^2 guests didn't like separate beds \(rooms [^ ]+, [^ ]+\)/);
     expect(recordRoomDislikes(one, [review('Lee', b, ['separateBeds'])]).storyLog).toHaveLength(1); // once a day
@@ -418,6 +418,7 @@ describe('Balance', () => {
   it('the front desk queue and Voice off: a run is exactly as it was before them', () => {
     PATIENCE.enabled = false;
     VOICE.enabled = false;
+    SPENDING.enabled = false; // (after them)
     try {
       // The same runs at ec57afc (housekeeping preferences and hosted nights), every other switch on
       // (re-recorded for the housekeeping rebalance: ec57afc with the same rebalance gives exactly these)
@@ -432,9 +433,28 @@ describe('Balance', () => {
       expect(busy.totalRevenue).toBe(62895);
       expect(busy.totalTurnedAway).toBe(358);
     } finally {
-      PATIENCE.enabled = true; VOICE.enabled = true;
+      PATIENCE.enabled = true; VOICE.enabled = true; SPENDING.enabled = true;
     }
   }, 120000);
+
+  it('spending styles off: a run is exactly as it was before them', () => {
+    SPENDING.enabled = false;
+    try {
+      // The same runs at ca7ad40, every other switch on: long enough for the balanced bot's restaurant (day 119)
+      const run = simulate(160, 9, undefined, STRATEGIES.balanced);
+      expect(run.finalCash).toBeCloseTo(137547.44122380848, 6);
+      expect(run.avgReviewScore).toBeCloseTo(7.053745943084604, 9);
+      expect(run.totalRevenue).toBe(692244.5);
+      expect(run.totalTurnedAway).toBe(2219);
+      const busy = simulate(45, 5, undefined, STRATEGIES.overstaffed);
+      expect(busy.finalCash).toBeCloseTo(10645.599999999995, 6);
+      expect(busy.avgReviewScore).toBeCloseTo(7.781914338772163, 9);
+      expect(busy.totalRevenue).toBe(62334);
+      expect(busy.totalTurnedAway).toBe(301);
+    } finally {
+      SPENDING.enabled = true;
+    }
+  }, 240000);
 
   it('on: some guests like their room, and the bot hotel still thrives', () => {
     const run = simulate(120, 9, undefined, STRATEGIES.balanced);

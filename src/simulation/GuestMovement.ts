@@ -32,6 +32,7 @@ function walkerFields(guest: Guest): Partial<Walker> {
   return {
     ...(guest.party ? { party: guest.party } : {}), ...(guest.purpose ? { purpose: guest.purpose } : {}), ...(guest.profile ? { profile: guest.profile } : {}),
     ...(guest.loyalty ? { stays: guest.loyalty.stays } : {}),
+    ...(guest.spent ? { spent: guest.spent.shop + guest.spent.restaurant } : {}),
   };
 }
 

@@ -1,7 +1,7 @@
 import type { Ref } from 'preact';
 import { PURPOSES, PURPOSE_LABELS } from '../simulation/Purpose';
 import { PURPOSE_COLORS, NO_PURPOSE_COLOR } from '../render/figures';
-import { GUEST_PURPOSES, GUEST_PROFILE, MOOD, LOYALTY, GUEST_HOUSEKEEPING, HOSTED_NIGHTS, PATIENCE, VOICE } from '../config/balance';
+import { GUEST_PURPOSES, GUEST_PROFILE, MOOD, LOYALTY, GUEST_HOUSEKEEPING, HOSTED_NIGHTS, PATIENCE, VOICE, SPENDING } from '../config/balance';
 import { QUIRK_GLYPHS, MOOD_COLORS, RING_COLORS, HANGER_COLORS, VISITORS_COLOR, DESK_GLYPHS } from '../render/quirks';
 import type { GameController, PanelId } from '../game/GameController';
 import { GameContext, useController, useControllerVersion } from './context';
@@ -206,6 +206,7 @@ function Legend() {
         <span class="legend-group" role="group" aria-label="Guest marks">
           <span class="legend-mark">{QUIRK_GLYPHS.moon}</span>Light sleeper
           <span class="legend-mark">{QUIRK_GLYPHS.note}</span>Rowdy
+          {SPENDING.enabled && <><span class="legend-mark coin">{QUIRK_GLYPHS.coin}</span>Big spender</>}
           <span class="legend-mark">{QUIRK_GLYPHS.asleep}</span>Asleep
           {MOOD.enabled && (
             <>

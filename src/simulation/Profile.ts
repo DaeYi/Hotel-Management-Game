@@ -2,6 +2,7 @@ import type { Chronotype, FacilityType, Guest, GuestProfile, GuestTrait, HotelSt
 import { ECONOMY, GUEST_PROFILE, NOISE, TRAVEL, GUEST_FAVORITES, GUEST_HOUSEKEEPING, PATIENCE, VOICE } from '../config/balance.js';
 import { hash01 } from './Movement.js';
 import { pick } from './Party.js';
+import { spendingOn, spendingOf, rollSpending } from './Spending.js';
 
 // Who a guest is, beyond their trip (docs/designs/guest-staff-personalities.md,
 // Body and Temperament): when they're up (chronotype), how fast they walk
@@ -25,7 +26,10 @@ export function rollProfile(id: string, party: Party, purpose: Purpose | undefin
   const checkoutHour = chronotype === 'early' ? first + Math.floor(hash01(`${id}#checkout`) * (last - first + 1)) : ECONOMY.checkOutHour;
   // The facility they seek out (business travellers the gym, families and getaways the pool)
   const favoriteLean = lean === 'business' || lean === 'family' ? lean : purpose === 'getaway' ? 'getaway' : 'base';
-  const favorite = GUEST_FAVORITES.enabled ? pick(GUEST_FAVORITES.byLean[favoriteLean], hash01(`${id}#favorite`)) : undefined;
+  // How they spend (a big spender splurges); a thrifty guest seeks out nothing they'd pay for
+  const spending = spendingOn() ? rollSpending(id, trait) : undefined;
+  const rolled = GUEST_FAVORITES.enabled ? pick(GUEST_FAVORITES.byLean[favoriteLean], hash01(`${id}#favorite`)) : undefined;
+  const favorite = spending === 'thrifty' && (rolled === 'shop' || rolled === 'restaurant') ? 'none' : rolled;
   // When they want their room cleaned (a business traveller made up daily, a getaway left alone)
   const housekeepingLean = lean === 'business' ? 'business' : purpose === 'getaway' ? 'getaway' : 'base';
   const housekeeping = GUEST_HOUSEKEEPING.enabled ? pick(GUEST_HOUSEKEEPING.byLean[housekeepingLean], hash01(`${id}#housekeeping`)) : undefined;
@@ -34,7 +38,7 @@ export function rollProfile(id: string, party: Party, purpose: Purpose | undefin
   const voice = VOICE.enabled ? pick(VOICE.weights, hash01(`${id}#voice`)) : undefined;
   return {
     chronotype, mobility, sleep, rowdiness, checkoutHour, ...(favorite ? { favorite } : {}), ...(housekeeping ? { housekeeping } : {}),
-    ...(patience ? { patience } : {}), ...(voice ? { voice } : {}),
+    ...(patience ? { patience } : {}), ...(voice ? { voice } : {}), ...(spending ? { spending } : {}),
   };
 }
 
@@ -139,18 +143,26 @@ export function noiseOutputMult(guest: Pick<Guest, 'profile' | 'trait' | 'hosted
   return GUEST_PROFILE.output[guest.profile.rowdiness] * late;
 }
 
-/** The one quirk a guest's figure shows: a moon for a light sleeper, a note for a rowdy one (light sleepers first). */
-export function quirkOf(guest: Pick<Guest, 'profile' | 'trait'>): 'moon' | 'note' | null {
+/**
+ * The one quirk a guest's figure shows: a moon for a light sleeper, a note for
+ * a rowdy one, a "$" for a big spender (in that order: they never clash, as
+ * all three come from the one legacy trait roll).
+ */
+export function quirkOf(guest: Pick<Guest, 'profile' | 'trait'>): 'moon' | 'note' | 'coin' | null {
   const light = guest.profile ? guest.profile.sleep === 'light' : guest.trait === 'light_sleeper';
   if (light) return 'moon';
   const rowdy = guest.profile ? guest.profile.rowdiness === 'rowdy' : guest.trait === 'party_guest';
-  return rowdy ? 'note' : null;
+  if (rowdy) return 'note';
+  return spendingOf(guest) === 'splurger' ? 'coin' : null;
 }
 
-/** A guest's quirks in a word or two each: "light sleeper", "rowdy", "big spender". */
+/** A guest's quirks in a word or two each: "light sleeper", "rowdy", "big spender", "thrifty". */
 export function guestTags(guest: Pick<Guest, 'profile' | 'trait'>): string[] {
   const quirk = quirkOf(guest);
-  return [quirk === 'moon' ? 'light sleeper' : quirk === 'note' ? 'rowdy' : '', guest.trait === 'big_spender' ? 'big spender' : ''].filter(Boolean);
+  return [
+    quirk === 'moon' ? 'light sleeper' : quirk === 'note' ? 'rowdy' : '', guest.trait === 'big_spender' ? 'big spender' : '',
+    spendingOf(guest) === 'thrifty' ? 'thrifty' : '',
+  ].filter(Boolean);
 }
 
 const CHRONOTYPE_LABELS: Record<Chronotype, string> = { early: 'Early bird', regular: 'Regular hours', night: 'Night owl' };

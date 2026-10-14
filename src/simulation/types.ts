@@ -39,7 +39,10 @@ export interface GuestProfile {
   housekeeping?: HousekeepingPreference; // when they want their room cleaned (absent on older profiles: standard)
   patience?: Patience; // how long they'll wait in line (absent on older profiles: normal)
   voice?: Voice; // how they complain (absent on older profiles: typical)
+  spending?: SpendingStyle; // how they spend (absent on older profiles: a big spender splurges, anyone else standard)
 }
+/** How a guest spends (see Spending.ts). */
+export type SpendingStyle = 'thrifty' | 'standard' | 'splurger';
 /** How a guest feels right now, from their satisfaction (see Mood.ts). */
 export type Mood = 'delighted' | 'content' | 'irritated' | 'angry';
 /** A guest's history with the hotel (see Loyalty.ts): the same person across stays. */
@@ -169,6 +172,8 @@ export interface Guest {
   checkInWait?: number;
   // Their complaint this stay (see Complaints.ts): what about, in person or by phone, and when it was heard (absent: on their way)
   complaint?: { about: string; cause?: string; via: 'desk' | 'phone'; at?: number };
+  spent?: { shop: number; restaurant: number }; // what they've spent on site this stay (see Spending.ts)
+  dinnersOut?: { day: number; count: number }; // a thrifty guest's dinners in town this stay (once a day)
 }
 
 /** A tile in the building: (gridX, gridY) on a floor. A `door` means the tile is entered through that side only (a room or facility). */
@@ -227,6 +232,7 @@ export interface Walker {
   hostId?: string; // a visitor: the guest they've come to see
   waited?: number; // gave up in line at the front desk: how long they waited (hours)
   wanted?: PartyKind; // gave up in line: the party they came as, if they'd booked a room for fewer
+  spent?: number; // checked out: what they spent on site this stay
 }
 
 export type StaffRole = 'housekeeper' | 'maintenance';
@@ -380,6 +386,7 @@ export interface HotelState {
   staffRoster?: StaffMember[]; // housekeepers and maintenance workers, one per head (see StaffManager.ts)
   staffPlan?: StaffPlan | null; // this hour's plan for them, made at the last hour boundary
   walkers?: Walker[]; // people walking out who are no longer guests
+  onSite?: OnSiteTakings; // shop and restaurant takings so far (spending styles on)
 }
 
 export interface ActiveCampaign {
@@ -413,7 +420,11 @@ export interface DailyStat {
   wanted?: Partial<Record<FacilityType, number>>;
   full?: Partial<Record<FacilityType, number>>;
   tooFar?: Partial<Record<FacilityType, number>>;
+  onSite?: OnSiteTakings; // HotelState.onSite at end of day (cumulative; absent before spending styles)
 }
+
+/** Takings on site, cumulative: at the shop, at the restaurant, and how much of it from big spenders. */
+export interface OnSiteTakings { shop: number; restaurant: number; splurgers: number }
 
 /** A temporary arrival-multiplier penalty from a Review Goes Semi-Viral incident. */
 export interface ReputationPenalty {

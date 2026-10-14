@@ -166,7 +166,7 @@ describe('Star-scaled pricing and demand', () => {
   it('overpricing loses guests even when there are plenty of rooms', () => {
     const fair = checkInsOverDays(80, 20);
     const high = checkInsOverDays(120, 20); // 1.5x fair
-    const extreme = checkInsOverDays(150, 20); // past every guest's tolerance
+    const extreme = checkInsOverDays(180, 20); // past every guest's tolerance (a big spender's goes to 2.2x)
     expect(high).toBeLessThan(fair * 0.6);
     expect(extreme).toBe(0);
   });

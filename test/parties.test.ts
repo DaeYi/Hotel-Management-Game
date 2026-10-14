@@ -171,7 +171,8 @@ describe('Arrivals with parties', () => {
     expect(t.pricedOutPairs).toBe(0); // two friends with only doubles free: one comes alone (or they go), not "too expensive"
     expect(t.smaller + t.turnedAwayNoFit).toBeGreaterThan(40);
     expect(t.turnedAwayNoFit).toBeGreaterThan(0);
-    expect(t.smaller / (t.smaller + t.turnedAwayNoFit)).toBeCloseTo(PARTIES.rerollChance, 1);
+    // (some who book smaller then find the price too high: a thrifty guest's tolerance is half anyone's)
+    expect((t.smaller + t.pricedOutSmaller) / (t.smaller + t.pricedOutSmaller + t.turnedAwayNoFit)).toBeCloseTo(PARTIES.rerollChance, 1);
   });
 
   it('a party that would book smaller but finds the price too high is still counted as the party it was', () => {

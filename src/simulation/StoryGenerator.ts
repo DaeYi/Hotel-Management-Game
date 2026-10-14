@@ -4,7 +4,8 @@ import { profileRoom, fitsParty } from './RoomProfile.js';
 import { roomFit, FEATURE_LABELS, type RoomFeature } from './Preferences.js';
 import type { PRNG } from './prng.js';
 import type { GuestReviewBreakdown } from './GuestManager.js';
-import { SATISFACTION, STORY, NOISE, ECONOMY, REVIEW, GUEST_PROFILE, LOYALTY, VOICE } from '../config/balance.js';
+import { SATISFACTION, STORY, NOISE, ECONOMY, REVIEW, GUEST_PROFILE, LOYALTY, VOICE, SPENDING, FACILITY_LEVELS } from '../config/balance.js';
+import { spendingOn } from './Spending.js';
 import { calculateRoomNoise, noiseToRatingPenalty, getLoudestNeighborGuestId, nightNoiseThisHour } from './NoiseManager.js';
 import { isAsleepAt, theVisitors } from './Visitors.js';
 import { voiceOn, voiceOf, complainsBelow, hasComplained } from './Voice.js';
@@ -535,6 +536,25 @@ const DISLIKE_ADVICE: Partial<Record<RoomFeature, string>> = {
 };
 
 /**
+ * A big restaurant tab among this hour's checkouts (SPENDING.bigTab x the
+ * restaurant's level), the biggest of them: "Malik ran up a $210 restaurant
+ * tab." The day's first only (checkouts come over several hours); not an
+ * incident (it uses none of the day's story budget).
+ */
+export function recordBigTabs(state: HotelState, departures: DepartedGuestReview[]): HotelState {
+  if (!spendingOn()) return state;
+  const chainId = `tab-${state.day}`;
+  if (state.storyLog.some(e => e.chainId === chainId)) return state;
+  const level = Math.max(0, ...state.facilities.filter(f => f.type === 'restaurant').map(f => f.level));
+  if (level === 0) return state;
+  const line = SPENDING.bigTab * FACILITY_LEVELS[level - 1].revenueMult;
+  const top = departures.filter(d => (d.tab ?? 0) >= line).sort((a, b) => b.tab! - a.tab!)[0];
+  if (!top) return state;
+  const name = top.guestName.charAt(0).toUpperCase() + top.guestName.slice(1);
+  return appendStoryLogEntry(state, { type: 'big_tab', guestName: top.guestName, roomId: top.roomId, message: `${name} ran up a $${top.tab} restaurant tab.`, chainId }).state;
+}
+
+/**
  * A story beat when guests check out unhappy with something in their room
  * (separate beds for a couple): once a day, naming who and where, so the
  * player can see what the reviews are about. Not an incident origin: it uses
@@ -555,7 +575,8 @@ export function recordRoomDislikes(state: HotelState, departures: DepartedGuestR
   const message = who.length === 1
     ? `${name} didn't like ${FEATURE_LABELS[feature]}${where}.`
     : `${who.length} guests didn't like ${FEATURE_LABELS[feature]}${where}.`;
-  const advice = DISLIKE_ADVICE[feature];
+  // (with spending styles, a big spender books the best room instead)
+  const advice = feature === 'separateBeds' && spendingOn() ? DISLIKE_ADVICE.separateBeds!.replace('but they book', 'but most book') : DISLIKE_ADVICE[feature];
   return appendStoryLogEntry(state, {
     type: 'room_disliked',
     message: advice ? `${message} ${advice}` : message,
@@ -594,6 +615,7 @@ export interface DepartedGuestReview {
   booking: Booking;
   breakdown: GuestReviewBreakdown;
   voice?: Voice; // how they complain (a stoic guest's bad review is likelier to spread)
+  tab?: number; // what they spent at the restaurant this stay (spending styles on)
 }
 
 export function checkReviewSemiViral(

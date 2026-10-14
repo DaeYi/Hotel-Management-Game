@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ActorLayer } from '../src/render/ActorLayer.js';
+import { drawQuirk, COIN_COLOR, QUIRK_GLYPHS } from '../src/render/quirks.js';
 import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE } from '../src/render/GridRenderer.js';
 import { createStarterHotel, addRoom, addFixture } from '../src/simulation/HotelState.js';
 import { lanesOf, type Lane } from '../src/simulation/DeskQueue.js';
@@ -183,5 +184,19 @@ describe('The front desk on screen', () => {
     const here = drawnOn(actors, a.front);
     const ask = here.find(d => d.id === 'ask')!;
     for (const d of here) if (d !== ask) expect(Math.hypot(d.x - ask.x, d.y - ask.y)).toBeGreaterThan(TILE_SIZE * 0.4);
+  });
+});
+
+describe('A big spender\u2019s mark', () => {
+  it('is a pale green "$" on the dark disc (six bars), not the moon\u2019s or the note\u2019s shapes', () => {
+    const calls: Array<[string, ...number[]]> = [];
+    const g: unknown = new Proxy({}, { get: (_t, name) => (...args: number[]) => { calls.push([String(name), ...args]); return g; } });
+    const draw = (q: 'moon' | 'note' | 'coin') => { calls.length = 0; drawQuirk(g as never, 0, 0, q); return [...calls]; };
+    const coin = draw('coin');
+    expect(coin.filter(c => c[0] === 'fillStyle').map(c => c[1])).toContain(COIN_COLOR);
+    expect(coin.filter(c => c[0] === 'fillRect')).toHaveLength(6);
+    expect(coin.filter(c => c[0] === 'fillCircle')).toHaveLength(1); // just the disc
+    expect(draw('note').filter(c => c[0] === 'fillStyle').map(c => c[1])).not.toContain(COIN_COLOR);
+    expect(QUIRK_GLYPHS.coin).toBe('$');
   });
 });

@@ -427,6 +427,39 @@ export const GUEST_TRAITS = {
   bigSpenderBudgetMult: 1.5,
 };
 
+export type SpendingName = 'thrifty' | 'standard' | 'splurger';
+
+/**
+ * Spending style (docs/designs/guest-staff-personalities.md, Tastes #9; see
+ * Spending.ts): big spenders (the legacy trait, 20%) splurge, 30% of guests
+ * are thrifty, the rest spend as ever. Needs guest profiles.
+ */
+export const SPENDING = {
+  enabled: true,
+  thriftyShare: 0.3, // of all guests (0.375 of those who aren't big spenders). The doc's 5 more splurgers a star above 2 is left out: +19% to +68% valuation
+  // What they have to spend (a big spender's x1.5 is GUEST_TRAITS.bigSpenderBudgetMult, already in their budget), and how far over a fair price they'll go
+  budgetMult: { thrifty: 0.7, standard: 1, splurger: 1.5 } as Record<SpendingName, number>,
+  toleranceMult: { thrifty: 0.5, standard: 1, splurger: 1.5 } as Record<SpendingName, number>,
+  // A big spender takes the best room that suits them, at no more than their tolerance x this over the cheapest that would do
+  // (uncapped, half of them took suites and the cash-limited bots gained up to 55%)
+  tradeUpCap: 1,
+  spendMult: { thrifty: 0, standard: 1, splurger: 2 } as Record<SpendingName, number>, // at the shop and the restaurant
+  restaurantPerCover: 12, // x the level's revenueMult x the party (FACILITY_CONFIG.restaurant.spendPerVisit stays 0: the game without spending styles)
+  // A thrifty guest eats in town: in their evening (a regular's 18:00-20:00), half the time, out 1.5-2.5h, back in their room by 22:00 (shifted by chronotype)
+  dinnerOut: { chance: 0.5, hours: [18, 20] as [number, number], length: [1.5, 2.5] as [number, number], minOutside: 1, inRoomBy: 22 },
+  // What each minds in their review (standard is always 1: it's the game without spending styles). The doc's
+  // thrifty amenities x0.5 and big spenders' x1.2 averaged about 1 but spread reviews wider: about a quarter more fell
+  // under the line where a bad review spreads (each a 30% dip in arrivals for two days); these cost the bots far less
+  review: {
+    overcharge: { thrifty: 1.5, standard: 1, splurger: 1 } as Record<SpendingName, number>, // on what an overpriced room falls short by
+    amenityBonus: { thrifty: 0.8, standard: 1, splurger: 1.1 } as Record<SpendingName, number>,
+    amenityPenalty: { thrifty: 0.8, standard: 1, splurger: 1.1 } as Record<SpendingName, number>,
+    decorPenalty: { thrifty: 1, standard: 1, splurger: 1.1 } as Record<SpendingName, number>,
+  },
+  onSiteIsRevenue: true, // shop and restaurant takings count as revenue (Finance, valuation, goals), as room bills do
+  bigTab: 100, // x the restaurant's revenueMult: a tab this big makes a story
+};
+
 const REVIEW_WINDOW_DAYS = 30;
 
 export const REVIEW = {
