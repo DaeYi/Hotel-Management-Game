@@ -1,4 +1,5 @@
-import type { HotelState, StaffConfig, VisitorPolicy } from '../../simulation/types';
+import type { HotelState, StaffConfig, VisitorPolicy, SpotlightHold } from '../../simulation/types';
+import { spotlightOn, holdPolicy, holdLetGo } from '../../simulation/Spotlight';
 import { STAFF, HOSTED_NIGHTS, GUEST_PROFILE, DESK } from '../../config/balance';
 import { visitorPolicy } from '../../simulation/Visitors';
 import { getMaintenanceStatus, getStaffDailyCost } from '../../simulation/MaintenanceManager';
@@ -45,6 +46,10 @@ function farthestFloorWithoutCloset(state: HotelState): number | null {
 const VISITOR_POLICIES: Array<{ key: VisitorPolicy; label: string }> = [
   { key: 'ask', label: 'Ask them to leave' },
   { key: 'allow', label: 'Let them stay' },
+];
+const HOLD_POLICIES: Array<{ key: SpotlightHold; label: string }> = [
+  { key: 'hold', label: 'Hold a suite' },
+  { key: 'none', label: "Don't hold one" },
 ];
 
 /** The front desk today: the line now, how check-ins went, who gave up, complaints heard -- and what to do about a line. */
@@ -114,6 +119,23 @@ export function StaffPanel() {
             Ask: the front desk sends them home, and the host minds ({HOSTED_NIGHTS.hostPenalty} points of mood). Let them stay: they go
             by {String(HOSTED_NIGHTS.leaveHours[1]).padStart(2, '0')}:00, but a neighbour still kept awake {HOSTED_NIGHTS.complaintGraceHours} hours on checks out early.
             You can also ask from the room's card at any time.
+          </div>
+        </div>
+      )}
+      {spotlightOn() && (
+        <div class="stack" style={{ marginTop: '6px' }}>
+          <div class="body small">When a travel writer or a celebrity is coming:</div>
+          <div class="row" role="group" aria-label="Spotlight guests">
+            {HOLD_POLICIES.map(p => (
+              <button key={p.key} class={holdPolicy(state) === p.key ? 'chosen' : ''} aria-pressed={holdPolicy(state) === p.key}
+                onClick={() => c.setSpotlightHold(p.key)}>{p.label}</button>
+            ))}
+          </div>
+          {holdLetGo(state) && <div class="small warn-text">The hold was let go for the guest coming now: Hold a suite to hold one again, or pick one on its card.</div>}
+          <div class="dim tiny">
+            Hold one: the best suite free by then is kept for them (nobody who'd still be in it can book it), and they check in to it
+            first in line. Don't: they take the best suite free when they come, or any room. Either way you can hold or let go a suite
+            from its card.
           </div>
         </div>
       )}

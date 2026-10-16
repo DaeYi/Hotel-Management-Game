@@ -14,7 +14,7 @@ import { simulate } from '../src/simulation/simulate.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
 import { PRNG } from '../src/simulation/prng.js';
 import { hourStart, legsEnd } from '../src/simulation/Movement.js';
-import { GUEST_PURPOSES, ROOM_PREFERENCES, GUEST_OUTINGS, FACILITY_CONFIG, ECONOMY, REVIEW, PARTIES, GUEST_PROFILE, GUEST_FAVORITES, LOYALTY, MOOD, GUEST_HOUSEKEEPING, HOSTED_NIGHTS, PATIENCE, VOICE, SPENDING } from '../src/config/balance.js';
+import { GUEST_PURPOSES, ROOM_PREFERENCES, GUEST_OUTINGS, FACILITY_CONFIG, ECONOMY, REVIEW, PARTIES, GUEST_PROFILE, GUEST_FAVORITES, LOYALTY, MOOD, GUEST_HOUSEKEEPING, HOSTED_NIGHTS, PATIENCE, VOICE, SPENDING, SPOTLIGHT } from '../src/config/balance.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import type { ActiveIncident } from '../src/simulation/types.js';
 import type { PresetId } from '../src/config/furniture.js';
@@ -419,6 +419,7 @@ describe('Balance', () => {
     PATIENCE.enabled = false;
     VOICE.enabled = false;
     SPENDING.enabled = false; // (after them)
+    SPOTLIGHT.enabled = false;
     try {
       // The same runs at ec57afc (housekeeping preferences and hosted nights), every other switch on
       // (re-recorded for the housekeeping rebalance: ec57afc with the same rebalance gives exactly these)
@@ -433,12 +434,13 @@ describe('Balance', () => {
       expect(busy.totalRevenue).toBe(62895);
       expect(busy.totalTurnedAway).toBe(358);
     } finally {
-      PATIENCE.enabled = true; VOICE.enabled = true; SPENDING.enabled = true;
+      PATIENCE.enabled = true; VOICE.enabled = true; SPENDING.enabled = true; SPOTLIGHT.enabled = true;
     }
   }, 120000);
 
   it('spending styles off: a run is exactly as it was before them', () => {
     SPENDING.enabled = false;
+    SPOTLIGHT.enabled = false; // (after them)
     try {
       // The same runs at ca7ad40, every other switch on: long enough for the balanced bot's restaurant (day 119)
       const run = simulate(160, 9, undefined, STRATEGIES.balanced);
@@ -452,7 +454,27 @@ describe('Balance', () => {
       expect(busy.totalRevenue).toBe(62334);
       expect(busy.totalTurnedAway).toBe(301);
     } finally {
-      SPENDING.enabled = true;
+      SPENDING.enabled = true; SPOTLIGHT.enabled = true;
+    }
+  }, 240000);
+
+  it('spotlight guests off: a run is exactly as it was before them', () => {
+    SPOTLIGHT.enabled = false;
+    try {
+      // The same runs at ae09432, every other switch on: long enough for a few weeks at three stars
+      const run = simulate(160, 9, undefined, STRATEGIES.balanced);
+      expect(run.finalCash).toBeCloseTo(108069.29254534993, 6);
+      expect(run.avgReviewScore).toBeCloseTo(7.26896439118897, 9);
+      expect(run.totalRevenue).toBe(677365.5);
+      expect(run.totalTurnedAway).toBe(2341);
+      expect(run.finalStarRating).toBe(3);
+      const busy = simulate(45, 5, undefined, STRATEGIES.overstaffed);
+      expect(busy.finalCash).toBeCloseTo(10893.5, 6);
+      expect(busy.avgReviewScore).toBeCloseTo(7.771027972248226, 9);
+      expect(busy.totalRevenue).toBe(65729);
+      expect(busy.totalTurnedAway).toBe(322);
+    } finally {
+      SPOTLIGHT.enabled = true;
     }
   }, 240000);
 

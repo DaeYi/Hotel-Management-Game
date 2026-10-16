@@ -56,6 +56,10 @@ export interface GuestLoyalty {
 }
 /** What the front desk does when a neighbour complains about a guest's visitors: ask them to leave, or let them stay. */
 export type VisitorPolicy = 'ask' | 'allow';
+/** Who a spotlight guest is: a travel writer or a celebrity (see Spotlight.ts). */
+export type SpotlightKind = 'writer' | 'celebrity';
+/** Whether the hotel holds a suite for an announced spotlight guest: yes, or not. */
+export type SpotlightHold = 'hold' | 'none';
 /** Whether a night owl may stay till the late checkout: no, yes, or yes for a fee. */
 export type LateCheckoutPolicy = 'deny' | 'free' | 'fee';
 export type RoomStatus = 'vacant' | 'occupied' | 'cleaning' | 'renovating';
@@ -174,6 +178,7 @@ export interface Guest {
   complaint?: { about: string; cause?: string; via: 'desk' | 'phone'; at?: number };
   spent?: { shop: number; restaurant: number }; // what they've spent on site this stay (see Spending.ts)
   dinnersOut?: { day: number; count: number }; // a thrifty guest's dinners in town this stay (once a day)
+  spotlight?: { kind: SpotlightKind; rate?: number; until?: number }; // a spotlight guest, what they pay over the room's price, and (moved off the top floor) the day it stopped (see Spotlight.ts)
 }
 
 /** A tile in the building: (gridX, gridY) on a floor. A `door` means the tile is entered through that side only (a room or facility). */
@@ -233,6 +238,7 @@ export interface Walker {
   waited?: number; // gave up in line at the front desk: how long they waited (hours)
   wanted?: PartyKind; // gave up in line: the party they came as, if they'd booked a room for fewer
   spent?: number; // checked out: what they spent on site this stay
+  spotlight?: { kind: SpotlightKind }; // a spotlight guest checked out (their mark stays on them)
 }
 
 export type StaffRole = 'housekeeper' | 'maintenance';
@@ -353,6 +359,8 @@ export interface HotelState {
   // Today at the front desk so far (for the Staff panel): checked in, hours waited, the longest wait, gave up in line, complaints heard
   deskToday?: { day: number; checkedIn: number; waitHours: number; longestWait: number; gaveUp: number; complaints: number };
   visitorPolicy?: VisitorPolicy; // absent: ask (see Visitors.visitorPolicy)
+  spotlightHold?: SpotlightHold; // absent: hold (see Spotlight.holdPolicy)
+  spotlight?: SpotlightPlan; // this week's spotlight guest, from the Monday roll until they've gone
   // Today's let-downs at facilities, so far (recorded in dailyStats at the end of the day)
   facilityDemand?: { day: number; wanted: Partial<Record<FacilityType, number>>; full: Partial<Record<FacilityType, number>>; tooFar: Partial<Record<FacilityType, number>>; fullAt?: Record<string, number> };
   cash: number;
@@ -426,10 +434,28 @@ export interface DailyStat {
 /** Takings on site, cumulative: at the shop, at the restaurant, and how much of it from big spenders. */
 export interface OnSiteTakings { shop: number; restaurant: number; splurgers: number }
 
-/** A temporary arrival-multiplier penalty from a Review Goes Semi-Viral incident. */
+/** A temporary arrival-multiplier penalty from a Review Goes Semi-Viral incident (or a boost, from a travel writer's write-up). */
 export interface ReputationPenalty {
-  multiplier: number; // < 1.0, applied to arrivalsPerDay while active
+  multiplier: number; // < 1.0, applied to arrivalsPerDay while active (> 1.0 for a write-up)
   hoursRemaining: number;
+  kind?: 'write_up'; // a travel writer's glowing write-up (absent: a bad review spreading)
+}
+
+/** A spotlight guest, planned on a Monday (see Spotlight.ts). */
+export interface SpotlightPlan {
+  kind: SpotlightKind;
+  week: number;
+  salt: string; // the latest booking at the roll (so every game's weeks differ)
+  announceDay: number;
+  arrivalDay: number;
+  arrivalHour: number;
+  status: 'planned' | 'announced' | 'staying' | 'done';
+  roomId?: string; // the suite held for them (announced), or theirs (staying)
+  chosen?: boolean; // the held suite was picked by hand
+  released?: boolean; // the hold was let go by hand (for this one)
+  guestId?: string;
+  chainId: string; // their story chain
+  outcome?: 'write_up' | 'pan' | 'review';
 }
 
 export interface SimulationSummary {
@@ -464,6 +490,8 @@ export interface SimulationSummary {
   vipArrivals: number; // ... their fifth or more
   favoriteMisses: number; // days guests' favourite facility let them down
   moodShares: Record<Mood, number>; // how guests left
+  // Spotlight guests (Spotlight.ts): travel writers (their reviews summed, write-ups, bad ones spreading), celebrities (and what they paid), and those who found no room
+  spotlights: { writers: number; writeUps: number; pans: number; writerScore: number; celebrities: number; celebrityPaid: number; noRoom: number };
 }
 
 export interface TickResult {
@@ -472,7 +500,7 @@ export interface TickResult {
 }
 
 export interface GameEvent {
-  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'party_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked' | 'renovation_complete' | 'campaign_ended' | 'floor_built' | 'regular_lost' | 'visitors_asked_to_leave' | 'dnd_rooms_left' | 'guest_complained';
+  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'party_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked' | 'renovation_complete' | 'campaign_ended' | 'floor_built' | 'regular_lost' | 'visitors_asked_to_leave' | 'dnd_rooms_left' | 'guest_complained' | 'spotlight_announced' | 'spotlight_arrived' | 'spotlight_review';
   message: string;
   data?: Record<string, unknown>;
 }

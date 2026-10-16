@@ -3,6 +3,8 @@ import { isGuestAway } from '../simulation/GuestMovement';
 import { memberPositionAt, legsEnd } from '../simulation/Movement';
 import { partyOf, kidsIn } from '../simulation/Party';
 import { quirkOf } from '../simulation/Profile';
+import { spotlightOn } from '../simulation/Spotlight';
+import type { Quirk } from './quirks';
 import { GUEST_PROFILE, LOYALTY, PATIENCE } from '../config/balance';
 import { seatOf, patienceHours } from '../simulation/DeskQueue';
 import { moodHidden } from '../simulation/Voice';
@@ -46,7 +48,7 @@ export interface Figure {
   group?: string; // the party they're with (they sit together)
   member?: number; // which member of it
   since?: number; // when they stopped where they are (people already seated keep their seats)
-  quirk?: 'moon' | 'note' | 'coin'; // a light sleeper, a rowdy guest or a big spender (on their first member)
+  quirk?: Quirk; // a spotlight guest, a light sleeper, a rowdy guest or a big spender (on their first member)
   guestId?: string; // the booking they're part of (for picking a guest out with a click); none for people turned away
   opens?: string; // a visitor: the guest whose card a click on them opens (their host)
   ringTier?: 'returning' | 'regular' | 'vip'; // the ring's colour (on their first member)
@@ -62,7 +64,7 @@ export function isChild(party: Party, index: number): boolean {
 }
 
 /** Every member of a party on legs at time t (none while they're out of the building). */
-export function partyFigures(id: string, party: Party, legs: Leg[], t: number, color: number, ring: boolean, extra: { quirk?: 'moon' | 'note' | 'coin' | null; guestId?: string; opens?: string; ringTier?: Figure['ringTier']; mood?: Figure['mood'] | null; desks?: Map<string, { x: number; y: number }>; patience?: number; complaining?: boolean } = {}): Figure[] {
+export function partyFigures(id: string, party: Party, legs: Leg[], t: number, color: number, ring: boolean, extra: { quirk?: Quirk | null; guestId?: string; opens?: string; ringTier?: Figure['ringTier']; mood?: Figure['mood'] | null; desks?: Map<string, { x: number; y: number }>; patience?: number; complaining?: boolean } = {}): Figure[] {
   const figures: Figure[] = [];
   for (let m = 0; m < party.size; m++) {
     const at = memberPositionAt(legs, t, m);
@@ -127,7 +129,7 @@ export function guestFigures(state: HotelState, t: number): { figures: Figure[];
     figures.push(...partyFigures(guest.id, partyOf(guest), trip, t, getGuestDotColor(guest.purpose), guest.isReturning, {
       quirk: GUEST_PROFILE.enabled ? quirkOf(guest) : null, guestId: guest.id, ringTier: ringTierOf(staysOf(guest)),
       mood: moodHidden(guest) ? null : moodFace(guestMood(guest)), // (a stoic guest's mood doesn't show)
-      desks, patience: patienceHours(guest), complaining: onWayToComplain(guest, t),
+      desks, patience: guest.spotlight && spotlightOn() ? undefined : patienceHours(guest), complaining: onWayToComplain(guest, t), // (a spotlight guest is expected: no clock)
     }));
   }
   for (const walker of state.walkers ?? []) {

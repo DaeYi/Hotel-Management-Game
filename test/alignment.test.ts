@@ -1,5 +1,5 @@
 import { it, expect } from 'vitest';
-import { createStarterHotel, addRoom } from '../src/simulation/HotelState.js';
+import { createStarterHotel, addRoom, getAvailableRooms } from '../src/simulation/HotelState.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import { PRNG } from '../src/simulation/prng.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
@@ -8,11 +8,12 @@ import { settleChanges } from '../src/simulation/Settle.js';
 import { processCleaningTick } from '../src/simulation/HousekeepingManager.js';
 import { processMaintenanceTick } from '../src/simulation/MaintenanceManager.js';
 import { positionAt, memberPositionAt, legsEnd, hourStart } from '../src/simulation/Movement.js';
-import { facilityCapacity } from '../src/simulation/FacilityManager.js';
+import { facilityCapacity, facilityLoad, visitChance } from '../src/simulation/FacilityManager.js';
 import { isEntranceTile } from '../src/simulation/Layout.js';
 import { partyOf, partyLoad } from '../src/simulation/Party.js';
+import { fitsParty } from '../src/simulation/RoomProfile.js';
 import { guestFigures } from '../src/render/figures.js';
-import { STAFF, TRAVEL } from '../src/config/balance.js';
+import { STAFF, TRAVEL, SPOTLIGHT } from '../src/config/balance.js';
 import type { HotelState, Leg, OnSiteTakings } from '../src/simulation/types.js';
 import { guestPace } from '../src/simulation/Profile.js';
 import { housekeepingPrefOf } from '../src/simulation/CleaningPreference.js';
@@ -22,6 +23,8 @@ import { spendingOf, spentHere } from '../src/simulation/Spending.js';
 import { isCheckoutDay } from '../src/simulation/GuestManager.js';
 import { hostsTonight } from '../src/simulation/Visitors.js';
 import { isGuestAway, checkInLanes } from '../src/simulation/GuestMovement.js';
+import { arrivalTime } from '../src/simulation/Spotlight.js';
+import { profileRoom } from '../src/simulation/RoomProfile.js';
 
 function contiguous(legs: Leg[]): boolean {
   for (let i = 1; i < legs.length; i++) if (Math.abs(legs[i].start - legs[i - 1].end) > 1e-6) return false;
@@ -49,6 +52,16 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
   let charges = 0;
   let dinners = 0;
   let thriftyTrips = 0;
+  let held = 0;
+  let heldTaken = 0;
+  let spotlights = 0;
+  let toured = 0;
+  let writersLeft = 0;
+  let tourSkips = 0;
+  // Spotlight guests every other week, whatever the stars (a 200-day bot hotel spends most of it below 5 stars, where they're rare)
+  const weekly = SPOTLIGHT.weeklyChance;
+  SPOTLIGHT.weeklyChance = { 3: 0.5, 4: 0.5, 5: 0.5 };
+  try {
   for (const seed of [1, 2]) {
     let s: HotelState = createStarterHotel();
     // Doubles, and rooms for friends and families, so parties of every size stay
@@ -142,7 +155,7 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
         if (k < 0) continue;
         const ready = readyAt(g.trip, k);
         if (g.trip[k].start > ready + 1e-9) queued++;
-        if (g.trip[k].start - ready > patienceHours(g) + 1e-9) bad('waited in line past their patience', g.id);
+        if (g.trip[k].start - ready > patienceHours(g) + 1e-9 && !g.spotlight) bad('waited in line past their patience', g.id); // (a spotlight guest is expected: they wait)
       }
       for (const activity of ['check_in', 'complain'] as const) {
         const served: Array<{ desk: string; arrive: number; start: number; who: string }> = [];
@@ -234,6 +247,48 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
         for (let hh = Math.floor(g.trip[0].start); hh <= Math.floor(legsEnd(g.trip) - 1e-9); hh++) if (isSleepHour(g, ((hh % 24) + 24) % 24)) bad('out to dinner in their sleep hours', g.id);
         if (isCheckoutDay(g, after.day)) bad('dinner on their last day', g.id);
         if (hostsTonight(g, after.day)) bad('dinner on a night with friends round', g.id);
+      }
+      // W: spotlight guests. Nobody is booked into the suite held for one who'd still be in it on their day; the
+      // guest walks in on their day, no earlier than their hour, and checks in (first in line) to a suite if one
+      // was free; a travel writer leaving has tried every facility type the hotel had open all their stay
+      const spot = before.spotlight;
+      if (spot?.status === 'announced' && spot.roomId) {
+        held++;
+        for (const g of after.guests) {
+          if (had.has(g.id) || g.spotlight) continue;
+          if (after.rooms.find(x => x.guestId === g.id)?.id === spot.roomId && g.checkInDay + g.stayLength >= spot.arrivalDay) bad('booked into the held suite', g.id);
+        }
+      }
+      for (const g of after.guests) {
+        if (had.has(g.id) || !g.spotlight) continue;
+        spotlights++;
+        if (!spot || !g.id.startsWith(`spotlight-${spot.arrivalDay}`) || before.day !== spot.arrivalDay || !g.trip || g.trip[0].start < arrivalTime(spot) - 1e-9) bad('spotlight guest early or unplanned', g.id);
+        if (!g.trip || g.trip[0].start < T1v - 1e-9 || g.tripKind !== 'arrival') bad('spotlight guest not walking in', g.id);
+        const room = after.rooms.find(x => x.guestId === g.id)!;
+        const free = getAvailableRooms(before);
+        const freeSuite = free.some(x => profileRoom(x).type === 'suite' && fitsParty(profileRoom(x), partyOf(g)));
+        if (freeSuite && profileRoom(room).type !== 'suite') bad('spotlight guest not given a free suite', g.id);
+        // The held suite, ready, is theirs (and the story says so if not)
+        if (spot?.roomId && free.some(x => x.id === spot.roomId) && room.id !== spot.roomId) bad('spotlight guest not in the held suite, though it was ready', g.id);
+        if (spot?.roomId && room.id === spot.roomId) heldTaken++;
+        if (after.spotlight?.status !== 'staying' || after.spotlight.guestId !== g.id) bad('spotlight guest checked in but the plan not staying', g.id);
+      }
+      for (const g of before.guests) {
+        if (g.spotlight?.kind !== 'writer' || after.guests.some(x => x.id === g.id)) continue;
+        writersLeft++;
+        if (before.facilities.every(f => g.facilitiesUsed?.[f.type])) toured++;
+      }
+      // ... and a writer's visit while some facility type is still untried goes to an untried one, if one's open to them then
+      // (the tour comes first; a visit to one they've tried is only when every untried one is shut, out of hours, or full)
+      for (const g of after.guests) {
+        if (g.spotlight?.kind !== 'writer' || g.tripKind !== 'visit' || !g.trip || g.trip[0].start < T1v - 1e-9) continue;
+        const prev = before.guests.find(x => x.id === g.id);
+        const stay = g.trip.find(l => l.kind === 'stay' && l.activity === 'visit') as { placeId?: string } | undefined;
+        const type = after.facilities.find(f => f.id === stay?.placeId)?.type;
+        if (type && prev?.facilitiesUsed?.[type]) {
+          const untried = after.facilities.filter(f => !prev.facilitiesUsed?.[f.type] && visitChance(f.type, after.hour, after.day, g) > 0);
+          if (untried.some(f => facilityLoad(after, f.id, T1v + 1) < facilityCapacity(f) - 1)) tourSkips++;
+        }
       }
       // M: visitors walk in from the street, and are drawn in a room only while it's their host's and the host is in
       for (const w of after.walkers ?? []) {
@@ -362,6 +417,9 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
     }
     expect(visits).toBeGreaterThan(0); // the run got far enough for guests to be using facilities
   }
+  } finally {
+    SPOTLIGHT.weeklyChance = weekly;
+  }
   expect(partyTrips).toBeGreaterThan(50); // parties of three or more came and went
   expect(dndCleans).toBeGreaterThan(20); // do-not-disturb rooms were cleaned (while their guests were out)
   expect(visitorNights).toBeGreaterThan(20); // rowdy guests had friends round
@@ -371,5 +429,10 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
   expect(charges).toBeGreaterThan(1500); // guests spent money at the shop and the restaurant
   expect(dinners).toBeGreaterThan(200); // thrifty guests ate in town
   expect(thriftyTrips).toBeGreaterThan(300); // (and went to the gym and pool)
+  expect(held).toBeGreaterThan(24); // a suite was held for a spotlight guest
+  expect(spotlights).toBeGreaterThan(3); // who came
+  expect(heldTaken).toBeGreaterThan(2); // into the suite held for them
+  expect(toured / writersLeft).toBeGreaterThan(0.6); // and travel writers tried everything (most: some found a facility full every hour)
+  expect(tourSkips).toBe(0); // never passing over an untried facility with room
   expect(problems, JSON.stringify(examples)).toEqual({});
 }, 300000);

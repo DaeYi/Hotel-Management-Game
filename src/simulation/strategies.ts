@@ -5,6 +5,7 @@ import {
   upgradeFacility, getFacilityUpgradeCost, addElevator, buildFloor, getNextFloorCost, getElevatorLoad, addFixture, getRoomBuildCost,
 } from './HotelState.js';
 import { profileRoom } from './RoomProfile.js';
+import { writeUpMultiplier, celebrityPull } from './Spotlight.js';
 import type { PresetId } from '../config/furniture.js';
 import { startCampaign, getCampaignCost } from './MarketingManager.js';
 import { FACILITY_LEVELS } from '../config/balance.js';
@@ -48,9 +49,12 @@ const AVERAGE_STAY_NIGHTS = 2;
  * cutting housekeepers when a cleaning backlog -- not demand -- is what's
  * keeping rooms empty.
  */
-function demandOccupancy(state: HotelState, deseasonalize: boolean): number {
+export function demandOccupancy(state: HotelState, deseasonalize: boolean): number {
   if (state.rooms.length === 0) return 1;
-  const arrivals = getExpectedArrivalsPerDay(state) / (deseasonalize ? getTotalDemandMultiplier(state.day) : 1);
+  let arrivals = getExpectedArrivalsPerDay(state) / (deseasonalize ? getTotalDemandMultiplier(state.day) : 1);
+  // Building looks past a travel writer's write-up and a celebrity's day too, as it looks past the season
+  const passing = deseasonalize ? writeUpMultiplier(state) * celebrityPull(state) : 1;
+  if (passing !== 1) arrivals /= passing;
   return Math.min(1, arrivals * AVERAGE_STAY_NIGHTS * BOOKING_CONVERSION / state.rooms.length);
 }
 

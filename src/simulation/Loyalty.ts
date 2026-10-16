@@ -1,5 +1,5 @@
 import type { Guest, ReturningGuestProfile, Room } from './types.js';
-import { LOYALTY, SATISFACTION, STORY } from '../config/balance.js';
+import { LOYALTY, SATISFACTION, STORY, SPOTLIGHT, GUEST_PROFILE } from '../config/balance.js';
 import { hash01 } from './Movement.js';
 import { moodOf } from './Mood.js';
 
@@ -56,7 +56,8 @@ export function expectationMultFor(guest: Pick<Guest, 'loyalty' | 'isReturning'>
 }
 
 /** How many times over a guest's review and mood count in the hotel's rolling windows (none: once). */
-export function bookingWeightFor(guest: Pick<Guest, 'loyalty' | 'isReturning'>): number | undefined {
+export function bookingWeightFor(guest: Pick<Guest, 'loyalty' | 'isReturning' | 'spotlight'>): number | undefined {
+  if (SPOTLIGHT.enabled && GUEST_PROFILE.enabled && guest.spotlight?.kind === 'writer') return SPOTLIGHT.writer.bookingWeight; // a travel writer's review is read by many
   if (!LOYALTY.enabled) return undefined;
   const tier = tierOf(staysOf(guest));
   return tier === 'regular' || tier === 'vip' ? LOYALTY.bookingWeight : undefined;

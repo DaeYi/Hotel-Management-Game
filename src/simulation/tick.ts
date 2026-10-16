@@ -15,6 +15,7 @@ import { planVisitors, fileVisitorComplaints, sendOrphanedVisitorsHome } from '.
 import { creditCheckIns, recordGiveUps, reseatLanes } from './DeskQueue.js';
 import { planDeskComplaints, hearComplaints } from './Complaints.js';
 import { voiceOf } from './Voice.js';
+import { spotlightOn, planSpotlight, spotlightCheckedIn, recordSpotlightOutcome, spotlightNightRate, spotlightSettlement } from './Spotlight.js';
 import { hourEnd } from './Movement.js';
 import { tickNoiseSources, accrueNightNoise } from './NoiseManager.js';
 import { processCleaningTick, processDailyHousekeeping, degradeCleanliness, startTurnoverCleaning } from './HousekeepingManager.js';
@@ -63,6 +64,11 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
 
   // 1. Process guest arrivals: rooms are booked now, and the guests walk in,
   // check in at a staffed desk, and go up to their rooms over the next hour.
+  // First the week's spotlight guest (rolled on Monday, announced, a suite held)
+  const spotlight = planSpotlight(current);
+  current = spotlight.state;
+  events.push(...spotlight.events);
+  if (spotlightOn()) current = startPendingRefits(current); // (a suite the hold just left, with a refit booked, closes for it before arrivals)
   const arrivals = processArrivals(current, current.hour, prng);
   events.push(...arrivals.events);
 
@@ -84,6 +90,12 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
     returningGuestPool: arrivals.returningGuestPool,
     totalTurnedAway: current.totalTurnedAway + arrivals.turnedAway,
   };
+  if (arrivals.spotlight) {
+    // The spotlight guest checked in (or went elsewhere)
+    const checkedIn = spotlightCheckedIn(current, arrivals.spotlight.guest, arrivals.spotlight.room, arrivals.spotlight.noDesk);
+    current = checkedIn.state;
+    events.push(...checkedIn.events);
+  }
   const arrivalTrips = planArrivalTrips(current, arrivals.checkedIn, arrivals.walkIns, T);
   current = {
     ...current,
@@ -143,7 +155,8 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
 
     const daysStayed = Math.max(1, current.day - guest.checkInDay);
     const nightsRemaining = Math.max(0, guest.stayLength - daysStayed);
-    const settlement = calculateEarlyDepartureSettlement(room.pricePerNight, daysStayed, nightsRemaining);
+    const rate = spotlightOn() && guest.spotlight?.rate ? spotlightNightRate(guest, room.pricePerNight) : room.pricePerNight; // (a celebrity on the top floor pays double)
+    const settlement = spotlightOn() && guest.spotlight?.rate ? spotlightSettlement(guest, room.pricePerNight, daysStayed, nightsRemaining) : calculateEarlyDepartureSettlement(room.pricePerNight, daysStayed, nightsRemaining);
     walkoutCashDelta += settlement.cashDelta;
 
     // Real breakdown, computed once (eng-review D2/D4) -- reused for both the
@@ -156,7 +169,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
       id: `booking-walkout-${guest.id}`,
       roomId: room.id,
       guestId: guest.id,
-      nightRate: room.pricePerNight,
+      nightRate: rate,
       reviewScore: score,
       satisfactionAtCheckout: guest.satisfaction,
       ...(weight ? { weight } : {}),
@@ -170,7 +183,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
         data: { guestId: guest.id, personId: personIdOf(guest), roomId: room.id, stays: staysOf(guest) },
       });
     }
-    walkoutReviews.push({ guestName: partyLabel(guest), roomId: room.id, booking, breakdown, voice: voiceOf(guest), ...(guest.spent?.restaurant ? { tab: guest.spent.restaurant } : {}) });
+    walkoutReviews.push({ guestName: partyLabel(guest), roomId: room.id, booking, breakdown, voice: voiceOf(guest), guest, ...(guest.spent?.restaurant ? { tab: guest.spent.restaurant } : {}), ...(guest.spotlight ? { paid: settlement.cashDelta } : {}) });
 
     events.push({
       type: 'guest_walked_out',
@@ -240,9 +253,16 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   // Review Goes Semi-Viral: check this tick's departures (normal + walkout)
   // for an unusually bad checkout, budget-gated same as other new incidents.
   const departureReviews: DepartedGuestReview[] = [
-    ...departures.departed.map(d => ({ guestName: partyLabel(d.guest), roomId: d.roomId, booking: d.booking, breakdown: d.breakdown, voice: voiceOf(d.guest), ...(d.guest.spent?.restaurant ? { tab: d.guest.spent.restaurant } : {}) })),
+    ...departures.departed.map(d => ({
+      guestName: partyLabel(d.guest), roomId: d.roomId, booking: d.booking, breakdown: d.breakdown, voice: voiceOf(d.guest), guest: d.guest,
+      ...(d.guest.spent?.restaurant ? { tab: d.guest.spent.restaurant } : {}), ...(d.guest.spotlight ? { paid: d.booking.nightRate * d.guest.stayLength + (d.lateFee ?? 0) } : {}),
+    })),
     ...walkoutReviews,
   ];
+  // The spotlight guest's review (a travel writer's write-up, or a bad one spreading: the day's one)
+  const spotlightOut = recordSpotlightOutcome(current, departureReviews);
+  current = spotlightOut.state;
+  events.push(...spotlightOut.events);
   const semiViral = checkReviewSemiViral(current, departureReviews, prng);
   current = semiViral.state;
   events.push(...semiViral.events);

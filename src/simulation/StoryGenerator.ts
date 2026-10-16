@@ -16,6 +16,7 @@ import { formatRoomLabel, isRoomReachable } from './HotelState.js';
 import { roomMoveTrip, isGuestAway } from './GuestMovement.js';
 import { isCheckoutDue } from './GuestManager.js';
 import { hourEnd, hourStart, legsEnd } from './Movement.js';
+import { spotlightOn, heldFrom } from './Spotlight.js';
 
 // ============================================================================
 // Story log: append + chain-aware cap/eviction (design-review D11).
@@ -47,9 +48,14 @@ export function groupByChain(storyLog: StoryLogEntry[]): StoryLogChain[] {
 }
 
 /** Cap-eviction operates on whole chains, never orphaning an escalation from its origin (D11). */
-function pruneToMaxChains(storyLog: StoryLogEntry[], maxChains: number): StoryLogEntry[] {
+function pruneToMaxChains(storyLog: StoryLogEntry[], maxChains: number, pinned?: string): StoryLogEntry[] {
   const chains = groupByChain(storyLog);
   if (chains.length <= maxChains) return storyLog;
+  if (pinned && chains.some(c => c.chainId === pinned)) {
+    // A pinned chain stays, and the newest of the rest fill the other places
+    const kept = new Set([pinned, ...chains.filter(c => c.chainId !== pinned).slice(0, maxChains - 1).map(c => c.chainId)]);
+    return storyLog.filter(e => kept.has(e.chainId ?? e.id));
+  }
   const keep = new Set(chains.slice(0, maxChains).map(c => c.chainId));
   return storyLog.filter(e => keep.has(e.chainId ?? e.id));
 }
@@ -80,7 +86,9 @@ export function appendStoryLogEntry(state: HotelState, input: NewEntryInput): { 
     message: input.message,
     chainId: input.chainId ?? id,
   };
-  const storyLog = pruneToMaxChains([...state.storyLog, entry], STORY.storyLogMaxChains);
+  // (an announced or staying spotlight guest's story is kept whatever else happens)
+  const pinned = spotlightOn() && state.spotlight && state.spotlight.status !== 'done' ? state.spotlight.chainId : undefined;
+  const storyLog = pruneToMaxChains([...state.storyLog, entry], STORY.storyLogMaxChains, pinned);
   return { state: { ...state, storyLog }, entry };
 }
 
@@ -134,9 +142,11 @@ export interface AdvanceResult {
  */
 function findHealthySameTypeRoom(state: HotelState, rooms: Room[], exclude: Room, guest: Guest): Room | null {
   const party = partyOf(guest);
+  const held = heldFrom(state, guest.checkInDay + guest.stayLength - state.day); // (held for a spotlight guest, and they'd still be in it)
   // The smallest that fits, then the cheapest: a couple doesn't take the family room a family needs
   return rooms.filter(r =>
     r.id !== exclude.id
+    && r.id !== held
     && r.type === exclude.type
     && r.status === 'vacant'
     && r.condition > ECONOMY.roomBreakdownThreshold
@@ -244,8 +254,10 @@ export function advanceIncidents(state: HotelState, prng: PRNG, T = hourEnd(stat
         return r;
       });
       const trip = roomMoveTrip(current, guest, target, T);
+      // (a celebrity moved down off the top floor pays the price from today: the double rate is for a top-floor suite)
+      const offTop = (g0: Guest) => (g0.spotlight?.rate && g0.spotlight.until === undefined && target.floor < room.floor ? { spotlight: { ...g0.spotlight, until: current.day } } : {});
       guests = guests.map(g => g.id === guest.id
-        ? { ...g, satisfaction: Math.min(100, g.satisfaction + SATISFACTION.midStayBreakdownMoveBonus), trip, tripKind: trip ? 'move' as const : undefined }
+        ? { ...g, satisfaction: Math.min(100, g.satisfaction + SATISFACTION.midStayBreakdownMoveBonus), trip, tripKind: trip ? 'move' as const : undefined, ...offTop(g) }
         : g);
       const appended = appendStoryLogEntry(current, {
         type: 'mid_stay_breakdown_resolved',
@@ -616,6 +628,8 @@ export interface DepartedGuestReview {
   breakdown: GuestReviewBreakdown;
   voice?: Voice; // how they complain (a stoic guest's bad review is likelier to spread)
   tab?: number; // what they spent at the restaurant this stay (spending styles on)
+  guest?: Guest; // who it was (the spotlight guest's review is their own story)
+  paid?: number; // a spotlight guest: what they paid (the bill and any late fee, or a walkout's settlement)
 }
 
 export function checkReviewSemiViral(
@@ -629,11 +643,12 @@ export function checkReviewSemiViral(
   }
   // One bad review spreading a day: checkouts come at several hours now (early
   // birds, late checkouts), and each batch mustn't be another chance to go viral
-  if (GUEST_PROFILE.enabled && state.storyLog.some(e => e.type === 'review_semi_viral' && e.day === state.day)) {
+  // (a travel writer's bad review, spreading, is the day's one too)
+  if (GUEST_PROFILE.enabled && state.storyLog.some(e => (e.type === 'review_semi_viral' || (e.type === 'spotlight_pan' && spotlightOn())) && e.day === state.day)) {
     return { state, events: [] };
   }
 
-  const bad = departures.filter(d => d.booking.reviewScore < STORY.reviewSemiViralScoreThreshold);
+  const bad = departures.filter(d => d.booking.reviewScore < STORY.reviewSemiViralScoreThreshold && !(spotlightOn() && d.guest?.spotlight)); // (a spotlight guest's review is told on its own)
   if (bad.length === 0) {
     return { state, events: [] };
   }
@@ -650,7 +665,7 @@ export function checkReviewSemiViral(
   const nextState: HotelState = {
     ...appended.state,
     activeReputationPenalties: [
-      ...(STORY.reviewSemiViralStacks ? appended.state.activeReputationPenalties : []),
+      ...(STORY.reviewSemiViralStacks ? appended.state.activeReputationPenalties : appended.state.activeReputationPenalties.filter(p => p.kind === 'write_up')), // (a write-up isn't undone)
       { multiplier: STORY.reviewSemiViralPenaltyMultiplier, hoursRemaining: STORY.reviewSemiViralPenaltyHours },
     ],
   };
@@ -676,9 +691,9 @@ function pickWeighted<T>(items: T[], weight: (t: T) => number, roll: number): T 
   return items[items.length - 1];
 }
 
-/** Combined multiplier from all active temporary reputation penalties (Review Goes Semi-Viral). */
+/** Combined multiplier from all active temporary reputation penalties (Review Goes Semi-Viral), and write-ups. */
 export function getReputationPenaltyMultiplier(state: HotelState): number {
-  return state.activeReputationPenalties.reduce((mult, p) => mult * p.multiplier, 1.0);
+  return state.activeReputationPenalties.reduce((mult, p) => (p.kind === 'write_up' && !spotlightOn() ? mult : mult * p.multiplier), 1.0);
 }
 
 export function tickReputationPenalties(state: HotelState): HotelState {

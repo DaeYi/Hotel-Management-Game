@@ -9,6 +9,7 @@ import { calculateValuation } from '../simulation/ObjectivesManager';
 import { getSeasonInfo } from '../simulation/SeasonManager';
 import { getOccupancyRate } from '../simulation/HotelState';
 import { partySize } from '../simulation/Party';
+import { spotlightOn, spotlightBanner } from '../simulation/Spotlight';
 import { getNextLoanPaymentDay } from '../simulation/EconomyManager';
 import { ACTOR_COLORS } from '../render/ActorLayer';
 import { CleaningLegend } from './CleaningKey';
@@ -83,6 +84,8 @@ function TopBar() {
   const { state } = c;
   const season = getSeasonInfo(state.day);
   const speedLabel = c.running ? `${c.speed}x` : 'PAUSED';
+  // A spotlight guest due or staying, and a write-up (or a bad review) moving bookings now
+  const banner = spotlightBanner(state, c.gameTime);
   return (
     <div>
       <div class="headline">
@@ -96,6 +99,7 @@ function TopBar() {
         {'  |  '}{String(state.hour).padStart(2, '0')}:00  |  Demand: {season.demandLabel}
         {season.specialEvent ? `  🎉 ${season.specialEvent}` : ''}
       </div>
+      {banner.length > 0 && <div class="subline spotlight-line">{banner.join('  |  ')}</div>}
     </div>
   );
 }
@@ -204,6 +208,12 @@ function Legend() {
       </span>
       {GUEST_PROFILE.enabled && (
         <span class="legend-group" role="group" aria-label="Guest marks">
+          {spotlightOn() && (
+            <>
+              <span class="legend-mark notebook">{QUIRK_GLYPHS.notebook}</span>Travel writer
+              <span class="legend-mark star">{QUIRK_GLYPHS.star}</span>Celebrity
+            </>
+          )}
           <span class="legend-mark">{QUIRK_GLYPHS.moon}</span>Light sleeper
           <span class="legend-mark">{QUIRK_GLYPHS.note}</span>Rowdy
           {SPENDING.enabled && <><span class="legend-mark coin">{QUIRK_GLYPHS.coin}</span>Big spender</>}
@@ -227,6 +237,7 @@ function Legend() {
               <span class="swatch hanger" style={{ background: toCss(HANGER_COLORS.dnd) }} />Do not disturb
             </>
           )}
+          {spotlightOn() && <><span class="swatch hanger" style={{ background: toCss(HANGER_COLORS.held) }} />Held for a spotlight guest</>}
           {HOSTED_NIGHTS.enabled && <><span class="swatch ring" style={{ borderColor: toCss(VISITORS_COLOR) }} />Friends round (noisy)</>}
           {PATIENCE.enabled && <><ClockGlyph />Losing patience in line</>}
           {VOICE.enabled && (

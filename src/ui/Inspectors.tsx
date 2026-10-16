@@ -21,6 +21,7 @@ import { describeVisitors, canAskVisitorsToLeave, clockTime } from '../simulatio
 import { moodHidden } from '../simulation/Voice';
 import { spendingOn, spendingOf, spentHere, saleFor } from '../simulation/Spending';
 import { describeLoyalty } from '../simulation/Loyalty';
+import { spotlightOn, holdFor, holdBlocksRenovation, describeSpotlight } from '../simulation/Spotlight';
 import { guestMood } from '../simulation/Mood';
 import { getOpenFacilities } from '../simulation/Layout';
 import { PartyLabel } from '../simulation/Party';
@@ -131,9 +132,12 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
   // Friends round, and the hanger on the door
   const visitors = room.status === 'occupied' && guest ? describeVisitors(state, guest.id, c.gameTime) : null;
   const hanger = room.status === 'occupied' && guest ? housekeepingPrefOf(guest) : 'standard';
+  // Held for an announced spotlight guest (or it could be)
+  const hold = holdFor(state, room);
 
   const stats = [
     `Status:      ${status}`,
+    ...(hold?.held ? [`Held:        for the ${hold.who} (${hold.when})`] : []),
     ...(visitors ? [`Visitors:    ${visitors}`] : []),
     `Condition:   ${formatBar(room.condition)} ${room.condition.toFixed(0)}%`,
     `Cleanliness: ${formatBar(room.cleanliness)} ${room.cleanliness.toFixed(0)}%${cleaning?.job === 'daily' ? `, ${dailyStatus(cleaning)}` : ''}`,
@@ -146,6 +150,7 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
 
   const canRepair = room.condition < 80 && room.status === 'vacant';
   const canRenovate = room.status === 'vacant' && room.decor < 90;
+  const heldBack = holdBlocksRenovation(state, room.id, RENOVATION.durationHours); // (it wouldn't be done in time)
   const renovationCost = getRenovationCost(getRoomInvestedCost(room), state.starRating);
   const canDemolish = room.status !== 'occupied' && room.status !== 'renovating';
 
@@ -190,8 +195,19 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
             Repair ({formatMoney(ECONOMY.roomRepairCost)})
           </button>
         )}
+        {hold?.held && (
+          <button onClick={() => c.releaseHold()} title={`It can be booked again; the ${hold.who} takes the best suite free when they come`}>
+            Let the hold go
+          </button>
+        )}
+        {hold && !hold.held && (
+          <button class="good" onClick={() => c.holdSuite(room.id)} title={`Instead of the suite held now (if any)`}>
+            Hold for the {hold.who}
+          </button>
+        )}
         {canRenovate && (
-          <button class="warn" disabled={state.cash < renovationCost} onClick={() => c.renovateRoom(room.id)}>
+          <button class="warn" disabled={state.cash < renovationCost || heldBack} onClick={() => c.renovateRoom(room.id)}
+            title={heldBack && hold ? `Held for the ${hold.who}: it wouldn't be done by ${hold.when}` : undefined}>
             Renovate ({formatMoney(renovationCost)}, {RENOVATION.durationHours}h)
           </button>
         )}
@@ -307,8 +323,8 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
     const booking = state.bookings.find(b => b.guestId === guestId);
     return (
       <TileCard tile={anchor} title={PartyLabel({ id: guestId, name: walker.name ?? 'Guest', party: walker.party })}>
-        <div class="small">{walker.reason === 'walked_out' ? 'Checked out early' : 'Checked out'}, on their way out.</div>
-        {booking && <div class="small">Their review: {booking.reviewScore.toFixed(1)}/10</div>}
+        <div class="small">{spotlightOn() && walker.spotlight ? `The ${walker.spotlight.kind === 'writer' ? 'travel writer' : 'celebrity'}: ` : ''}{walker.reason === 'walked_out' ? 'Checked out early' : 'Checked out'}, on their way out.</div>
+        {booking && <div class="small">Their review: {booking.reviewScore.toFixed(1)}/10{booking.weight && spotlightOn() && walker.spotlight?.kind === 'writer' ? ` (counts ${booking.weight} times over)` : ''}</div>}
         {walker.spent ? <div class="small">Spent {formatMoney(walker.spent)} here</div> : null}
       </TileCard>
     );
@@ -334,6 +350,7 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
   const favoriteLine = favorite ? describeFavorite(guest, facilityStatus(state, favorite), FACILITY_CONFIG[favorite].label) : null;
   const lines = [
     `${capitalize(describeGuest(party, guest.purpose))}${guest.isReturning && !LOYALTY.enabled ? ', back again' : ''}`,
+    ...describeSpotlight(guest, state),
     `Night ${night} of ${guest.stayLength}${LOYALTY.enabled ? ` \u00b7 ${describeLoyalty(guest)}` : ''}`,
     ...(favoriteLine ? [favoriteLine] : []),
     ...(housekeeping ? [housekeeping] : []),

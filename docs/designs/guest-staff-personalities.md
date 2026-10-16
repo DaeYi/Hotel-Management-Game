@@ -932,3 +932,83 @@ Spending style, behind one switch, `SPENDING` (it needs guest profiles). With it
   - The doc's "Who stays" table and the room card's recent stays (to read "my price chooses who comes" at a glance).
   - Prices by meal at the restaurant, and a kitchen cost.
   - The bots price every room at fair, so they can't use the new levers (price suites near deluxe to catch big spenders; price standard rooms up to turn thrifty guests away).
+
+
+### Phase 3b as shipped (2026-10-16)
+
+Spotlight guests, behind one switch, `SPOTLIGHT` (it needs guest profiles). With it off the game is the committed game exactly: a fifth pinned run in `test/preferences.test.ts` (160 days at three stars, plus the busy overstaffed run) and 400-day runs of all four bots match ae09432 seed for seed. Event-goers, the rest of phase 3, follow as 3c.
+
+- **Who and when.**
+  - On Monday at 09:00 the week is rolled from a hash of the week and the latest booking, never the shared random stream: at most one a week, from three stars and with a suite to put them in, one at a time.
+  - The chance rises with the stars: one week in twenty at 3 stars, ten at 4, three at 5. A famous guest picks a grand hotel.
+    - The same chance at every star helped the under-staffed hotel most (+5%, wearing the staffing gate's margin down): spotlight money and write-ups lift a small hotel more. See Balance.
+  - Half are travel writers, half celebrities. They walk in Wednesday to Friday at 15:00-17:00, for two nights.
+  - Announced at 09:00 a day or two ahead, as a toast and its own story thread ("A travel writer arrives Thursday at about 15:00 and wants a suite. Room 157 is held for them."), with a reminder the day before. Not an incident: no part of the day's story budget, and the thread is kept in the log while it runs.
+  - Dropped quietly if the hotel has fallen below three stars, or has no suite, by the announcement.
+- **The suite held.** A standing policy on the Staff panel, Hold a suite (the default) or Don't hold one.
+  - The best suite their party fits that will be free by then is held: vacant; being cleaned (by the housekeepers' queue and shift hours, never with none); renovating but done in time; or with a guest who leaves before the day. A writer gets the freshest, a celebrity the highest.
+  - Nobody who'd still be in it on the day can book it, at the desk or by a mid-stay move. A renovation or a refit that would run past the arrival is refused (the Furnish panel offers to refit after them).
+  - The hold stays put while the suite will be ready for them by the last check-in (a better one coming free later doesn't take it), and moves, with a story line, if it won't. A celebrity's moves up to a higher suite that's ready.
+  - On the suite's card: "Held: for the travel writer (Thu ~15:00)", Let the hold go, and on another suite, Hold for the travel writer. The door has a lilac tag.
+- **Arriving.** Their room is decided at the hour boundary before they walk in, first in line; they never give up in the queue (no patience clock over them).
+  - The held suite. Still being cleaned: they wait for it, if it'll be ready by the last check-in, unless another free suite suits them as well. With no hold, the best suite free.
+  - No suite free: they wait while one will be ready by the last check-in. At the last check-in hour, the best room free, or none ("found no room free and went elsewhere"). With nobody at the desk, they wait too.
+  - The story says when the held suite wasn't ready. No draws: who they are comes from hashes of the plan, a different person each game.
+- **The travel writer.** Alone, on a getaway: regular hours, even-handed, vocal, standard housekeeping; a notebook over them.
+  - Tries every facility the hotel has, in turn, once each, at the first hour it's open to them: however cross, however far (the walk limit doesn't apply). Full: they try again the next hour.
+  - Judges the hotel a star up: a 3-star hotel as a 4 (its expectation, and the amenities a 4 must have: basic ones are a fault). A 5-star hotel by their own standard (1.9). They take the amenities of that class for granted (no bonus for them), so the writer tells hotels apart.
+  - Their review counts five times over in the hotel's rolling windows.
+  - 8.5 or more: a write-up, bookings +20% for a day (the doc's 48 hours moved the staffing gate past the game's own noise). 4 or less: it spreads as a bad review does, always, and is the day's one; on a day one already has, it keeps that one going, no deeper.
+  - The write-up names what they loved and minded most, from the review's own parts, the room's faults weighed as hard as they minded them; the price is never a reason to love it ("loved the pool; minded slow lifts").
+  - The bots' building looks past a write-up, as it looks past the season.
+- **The celebrity.** A couple, big spenders, patient, behind a do-not-disturb sign; a pink star over them.
+  - In a top-floor suite they pay double; anywhere else, the price. Moved down off the top floor by a breakdown, they pay the price from then (the nights before stay double, walking out too).
+  - Walk-ins +10% from when they check in to the end of the day.
+  - Their checkout story says what they paid.
+- **On screen.**
+  - The top bar: "✎ Travel writer due Thu ~15:00 (in 1d 6h)", then "staying in 157"; a write-up or a bad review spreading, with its hours left; a celebrity's pull.
+  - Their card: who they are and what their stay means ("Travel writer: judges the hotel as a 4-star one...; their review counts 5 times over", what they've still to try; "Celebrity: paying double for a top-floor suite").
+  - The room card tags them; the leaving card says who they were. Legend entries for both marks and the held tag.
+- **Balance** (400 days, mean valuation, paired by seed; balanced, overstaffed and understaffed 96 seeds, the hoarder 48):
+
+  | Bot | 3b off | 3b on | Writers a run (write-ups) | Celebrities a run |
+  |---|---|---|---|---|
+  | Balanced | $4.17M | $4.23M (+1.5% ± 1.4) | 5.6 (62%) | 5.9 |
+  | Overstaffed | $3.28M | $3.30M (+0.5% ± 2.5) | 2.9 (93%) | 3.4 |
+  | Understaffed | $2.71M | $2.77M (+2.2% ± 2.0) | 3.3 (88%) | 3.4 |
+  | Hoarder | $1.44M | $1.41M (-2.0% ± 2.3) | 1.3 (95%) | 1.2 |
+
+  - Nobody goes bankrupt; the order holds. A celebrity pays about $1,400-1,900 a stay. Of about 1,200 writers, one panned a hotel (a hoarder's).
+  - **The staffing gate** (housekeeping.test.ts, seeds 0-5) passes: balanced beats understaffed by 1.78x and overstaffed by 1.46x. Over all 96 seeds the medians are 1.60x and 1.39x (1.61x and 1.34x off).
+  - **The gate's noise.** Re-rolling the random stream alone (no change to the game: one extra draw at the start) fails a six-seed block one time in five or so (5 and 9 of 32; the game itself 6, 3b 5). So six-seed blocks can't judge a change; runs of 24 seeds can (no failure for the game or either re-roll; their worst 1.52x). With 3b one run of 24 in eight falls just short (1.47x, a balanced dip and an understaffed rise together).
+  - **What was tried.**
+    - The doc's one in two weeks with 48-hour write-ups: +0.4 / +11.1 / +8.4 / +14.5%, and the gate failing.
+    - 24-hour write-ups, then rarer rolls: closer, but the same chance at every star left the understaffed bot +5.0% ± 2.0 over 96 seeds.
+    - Taking the write-up, the review weight or the celebrity's money away left it +4-5% each. Announced and held but never arriving: -0.4%. Not one mechanism: the guest's stay and its money in a small hotel.
+    - A chance rising with stars took it to +1-3%, with the gate like the re-rolls'.
+- **Review.** Eight adversarial rounds, each finding checked by two skeptics: one reading the code to refute it, one writing a probe to reproduce it.
+  - **The first** (six reviewers and a completeness critic) confirmed 38 findings, many the same problem seen from several sides, about twenty distinct, all fixed. None refuted. Among them:
+    - on the arrival day the hold could move to a better suite vacated that morning and still dirty, and the ready one got booked;
+    - the guest didn't wait for a held suite being cleaned, and waited for suites ready only by midnight;
+    - a suite held for a couple could sleep one;
+    - the announced time was an hour before they could appear;
+    - the write-up named faults as anyone would, not as the writer felt them;
+    - a pan could stack on a bad review already spreading that day;
+    - the story chain could be pruned while it ran;
+    - a refit could close the held suite past the arrival;
+    - a save's spotlight guest wasn't ordinary with the switch off;
+    - check W didn't check the hold or the tour;
+    - fourteen test gaps.
+  - **The second** (five reviewers and a critic) confirmed 14 (eight distinct), all fixed; two refuted. The worst: the first round's "wait for the held suite" could never happen in a real tick, because the hourly hold re-pick dropped the suite first. Also the celebrity's rate after a move, the Furnish panel, the patience clock, and every game's guest being the same person on a given day.
+  - **The third** (three reviewers) confirmed nine, all fixed: a celebrity's move up gave away a ready suite for one still dirty; the cleaning estimate ignored the housekeepers' queue (and none at all); the double nights after a move were billed and told as an average.
+  - **The fourth** (two reviewers) confirmed four, all fixed: the estimate of when a suite being cleaned would be ready shared the work as one pool among the housekeepers (they take a room each), ignored walks and the day's checkouts still to come and counted rooms nobody could reach; and a refit booked on the held suite started as soon as the room was empty, though the Furnish panel said it would wait.
+  - **The fifth** (two reviewers) confirmed four, all fixed: the estimate put later checkouts ahead of a suite a free housekeeper would start first, and charged a walk to a room a housekeeper was already in. It is now a time-ordered schedule, as the housekeepers work it out hour by hour; its prototype, measured against the real tick, all but ended the false "won't be ready" calls without adding waits in vain. The Furnish panel's booking button for the held suite said "once there's $X".
+  - **The sixth** (two reviewers) confirmed five, all fixed: the estimate charged every turnover the whole day's walking (two and a half walks from base, three to five times a real walk between rooms), which near the shift's end turned "ready tonight" into "tomorrow" (a suite lost in about one visit in a hundred in busy hotels, and false "won't be ready" stories); a housekeeper free off shift took a job before the morning's checkouts were queued; a suite with a refit booked (and not held) counted as free though the refit would start once it was empty; an occupied suite counted as free whatever its turnover after the guest.
+  - **The seventh** (two reviewers) confirmed four, all fixed: the sixth round's refit rule was too blunt (a suite with a refit booked couldn't be held, though holding it is what makes the refit wait: now only waiting for a suite not held leaves such a suite out), and a housekeeper doing a daily clean in an occupied suite was counted as already turning it over. It measured the sixth round's changes as neutral to better for the guest (no waits in vain before or after). A fifth finding was a design question, not a defect (see below).
+  - **The eighth** (two reviewers, on the seventh's two fixes) confirmed one, fixed: when the hold left a suite with a refit booked in the middle of the hour ("Don't hold one", or a celebrity's hold moving up), the refit had already been passed over that hour, and a walk-in could take the suite first. None refuted, and nothing else found: the rounds were down to one low-severity edge.
+  - 158 of 158 mutations caught (every rule above broken in turn). Three others were equivalent: a reminder guard that could never matter (removed), a switch check made twice, and the no-housekeepers guard (without it nothing is ever waiting, so never ready all the same).
+- **Not done from 3b:**
+  - The held suite can be let to a guest who leaves the day before the arrival (the hotel earns that night). In a badly understaffed hotel its turnover then sometimes isn't done in time and the spotlight guest gets a lesser room: at full staffing never, at 60% of the housekeepers needed about one visit in 200, at 40% about one in 20 (the seventh round's measurement). Closing the held suite to every booking while they're announced would end it, at the cost of up to a suite-night a visit.
+  - The doc's other prep (daily housekeeping, pausing renovations nearby, a quiet floor) works only through the hotel-wide settings: nothing ties it to the spotlight guest's room, or points the player to it.
+  - A concierge who spots spotlight guests (open question 6 is settled: always announced).
+  - The bots don't prepare for spotlight guests.

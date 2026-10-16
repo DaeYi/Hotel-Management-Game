@@ -11,6 +11,7 @@ import { activityHour, guestPace, favoriteOf, favoriteChanceMult } from './Profi
 import { guestMood } from './Mood.js';
 import { fallbackOuting } from './OutingManager.js';
 import { isHosting } from './Visitors.js';
+import { spotlightOn } from './Spotlight.js';
 
 // Guests use the hotel's facilities. Each hour boundary, guests who are in
 // their rooms may head out to a facility -- breakfast at the restaurant, a
@@ -25,6 +26,9 @@ import { isHosting } from './Visitors.js';
 // earns nothing.
 
 const LEAVE_SPREAD = 0.5; // guests set out over the first half of the hour
+
+/** The order a travel writer tries the hotel's facilities in (see Spotlight.ts). */
+const TOUR: FacilityType[] = ['restaurant', 'pool', 'gym', 'shop'];
 
 /**
  * How much a facility holds at once, in bookings of one or two (a bigger
@@ -135,6 +139,12 @@ export function planFacilityVisits(state: HotelState): HotelState {
     if (isUnderway(guest.trip, T)) continue; // still arriving, or already out (and not yet credited)
     if (isHosting(state, guest.id, T)) continue; // friends round: staying in
     if (!state.rooms.some(r => r.guestId === guest.id && r.status === 'occupied')) continue;
+    // A travel writer tries everything the hotel has, in turn (however cross, however far): first in line
+    const stop = tourStop(state, guest, open);
+    if (stop) {
+      wants.push({ guest, type: stop, score: -1 });
+      continue;
+    }
     if (MOOD.enabled && guestMood(guest) === 'angry') continue; // too cross to enjoy anything
     // A fan wants their favourite whether or not the hotel has one
     const favorite = favorites ? favoriteOf(guest) : null;
@@ -170,7 +180,8 @@ export function planFacilityVisits(state: HotelState): HotelState {
   wants.sort((a, b) => a.score - b.score || (a.guest.id < b.guest.id ? -1 : 1));
 
   let current = state;
-  for (const { guest, type } of wants) {
+  for (const { guest, type, score } of wants) {
+    const touring = score < 0; // (a travel writer: the walk's no object)
     const room = current.rooms.find(r => r.guestId === guest.id);
     if (!room) continue;
     const from = roomTile(room);
@@ -181,7 +192,7 @@ export function planFacilityVisits(state: HotelState): HotelState {
       .filter(f => f.type === type)
       .map(f => ({ f, route: findRoute(current, from, { gridX: f.gridX, gridY: f.gridY, floor: f.floor, door: f.door }, pace) }));
     const options = routes
-      .filter((o): o is { f: Facility; route: NonNullable<typeof o.route> } => !!o.route && o.route.hours <= FACILITY_VISITS.maxWalkHours)
+      .filter((o): o is { f: Facility; route: NonNullable<typeof o.route> } => !!o.route && (touring || o.route.hours <= FACILITY_VISITS.maxWalkHours))
       .sort((a, b) => a.route.hours - b.route.hours || (a.f.id < b.f.id ? -1 : 1));
     if (options.length === 0 && routes.some(o => o.route)) count('tooFar', guest, type); // there's one, but it's too far to walk
     let placed = false;
@@ -230,6 +241,21 @@ export function planFacilityVisits(state: HotelState): HotelState {
     return next;
   });
   return { ...current, guests, facilityDemand: demand };
+}
+
+/**
+ * The next facility a travel writer tries: the first in TOUR they haven't
+ * used this stay that's open to them this hour and they can get to (null: not
+ * a writer, or nothing to try now). Full: they try again next hour.
+ */
+function tourStop(state: HotelState, guest: Guest, open: Facility[]): FacilityType | null {
+  if (!spotlightOn() || guest.spotlight?.kind !== 'writer') return null;
+  const room = state.rooms.find(r => r.guestId === guest.id && r.status === 'occupied');
+  if (!room) return null;
+  const from = roomTile(room);
+  const pace = guestPace(guest);
+  return TOUR.find(type => !guest.facilitiesUsed?.[type] && visitChance(type, state.hour, state.day, guest) > 0
+    && open.some(f => f.type === type && !!findRoute(state, from, { gridX: f.gridX, gridY: f.gridY, floor: f.floor, door: f.door }, pace))) ?? null;
 }
 
 /** Today's facility let-downs so far (a fresh count on a new day). */

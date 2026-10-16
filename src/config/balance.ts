@@ -460,6 +460,41 @@ export const SPENDING = {
   bigTab: 100, // x the restaurant's revenueMult: a tab this big makes a story
 };
 
+/**
+ * Spotlight guests (Spotlight.ts; docs/designs/guest-staff-personalities.md,
+ * Status #13): a travel writer or a celebrity, at most one a week from three
+ * stars. Rolled on Monday morning, announced a day or two ahead, a suite held.
+ */
+export const SPOTLIGHT = {
+  enabled: true,
+  fromStars: 3, // and a suite to put them in
+  // The week's chance, by the hotel's stars: a famous guest picks a grand hotel ("a rare high-stakes guest"; the doc's one a
+  // week is the most). The same chance at every star helped the under-staffed hotel most (+5%, eating the staffing gate's
+  // margin): spotlight money and write-ups lift a small hotel more. One week in three at 5 stars, ten at 4, twenty at 3
+  weeklyChance: { 3: 0.05, 4: 0.1, 5: 0.35 } as Record<number, number>,
+  writerShare: 0.5, // of spotlight guests (the rest are celebrities)
+  rollHour: 9, // Monday's roll, and the hour they're announced (and reminded of) on the days after
+  arrivalDays: [2, 4] as [number, number], // days after the Monday: Wednesday to Friday
+  arrivalHours: [15, 17] as [number, number], // when they walk in (their room's decided at the hour boundary before)
+  leadDays: [1, 2] as [number, number], // announced this many days ahead
+  nights: 2,
+  writer: {
+    bookingWeight: 5, // their review counts this many times over in the hotel's rolling windows
+    writeUpAt: 8.5, // a review this good: a glowing write-up
+    panAt: 4, // a review this bad: it spreads, always
+    expectationAbove5: 1.9, // how hard they mind what's wrong, judging a five-star hotel as a six (STAR_RATING.expectationMultiplier goes to 1.6 at five)
+    writeUpMult: 1.2, // arrivals, while the write-up's fresh
+    writeUpHours: 24, // (the doc's 48 moved the staffing gate more than the game's own noise; 24 doesn't)
+    parAmenities: true, // they take for granted the amenities a hotel of the class they judge it as must have (no bonus for those)
+  },
+  celebrity: {
+    rateMult: 2, // what they pay for a top-floor suite (anywhere else, the price)
+    walkInMult: 1.1, // walk-ins, from when they check in to the end of the day
+  },
+  praiseFloor: 0.3, // the least a review's best part counts for to be named in the write-up
+  faultFloor: 0.15, // and its worst
+};
+
 const REVIEW_WINDOW_DAYS = 30;
 
 export const REVIEW = {

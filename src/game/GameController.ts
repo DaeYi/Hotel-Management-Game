@@ -1,8 +1,9 @@
 import type {
   HotelState, RoomType, FacilityType, TileType, StaffConfig, AmenityTier, CleaningQuality, DailyCleaningCadence, GameEvent, FixtureType, Direction, Furnishing, LateCheckoutPolicy,
-  VisitorPolicy,
+  VisitorPolicy, SpotlightHold,
 } from '../simulation/types';
 import { askToKeepItDown } from '../simulation/HostedNights';
+import { holdSuite, releaseHold, setHoldPolicy } from '../simulation/Spotlight';
 import {
   createStarterHotel, addFixture, demolishFixture, demolishElevator, addRoom, setRoomPrice, repairRoom, demolishRoom,
   addFacility, demolishFacility, renovateRoom, renovateFacility, upgradeFacility, addElevator, buildFloor, setRoomDoor, setFacilityDoor,
@@ -441,6 +442,21 @@ export class GameController {
   /** What the front desk does when a neighbour complains about a guest's visitors. */
   setVisitorPolicy(policy: VisitorPolicy) {
     this.apply({ ...this.state, visitorPolicy: policy });
+  }
+
+  /** Whether the hotel holds a suite for an announced spotlight guest. */
+  setSpotlightHold(policy: SpotlightHold) {
+    this.apply(setHoldPolicy(this.state, policy));
+  }
+
+  /** Hold this suite for the announced spotlight guest instead. */
+  holdSuite(roomId: string) {
+    this.apply(holdSuite(this.state, roomId));
+  }
+
+  /** Let the suite held for the spotlight guest go. */
+  releaseHold() {
+    this.apply(releaseHold(this.state));
   }
 
   /** The front desk asks a guest's visitors to leave, now. */

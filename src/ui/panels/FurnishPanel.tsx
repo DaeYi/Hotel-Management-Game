@@ -9,6 +9,7 @@ import {
   profileFurnishing, placeItem, classPriceFactor, whoFits,
 } from '../../simulation/RoomProfile';
 import { formatRoomLabel, roomsToRefitLike } from '../../simulation/HotelState';
+import { holdFor, holdBlocksRenovation } from '../../simulation/Spotlight';
 import { getExpectedPrice } from '../../simulation/StarRatingManager';
 import { useController } from '../context';
 import { formatMoney } from '../format';
@@ -74,6 +75,10 @@ function FurnishEditor({ room }: { room: Room }) {
     return q.changed.length === 0 && !q.moved;
   })();
   const affordable = state.cash >= quote.cost;
+  // Held for a spotlight guest, and the refit wouldn't be done in time: it waits till they've been
+  const hold = holdFor(state, room);
+  const heldBack = !!hold?.held && (!vacant || holdBlocksRenovation(state, room.id, Math.max(1, quote.installHours))); // (not vacant: it'd start later still)
+  const bookedHeld = !!hold?.held && !!room.pendingRefit; // (a booked refit of the held suite waits till they've been)
   const fair = (f: Furnishing) => {
     const p = profileFurnishing(f);
     return Math.round(getExpectedPrice(p.type, state.starRating, room.floor) * classPriceFactor(p));
@@ -215,12 +220,13 @@ function FurnishEditor({ room }: { room: Room }) {
         )}
         {room.pendingRefit && (
           <p class="small">
-            {waiting !== null ? `Refit booked: it starts once there's ${formatMoney(waiting)}.` : `Refit booked for ${later}.`}{' '}
+            {bookedHeld ? `Refit booked: it starts once the ${hold!.who} has been.` : waiting !== null ? `Refit booked: it starts once there's ${formatMoney(waiting)}.` : `Refit booked for ${later}.`}{' '}
             <button class="link" onClick={() => c.cancelRefit(room.id)}>Cancel</button>
           </p>
         )}
         <div class="actions">
-          {vacant && affordable ? (
+          {heldBack && <p class="small warn-text">Held for the {hold!.who} ({hold!.when}): a refit waits till they've been.</p>}
+          {vacant && affordable && !heldBack ? (
             <button class="primary" disabled={unchanged || !!problem}
               onClick={() => c.refitRoom(room.id, draft, 'now')}>
               Refit now ({formatMoney(quote.cost)}, {Math.max(1, quote.installHours)}h)
@@ -228,7 +234,7 @@ function FurnishEditor({ room }: { room: Room }) {
           ) : (
             <button class="primary" disabled={unchanged || !!problem || sameAsBooked}
               onClick={() => c.refitRoom(room.id, draft, 'checkout')}>
-              {vacant ? `Book it: starts once there's ${formatMoney(quote.cost)}` : `Refit ${later} (${formatMoney(quote.cost)})`}
+              {hold?.held ? `Refit after the ${hold.who} (${formatMoney(quote.cost)})` : vacant ? `Book it: starts once there's ${formatMoney(quote.cost)}` : `Refit ${later} (${formatMoney(quote.cost)})`}
             </button>
           )}
           {others.length > 0 && (

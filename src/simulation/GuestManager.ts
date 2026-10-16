@@ -1,7 +1,7 @@
 import type { Guest, GuestTrait, Room, HotelState, Booking, GameEvent, ReturningGuestProfile, PartyKind } from './types.js';
 import type { PRNG } from './prng.js';
 import { cleanlinessTerm } from './CleaningPreference.js';
-import { ECONOMY, GUEST_TRAITS, REVIEW, STAFF, AMENITIES, GUEST_NAMES, SATISFACTION, STORY, PARTIES, GUEST_PROFILE, LOYALTY, GUEST_FAVORITES, FACILITY_CONFIG, VOICE, SPENDING } from '../config/balance.js';
+import { ECONOMY, GUEST_TRAITS, REVIEW, STAFF, AMENITIES, GUEST_NAMES, SATISFACTION, STORY, PARTIES, GUEST_PROFILE, LOYALTY, GUEST_FAVORITES, FACILITY_CONFIG, VOICE, SPENDING, SPOTLIGHT } from '../config/balance.js';
 import { getDecorReviewPenalty } from './DecorManager.js';
 import { getCampaignDemandMultiplier } from './MarketingManager.js';
 import { getCheckInCapacity } from './Layout.js';
@@ -24,6 +24,7 @@ import { moodOf } from './Mood.js';
 import { roomFit, type RoomFeature } from './Preferences.js';
 import { getTotalDemandMultiplier } from './SeasonManager.js';
 import { getReputationPenaltyMultiplier } from './StoryGenerator.js';
+import { spotlightOn, spotlightArrival, heldFrom, judgedStars, expectationAt, amenityRuleAt, celebrityPull, spotlightNightRate } from './Spotlight.js';
 
 export function generateGuestTrait(prng: PRNG): GuestTrait {
   const roll = prng.next();
@@ -114,7 +115,8 @@ export function getWordOfMouthMultiplier(state: HotelState): number {
 /**
  * Expected guest arrivals for the current day: a base market plus hotel
  * visibility (room count), scaled by star rating, review score, season/weekday
- * demand, word-of-mouth, and any active reputation penalty.
+ * demand, word-of-mouth, any active reputation penalty (or write-up), and a
+ * celebrity in the hotel the day they come.
  */
 export function getExpectedArrivalsPerDay(state: HotelState): number {
   const market = ECONOMY.baseArrivalsPerDay + ECONOMY.arrivalsPerSqrtRoom * Math.sqrt(state.rooms.length);
@@ -124,7 +126,8 @@ export function getExpectedArrivalsPerDay(state: HotelState): number {
     * getTotalDemandMultiplier(state.day)
     * getWordOfMouthMultiplier(state)
     * getReputationPenaltyMultiplier(state)
-    * getCampaignDemandMultiplier(state);
+    * getCampaignDemandMultiplier(state)
+    * celebrityPull(state);
 }
 
 /**
@@ -195,6 +198,7 @@ export interface ArrivalResult {
   events: GameEvent[];
   returningGuestPool: ReturningGuestProfile[]; // after any pulls this hour
   walkIns: Array<{ guest: Guest; outcome: 'impatient' | 'turned_away'; desk?: { arriveAt: number; lane?: string; leaveAt?: number; wanted?: PartyKind } }>; // came in but didn't stay
+  spotlight?: { guest: Guest; room: Room | null; noDesk?: boolean }; // the spotlight guest, come this hour: their room, or none (gone elsewhere)
 }
 
 /** A guest's place in the front desk queue: the clerk, when they reach the desk, and when they're served. */
@@ -311,11 +315,33 @@ export function processArrivals(
   let pool = [...state.returningGuestPool];
   const lanes = queueOn() ? lanesOf(state) : [];
   const queue = lanes.length > 0 ? lanes : null; // (no lanes: nobody to queue for, as before)
-  const waiting: Array<{ guest: Guest; pulled: ReturningGuestProfile | null; priceTolerance: number }> = [];
+  const waiting: Array<{ guest: Guest; pulled: ReturningGuestProfile | null; priceTolerance: number; reserved?: Room }> = [];
   // Guest ids come from a random draw, so two can clash: give a clash a suffix
   // (no extra draw, so the random stream stays the same) -- everything that
   // follows a guest around (their trip, their room) is keyed by id
   const taken = new Set(state.guests.map(g => g.id));
+  // The spotlight guest, come this hour (Spotlight.ts; no draws): first in line, their room decided (the
+  // held suite, if it's ready). With nobody at the desk, they wait, till the last hour
+  let spot = spotlightArrival(state, hour, available);
+  if (spot?.room && !queue && checkInCapacity === 0) spot = hour >= ECONOMY.checkInEndHour - 1 ? { guest: spot.guest, room: null, noDesk: true } : null;
+  if (spot) {
+    result.spotlight = spot;
+    taken.add(spot.guest.id);
+    if (spot.room) {
+      booked.add(spot.room.id);
+      if (queue) waiting.push({ guest: spot.guest, pulled: null, priceTolerance: 1, reserved: spot.room });
+      else {
+        checkedInThisHour++;
+        result.checkedIn.push({ guest: spot.guest, roomId: spot.room.id });
+        announceArrival(result, spot.guest, spot.room, undefined, false);
+      }
+    }
+  }
+  // The suite held for an announced spotlight guest is no one else's if they'd still be in it when the guest comes
+  const holdOut = (rooms: Room[], g: Guest) => {
+    const held = heldFrom(state, g.stayLength);
+    return held ? rooms.filter(r => r.id !== held) : rooms;
+  };
 
   for (let i = 0; i < totalArrivals; i++) {
     let guest: Guest;
@@ -388,7 +414,7 @@ export function processArrivals(
       continue;
     }
 
-    const remainingRooms = available.filter(r => !booked.has(r.id));
+    const remainingRooms = holdOut(available.filter(r => !booked.has(r.id)), guest);
     const priceTolerance = spendingOn() ? 1 + prng.next() * ECONOMY.priceToleranceSpread * toleranceMult(guest) : 1 + prng.next() * ECONOMY.priceToleranceSpread;
     const match = matchAtCounter(state, guest, remainingRooms, priceTolerance);
     if (match.noFit) {
@@ -416,13 +442,21 @@ export function processArrivals(
     const T = (state.day - 1) * 24 + hour + 1;
     const arriveAt = deskArrivalTimes(state, queue, T);
     const busy = laneBookings(state, T, undefined, true); // (check-ins first: complaints are fitted round them)
-    waiting.forEach(({ guest: arriving, pulled, priceTolerance }, i) => {
+    waiting.forEach(({ guest: arriving, pulled, priceTolerance, reserved }, i) => {
       let guest = arriving;
       const requeue = () => {
         if (pulled && LOYALTY.enabled) pool = addToPool(pool, { ...pulled, dueDay: state.day + 2 });
       };
       const at = arriveAt(guest.id, i, waiting.length);
-      const match = matchAtCounter(state, guest, available.filter(r => !booked.has(r.id)), priceTolerance);
+      if (reserved) {
+        // The spotlight guest: expected, and seen however long the line (they never give up)
+        const slot = quoteLane(queue, busy, () => at, CHECK_IN_HOURS, lane => !!findRoute(state, lane.front, roomTile(reserved), guestPace(guest)))!;
+        book(busy, slot.lane.key, slot.start, slot.start + CHECK_IN_HOURS);
+        result.checkedIn.push({ guest, roomId: reserved.id, desk: { lane: slot.lane.key, arriveAt: at, start: slot.start } });
+        announceArrival(result, guest, reserved, undefined, false);
+        return;
+      }
+      const match = matchAtCounter(state, guest, holdOut(available.filter(r => !booked.has(r.id)), guest), priceTolerance);
       if (match.noFit) {
         turnAwayNoFit(result, guest, at);
         requeue();
@@ -495,14 +529,15 @@ export function processDepartures(
 
       const breakdown = calculateGuestReviewBreakdown(room, state, guest, prng);
       const score = breakdown.finalScore;
-      const totalPaid = room.pricePerNight * guest.stayLength + lateFee;
+      const rate = spotlightOn() && guest.spotlight?.rate ? spotlightNightRate(guest, room.pricePerNight) : room.pricePerNight; // (a celebrity on the top floor pays double)
+      const totalPaid = rate * guest.stayLength + lateFee;
 
       const weight = bookingWeightFor(guest);
       const booking: Booking = {
         id: `booking-${guest.id}`,
         roomId: room.id,
         guestId: guest.id,
-        nightRate: room.pricePerNight,
+        nightRate: rate,
         reviewScore: score,
         satisfactionAtCheckout: guest.satisfaction,
         ...(weight ? { weight } : {}),
@@ -520,7 +555,7 @@ export function processDepartures(
       });
 
       // Will they be back? (Satisfaction System Design, point 3; Loyalty.ts)
-      const entry = returnEntry(guest, guest.satisfaction, room, score, state.day);
+      const entry = spotlightOn() && guest.spotlight ? null : returnEntry(guest, guest.satisfaction, room, score, state.day); // (a spotlight guest is a one-off)
       if (entry) pool = addToPool(pool, entry);
       else if (isLostRegular(guest, score)) {
         result.events.push({
@@ -552,6 +587,7 @@ export interface GuestReviewBreakdown {
   roomDislikes?: RoomFeature[];
   favoriteMiss?: number; // their favourite facility let them down (missing, or full)
   favoriteMissLabel?: string; // "the pool"
+  expectation?: number; // a travel writer's: how hard they minded what was wrong (x the room's penalties; see Spotlight.nameReview)
   finalScore: number;
 }
 
@@ -591,11 +627,20 @@ export function calculateGuestReviewBreakdown(
   // In-room amenities bonus
   const amenityTier = state.amenities[room.type];
   const amenityConfig = AMENITIES.tiers[amenityTier];
-  const amenityBonus = style === 'standard' ? amenityConfig?.reviewBonus ?? 0 : (amenityConfig?.reviewBonus ?? 0) * SPENDING.review.amenityBonus[style];
+  let amenityBonus = style === 'standard' ? amenityConfig?.reviewBonus ?? 0 : (amenityConfig?.reviewBonus ?? 0) * SPENDING.review.amenityBonus[style];
 
   // Amenity expectation penalty: high-star hotels with low amenities get penalized
   let amenityPenalty = 0;
-  for (const req of AMENITIES.starExpectations) {
+  const judged = judgedStars(guest, state.starRating);
+  if (judged !== state.starRating) {
+    // A travel writer judges the hotel a class up: what that class must have is no bonus, and short of it, a fault
+    const rule = amenityRuleAt(judged);
+    if (rule) {
+      const tierOrder = ['basic', 'premium', 'luxury'];
+      if (SPOTLIGHT.writer.parAmenities) amenityBonus = Math.max(0, amenityBonus - (AMENITIES.tiers[rule.minimumTier]?.reviewBonus ?? 0));
+      if (tierOrder.indexOf(amenityTier) < tierOrder.indexOf(rule.minimumTier)) amenityPenalty = rule.penaltyIfBelow;
+    }
+  } else for (const req of AMENITIES.starExpectations) {
     if (state.starRating >= req.minStars) {
       const tierOrder = ['basic', 'premium', 'luxury'];
       const currentIdx = tierOrder.indexOf(amenityTier);
@@ -615,8 +660,8 @@ export function calculateGuestReviewBreakdown(
   const misses = GUEST_FAVORITES.enabled ? Math.min(GUEST_FAVORITES.maxMissesPerStay, guest.favoriteMisses?.count ?? 0) : 0;
   const favoriteMiss = misses * GUEST_FAVORITES.missReview;
 
-  // Random variance
-  const guestVariance = prng.range(-REVIEW.varianceRange, REVIEW.varianceRange);
+  // Random variance (a spotlight guest's from their id: no draw)
+  const guestVariance = spotlightOn() && guest.spotlight ? (hash01(`${guest.id}#variance`) * 2 - 1) * REVIEW.varianceRange : prng.range(-REVIEW.varianceRange, REVIEW.varianceRange);
 
   // Raw score before expectation adjustment
   const rawScore = REVIEW.baseScore
@@ -636,7 +681,7 @@ export function calculateGuestReviewBreakdown(
   // Apply star expectation multiplier to penalties
   // Higher star = penalties are amplified, bonuses stay the same
   // (the loyal forgive more; a stoic guest, saying nothing at the time, minds more)
-  const expectation = getExpectationMultiplier(state.starRating) * expectationMultFor(guest) * (voiceOn() ? VOICE.reviewPenaltyMult[voiceOf(guest)] : 1);
+  const expectation = (judged !== state.starRating ? expectationAt(judged) : getExpectationMultiplier(state.starRating)) * expectationMultFor(guest) * (voiceOn() ? VOICE.reviewPenaltyMult[voiceOf(guest)] : 1);
   const penalties = noisePenalty + decorPenalty + elevatorPenalty + Math.max(0, -conditionBonus) + Math.max(0, -cleanlinessBonus) + amenityPenalty;
   const expectationAdjustment = penalties * (expectation - 1);
 
@@ -658,6 +703,7 @@ export function calculateGuestReviewBreakdown(
     ...(favoriteMiss > 0 && favorite && favorite !== 'none' ? { favoriteMiss, favoriteMissLabel: `the ${FACILITY_CONFIG[favorite].label.toLowerCase()}` } : {}),
     ...(fit.likes.length > 0 ? { roomLikes: fit.likes } : {}),
     ...(fit.dislikes.length > 0 ? { roomDislikes: fit.dislikes } : {}),
+    ...(judged !== state.starRating ? { expectation } : {}), // (a travel writer's: how hard they minded what was wrong)
     finalScore: clampedScore,
   };
 }

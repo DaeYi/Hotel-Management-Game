@@ -122,7 +122,10 @@ describe('Balance: there is a right amount of housekeeping', () => {
     // daily cleans go undone), 1.6x about 30% lower (idle wages hold back building); 1.0x to 1.2x is
     // the top of the curve. In each run of six of those seeds (0-5, 6-11, 12-17, 18-23), staffing to the
     // workload beat 0.6x by 1.58x or more and 1.6x by 1.31x or more; with spending styles (phase 3a), by
-    // 1.53x and 1.23x or more.
+    // 1.53x and 1.23x or more. With spotlight guests (phase 3b), measured over 96 seeds: 1.60x and 1.39x
+    // (1.61x and 1.34x without them); in runs of 24 seeds 1.47x and 1.29x or more. Six seeds is a thin
+    // sample: re-rolling the random stream alone (no change to the game) fails one six-seed run in five or
+    // so, so a change that fails these seeds needs the 24-seed check before it's blamed.
     expect(right).toBeGreaterThan(median('understaffed') * 1.5);
     expect(right).toBeGreaterThan(median('overstaffed') * 1.15);
   }, 240000);

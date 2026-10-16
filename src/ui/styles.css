@@ -265,6 +265,9 @@ input[type='range'] { width: 100%; accent-color: var(--gold); }
 .here-now { margin-top: 4px; }
 .legend-mark { display: inline-block; width: 12px; height: 12px; line-height: 12px; text-align: center; border-radius: 50%; background: #1b1b2b; color: #f9e79f; font-size: 9px; margin: 0 3px 0 6px; vertical-align: -1px; }
 .legend-mark.coin { color: #82e0aa; font-weight: bold; } /* a big spender's "$" (quirks.COIN_COLOR) */
+.legend-mark.notebook { color: #f5f5f5; }
+.legend-mark.star { color: #ff8fd8; } /* a celebrity's star (quirks.STAR_COLOR) */
+.subline.spotlight-line { color: #c39bd3; } /* (quirks.HANGER_COLORS.held) */
 button.link { background: none; border: none; color: var(--gold); text-decoration: underline; padding: 0; cursor: pointer; }
 
 

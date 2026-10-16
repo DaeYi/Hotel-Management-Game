@@ -4,6 +4,7 @@ import { defaultFurnishing, furnishingOf, quoteRefit, validateFurnishing, profil
 import { ECONOMY, ROOM_CONFIG, GRID, HOUSEKEEPING, FACILITY_CONFIG, LOAN, RENOVATION, FACILITY_LEVELS, FLOORS, ELEVATOR, DESK, CLOSET, BREAK_ROOM, ENTRANCE, STARTER_LAYOUT, GUEST_PROFILE, PATIENCE } from '../config/balance.js';
 import { isTileAccessible, findOpenDoor, isEdgeTile, isFacilityOpen, getOpenFacilities } from './Layout.js';
 import { createConstructionNoise } from './NoiseManager.js';
+import { holdBlocksRenovation, heldNow } from './Spotlight.js';
 import { getExpectedPrice, getRoomExpectedPrice, getPriceMultiplier } from './StarRatingManager.js';
 
 /** The free street entrance every hotel starts with. */
@@ -228,6 +229,7 @@ export function refitRoom(state: HotelState, roomId: string, to: Furnishing, whe
       ?? { ...state, rooms: state.rooms.map(r => (r.id === roomId ? { ...r, pendingRefit: to } : r)) };
   }
   if (room.status !== 'vacant' || state.cash < quote.cost) return null;
+  if (holdBlocksRenovation(state, roomId, Math.max(1, quote.installHours))) return null; // held for a spotlight guest, and it wouldn't be done in time
   const type = quote.after.type;
   // The refit freshens the room as far as the money would have gone on a
   // renovation: a refit is no cheaper a way to buy decor (swapping pieces for
@@ -265,6 +267,7 @@ export function startPendingRefits(state: HotelState): HotelState {
   let current = state;
   for (const room of state.rooms) {
     if (!room.pendingRefit || room.status !== 'vacant') continue;
+    if (heldNow(current, room.id)) continue; // (held for a spotlight guest: after they've been)
     current = refitRoom(current, room.id, room.pendingRefit, 'now') ?? current;
   }
   return current;
@@ -356,6 +359,7 @@ export function getRenovationCost(buildCost: number, starRating: number): number
 export function renovateRoom(state: HotelState, roomId: string): HotelState | null {
   const room = state.rooms.find(r => r.id === roomId);
   if (!room || room.status !== 'vacant') return null;
+  if (holdBlocksRenovation(state, roomId, RENOVATION.durationHours)) return null; // held for a spotlight guest, and it wouldn't be done in time
   const cost = getRenovationCost(getRoomInvestedCost(room), state.starRating);
   if (state.cash < cost) return null;
 

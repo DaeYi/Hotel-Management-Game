@@ -814,3 +814,90 @@ describe('How guests spend', () => {
     expect(screen.getByText(/^Revenue, last 30 days:/).textContent).toBe('Revenue, last 30 days: $52 (rooms $0, on site $52)');
   });
 });
+
+describe('Spotlight guests', () => {
+  it('the top bar counts down; the held suite\'s card says so, lets the hold go, and won\'t renovate past the arrival; another suite can be held; the Staff panel sets the policy', () => {
+    const { controller, flush } = setup();
+    controller.state = { ...controller.state, cash: 1_000_000, peakStarRating: 5, starRating: 3 };
+    controller.selectTool('suite');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.tileDown({ gridX: 6, gridY: 2 });
+    controller.selectTool(null);
+    const [a, b] = controller.state.rooms;
+    controller.state = {
+      ...controller.state, day: 10, hour: 8, rooms: controller.state.rooms.map(r => ({ ...r, decor: 50 })),
+      spotlight: { kind: 'writer', week: 1, salt: '', announceDay: 9, arrivalDay: 10, arrivalHour: 15, status: 'announced', chainId: 'spotlight-10', roomId: a.id },
+    };
+    flush();
+    expect(document.body.textContent).toMatch(/Travel writer due Wed ~15:00 \((in \d+h|now)\)/);
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    flush();
+    const card = () => screen.getByRole('dialog', { name: /Suite/ });
+    expect(card().textContent).toContain('Held:        for the travel writer (Wed ~15:00)');
+    const renovate = screen.getByText(/^Renovate/) as HTMLButtonElement;
+    expect(renovate.disabled).toBe(true);
+    expect(renovate.title).toBe('Held for the travel writer: it wouldn\'t be done by Wed ~15:00');
+    fireEvent.click(screen.getByText('Let the hold go'));
+    flush();
+    expect(controller.state.spotlight!.roomId).toBeUndefined();
+    expect(controller.state.spotlight!.released).toBe(true);
+    // The other suite: hold it instead
+    // (first, a travel writer staying elsewhere: their card says who they are)
+    const writer = { id: 'spotlight-3', name: 'Casey Larsen', budget: 1e9, stayLength: 2, trait: 'normal' as const, satisfaction: 60, checkInDay: 9, isReturning: false, hadNoiseComplaint: false, party: { kind: 'solo' as const, size: 1 }, profile: { chronotype: 'regular' as const, mobility: 'normal' as const, sleep: 'normal' as const, rowdiness: 'normal' as const, checkoutHour: 11 }, spotlight: { kind: 'writer' as const } };
+    controller.state = { ...controller.state, guests: [writer], rooms: controller.state.rooms.map(r => (r.id === a.id ? { ...r, status: 'occupied' as const, guestId: writer.id } : r)) };
+    controller.selectGuest(writer.id, a);
+    flush();
+    expect(screen.getByRole('dialog', { name: /Casey Larsen/ }).textContent).toContain('Travel writer: judges the hotel as a 4-star one');
+    controller.state = { ...controller.state, guests: [], rooms: controller.state.rooms.map(r => (r.id === a.id ? { ...r, status: 'vacant' as const, guestId: undefined } : r)) };
+    controller.tileDown({ gridX: 6, gridY: 2 });
+    flush();
+    fireEvent.click(screen.getByText('Hold for the travel writer'));
+    flush();
+    expect(controller.state.spotlight).toMatchObject({ roomId: b.id, chosen: true, released: false });
+    // The Staff panel: the policy, and a note when the hold was let go
+    controller.releaseHold();
+    controller.togglePanel('staff');
+    flush();
+    expect(screen.getByText(/The hold was let go for the guest coming now/)).toBeTruthy();
+    fireEvent.click(screen.getByText('Hold a suite'));
+    flush();
+    expect(controller.state.spotlight!.released).toBe(false);
+    fireEvent.click(screen.getByText("Don't hold one"));
+    flush();
+    expect(controller.state.spotlightHold).toBe('none');
+  });
+
+  it('the Furnish panel: a refit of the held suite that wouldn\'t be done in time is booked for after the guest', () => {
+    const { controller, flush } = setup();
+    controller.state = { ...controller.state, cash: 1_000_000, peakStarRating: 5, starRating: 3 };
+    controller.selectTool('suite');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.selectTool(null);
+    const [a] = controller.state.rooms;
+    controller.state = {
+      ...controller.state, day: 10, hour: 12,
+      spotlight: { kind: 'writer', week: 1, salt: '', announceDay: 9, arrivalDay: 10, arrivalHour: 15, status: 'announced', chainId: 'spotlight-10', roomId: a.id },
+    };
+    controller.openFurnishing(a.id);
+    flush();
+    const panel = () => screen.getByRole('region', { name: /FURNISH ROOM/ });
+    pickPiece('Bathroom with tub');
+    fireEvent.change(screen.getByLabelText('Bathroom'), { target: { value: 'bath_shower' } });
+    flush();
+    expect(panel().textContent).toContain('Held for the travel writer (Wed ~15:00): a refit waits till they\'ve been.');
+    expect(screen.queryByText(/^Refit now/)).toBeNull();
+    fireEvent.click(screen.getByText(/^Refit after the travel writer/));
+    flush();
+    expect(controller.state.rooms[0].pendingRefit).toBeDefined();
+    expect(controller.state.rooms[0].status).toBe('vacant');
+    expect(panel().textContent).toContain('Refit booked: it starts once the travel writer has been.');
+    // Held but being cleaned: the refit can't start before they've been either
+    controller.cancelRefit(a.id);
+    // (a day ahead: a refit begun now would be done in time, but the room's not empty to begin it)
+    controller.state = { ...controller.state, day: 9, rooms: controller.state.rooms.map(r => (r.id === a.id ? { ...r, status: 'cleaning' as const, cleaningHoursRemaining: 0.5 } : r)) };
+    flush();
+    expect(screen.getByText(/^Refit after the travel writer/)).toBeTruthy();
+    expect(screen.queryByText(/^Refit after cleaning/)).toBeNull();
+    expect(panel().textContent).toContain('Held for the travel writer (Wed ~15:00): a refit waits till they\'ve been.');
+  });
+});

@@ -47,6 +47,7 @@ export function simulate(
   let regularArrivals = 0;
   let vipArrivals = 0;
   let favoriteMisses = 0;
+  const spotlights = { writers: 0, writeUps: 0, pans: 0, writerScore: 0, celebrities: 0, celebrityPaid: 0, noRoom: 0 };
   const moods: Record<Mood, number> = { delighted: 0, content: 0, irritated: 0, angry: 0 };
   const totalHours = days * 24;
 
@@ -74,6 +75,18 @@ export function simulate(
         const mood = e.data?.mood as Mood | undefined;
         if (mood) moods[mood]++;
       }
+      if (e.type === 'spotlight_review') {
+        if (e.data?.kind === 'writer') {
+          spotlights.writers++;
+          spotlights.writerScore += e.data.score as number;
+          if (e.data.outcome === 'write_up') spotlights.writeUps++;
+          if (e.data.outcome === 'pan') spotlights.pans++;
+        } else {
+          spotlights.celebrities++;
+          spotlights.celebrityPaid += (e.data?.paid as number) ?? 0;
+        }
+      }
+      if (e.type === 'spotlight_arrived' && !e.data?.roomId) spotlights.noRoom++;
       const kind = (e.data?.wanted ?? e.data?.partyKind) as PartyKind | undefined;
       if (!kind || !(kind in partyArrivals)) continue;
       if (e.type === 'guest_arrived') {
@@ -133,6 +146,7 @@ export function simulate(
     regularArrivals,
     vipArrivals,
     favoriteMisses,
+    spotlights,
     moodShares: Object.fromEntries(Object.entries(moods).map(([k, n]) => [k, n / Math.max(1, Object.values(moods).reduce((a, b) => a + b, 0))])) as Record<Mood, number>,
   };
 }

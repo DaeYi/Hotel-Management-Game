@@ -1,18 +1,22 @@
 import type Phaser from 'phaser';
 
 // The small marks drawn on guests (docs/designs/guest-staff-personalities.md,
-// Display budget): at most one quirk icon per guest -- a moon for a light
-// sleeper, a music note for a rowdy one, a "$" for a big spender -- and a "z"
-// by a guest asleep in their room. Graphics only (no text or textures), a few
+// Display budget): at most one quirk icon per guest -- a notebook for a travel
+// writer, a star for a celebrity, a moon for a light sleeper, a music note for
+// a rowdy one, a "$" for a big spender -- and a "z" by a guest asleep in their
+// room. Graphics only (no text or textures), a few
 // primitives each, drawn every frame. The legend uses the same glyphs as text.
 
-export type Quirk = 'moon' | 'note' | 'coin';
+export type Quirk = 'notebook' | 'star' | 'moon' | 'note' | 'coin';
 
 /** The legend's text for each mark. */
-export const QUIRK_GLYPHS: Record<Quirk | 'asleep', string> = { moon: '☾', note: '♪', coin: '$', asleep: 'z' };
+export const QUIRK_GLYPHS: Record<Quirk | 'asleep', string> = { notebook: '✎', star: '★', moon: '☾', note: '♪', coin: '$', asleep: 'z' };
 
 /** The colour of a big spender's "$" (pale green: never the VIP's gold). */
 export const COIN_COLOR = 0x82e0aa;
+
+/** The colour of a celebrity's star (pink: never the VIP's gold). */
+export const STAR_COLOR = 0xff8fd8;
 
 const BACKING = 0x1b1b2b;
 
@@ -26,6 +30,25 @@ export function drawQuirk(g: Phaser.GameObjects.Graphics, x: number, y: number, 
     g.fillCircle(x, y, 2.8);
     g.fillStyle(BACKING, 1);
     g.fillCircle(x + 1.3, y - 1, 2.3);
+  } else if (quirk === 'notebook') {
+    // A notebook: a white page, ruled, with a spine down its left edge
+    g.fillStyle(0xf5f5f5, 1);
+    g.fillRect(x - 2.2, y - 2.8, 4.6, 5.6);
+    g.fillStyle(0x5d6d7e, 1);
+    g.fillRect(x - 2.2, y - 2.8, 0.9, 5.6);
+    g.fillRect(x - 0.6, y - 1.5, 2.4, 0.6);
+    g.fillRect(x - 0.6, y, 2.4, 0.6);
+    g.fillRect(x - 0.6, y + 1.5, 2.4, 0.6);
+  } else if (quirk === 'star') {
+    // A five-pointed star
+    g.fillStyle(STAR_COLOR, 1);
+    const points: Array<{ x: number; y: number }> = [];
+    for (let k = 0; k < 10; k++) {
+      const r = k % 2 === 0 ? 3.4 : 1.4;
+      const a = -Math.PI / 2 + (k * Math.PI) / 5;
+      points.push({ x: x + r * Math.cos(a), y: y + r * Math.sin(a) });
+    }
+    g.fillPoints(points, true);
   } else if (quirk === 'coin') {
     // A "$": an S of three bars joined at alternate ends, and the stroke through it
     g.fillStyle(COIN_COLOR, 1);
@@ -71,8 +94,8 @@ export function drawMoodFace(g: Phaser.GameObjects.Graphics, x: number, y: numbe
   }
 }
 
-/** The door hangers' colours: red, do not disturb; green, please make up the room. */
-export const HANGER_COLORS: Record<'dnd' | 'makeup', number> = { dnd: 0xe74c3c, makeup: 0x2ecc71 };
+/** The door hangers' colours: red, do not disturb; green, please make up the room; lilac, held for a spotlight guest. */
+export const HANGER_COLORS: Record<'dnd' | 'makeup' | 'held', number> = { dnd: 0xe74c3c, makeup: 0x2ecc71, held: 0xc39bd3 };
 
 /** The colour of the ring round a room with visitors in (noisy). */
 export const VISITORS_COLOR = 0xff6b6b;
@@ -80,9 +103,10 @@ export const VISITORS_COLOR = 0xff6b6b;
 /**
  * A hanger on a room's door (docs/designs/guest-staff-personalities.md,
  * Housekeeping preference): a small tag hanging inside the room off one end of
- * the door bar, on a tile of `size` at (x, y), turned with the door.
+ * the door bar, on a tile of `size` at (x, y), turned with the door. (A
+ * suite held for a spotlight guest has one too, reserved.)
  */
-export function drawHanger(g: Phaser.GameObjects.Graphics, x: number, y: number, door: 'up' | 'right' | 'down' | 'left', pref: 'dnd' | 'makeup', size: number) {
+export function drawHanger(g: Phaser.GameObjects.Graphics, x: number, y: number, door: 'up' | 'right' | 'down' | 'left', pref: 'dnd' | 'makeup' | 'held', size: number) {
   const long = size * 0.4;
   const thick = 4;
   const mid = (size - long) / 2;

@@ -1,5 +1,5 @@
-import type { Chronotype, FacilityType, Guest, GuestProfile, GuestTrait, HotelState, LateCheckoutPolicy, Mobility, Party, Patience, Purpose, Rowdiness, SleepSensitivity, Voice } from './types.js';
-import { ECONOMY, GUEST_PROFILE, NOISE, TRAVEL, GUEST_FAVORITES, GUEST_HOUSEKEEPING, PATIENCE, VOICE } from '../config/balance.js';
+import type { Chronotype, FacilityType, Guest, GuestProfile, GuestTrait, HotelState, LateCheckoutPolicy, Mobility, Party, Patience, Purpose, Rowdiness, SleepSensitivity, SpotlightKind, Voice } from './types.js';
+import { ECONOMY, GUEST_PROFILE, NOISE, TRAVEL, GUEST_FAVORITES, GUEST_HOUSEKEEPING, PATIENCE, VOICE, SPOTLIGHT } from '../config/balance.js';
 import { hash01 } from './Movement.js';
 import { pick } from './Party.js';
 import { spendingOn, spendingOf, rollSpending } from './Spending.js';
@@ -144,11 +144,13 @@ export function noiseOutputMult(guest: Pick<Guest, 'profile' | 'trait' | 'hosted
 }
 
 /**
- * The one quirk a guest's figure shows: a moon for a light sleeper, a note for
- * a rowdy one, a "$" for a big spender (in that order: they never clash, as
- * all three come from the one legacy trait roll).
+ * The one quirk a guest's figure shows: a notebook for a travel writer, a star
+ * for a celebrity, then a moon for a light sleeper, a note for a rowdy one, a
+ * "$" for a big spender (in that order: the last three never clash, as all
+ * three come from the one legacy trait roll).
  */
-export function quirkOf(guest: Pick<Guest, 'profile' | 'trait'>): 'moon' | 'note' | 'coin' | null {
+export function quirkOf(guest: Pick<Guest, 'profile' | 'trait'> & { spotlight?: { kind: SpotlightKind } }): 'notebook' | 'star' | 'moon' | 'note' | 'coin' | null {
+  if (guest.spotlight && SPOTLIGHT.enabled && GUEST_PROFILE.enabled) return guest.spotlight.kind === 'writer' ? 'notebook' : 'star';
   const light = guest.profile ? guest.profile.sleep === 'light' : guest.trait === 'light_sleeper';
   if (light) return 'moon';
   const rowdy = guest.profile ? guest.profile.rowdiness === 'rowdy' : guest.trait === 'party_guest';
@@ -156,10 +158,11 @@ export function quirkOf(guest: Pick<Guest, 'profile' | 'trait'>): 'moon' | 'note
   return spendingOf(guest) === 'splurger' ? 'coin' : null;
 }
 
-/** A guest's quirks in a word or two each: "light sleeper", "rowdy", "big spender", "thrifty". */
-export function guestTags(guest: Pick<Guest, 'profile' | 'trait'>): string[] {
+/** A guest's quirks in a word or two each: "travel writer", "light sleeper", "rowdy", "big spender", "thrifty". */
+export function guestTags(guest: Pick<Guest, 'profile' | 'trait'> & { spotlight?: { kind: SpotlightKind } }): string[] {
   const quirk = quirkOf(guest);
   return [
+    guest.spotlight && SPOTLIGHT.enabled && GUEST_PROFILE.enabled ? (guest.spotlight.kind === 'writer' ? 'travel writer' : 'celebrity') : '',
     quirk === 'moon' ? 'light sleeper' : quirk === 'note' ? 'rowdy' : '', guest.trait === 'big_spender' ? 'big spender' : '',
     spendingOf(guest) === 'thrifty' ? 'thrifty' : '',
   ].filter(Boolean);

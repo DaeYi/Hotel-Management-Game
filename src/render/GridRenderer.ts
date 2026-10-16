@@ -14,6 +14,7 @@ import { isSleepHour, quirkOf } from '../simulation/Profile';
 import { drawQuirk, drawSleepZ, drawMoodFace, drawHanger, drawPhone, RING_COLORS, SELECTED_COLOR, VISITORS_COLOR } from './quirks';
 import { moodHidden } from '../simulation/Voice';
 import { housekeepingPrefOf } from '../simulation/CleaningPreference';
+import { spotlightOn } from '../simulation/Spotlight';
 import { isAsleepAt, visitorsAt } from '../simulation/Visitors';
 import { ringTierOf } from './figures';
 import { staysOf } from '../simulation/Loyalty';
@@ -248,6 +249,7 @@ export class GridRenderer {
     this.roomGraphics.clear();
     const seenRoomIds = new Set<string>();
     const guests = GUEST_HOUSEKEEPING.enabled ? guestsById(state) : null;
+    const held = spotlightOn() && state.spotlight?.status === 'announced' ? state.spotlight.roomId : undefined; // (a suite held for a spotlight guest)
 
     for (const room of state.rooms) {
       if (room.floor !== floor) continue;
@@ -269,6 +271,8 @@ export class GridRenderer {
       if (guests && room.status === 'occupied') {
         const pref = housekeepingPrefOf(guests.get(room.guestId ?? ''));
         if (pref !== 'standard') drawHanger(this.roomGraphics, x, y, room.door, pref, TILE_SIZE);
+      } else if (held === room.id && room.status !== 'occupied') {
+        drawHanger(this.roomGraphics, x, y, room.door, 'held', TILE_SIZE); // reserved for the spotlight guest
       }
 
       // Brown strip along the top once decor goes stale (renovate to clear it)

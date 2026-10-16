@@ -171,6 +171,12 @@ const AVERAGE_STAY_NIGHTS = (ECONOMY.guestMinStay + ECONOMY.guestMaxStay) / 2;
  */
 const WALKS_PER_JOB = 2.5;
 
+/** The walk from a staff base to a room, on average (one turnover to the next is about one such walk). */
+export function baseWalkHours(state: HotelState): number {
+  const walks = state.rooms.map(r => getStaffTravelHours(state, r)).filter(Number.isFinite);
+  return walks.length > 0 ? walks.reduce((a, b) => a + b, 0) / walks.length : 0;
+}
+
 /**
  * Housekeeper-hours a day of work needs at a given occupancy (0-1): turnovers
  * for the day's checkouts plus the daily-clean round, each with a walk there
