@@ -112,23 +112,23 @@ describe('Amenities are charged per occupied room', () => {
 
 describe('Balance: there is a right amount of housekeeping', () => {
   it('staffing to the workload beats under-staffing by far, and over-staffing too', () => {
-    const runs = 6;
+    const runs = 24;
     const median = (name: string) => {
       const vals = Array.from({ length: runs }, (_, i) => simulate(400, i, undefined, STRATEGIES[name]).finalValuation).sort((a, b) => a - b);
-      return (vals[2] + vals[3]) / 2;
+      return (vals[runs / 2 - 1] + vals[runs / 2]) / 2;
     };
     const right = median('balanced');
     // Measured over 24 seeds x 400 days: 0.6x the housekeepers ends about 39% lower (turnovers pile up,
     // daily cleans go undone), 1.6x about 30% lower (idle wages hold back building); 1.0x to 1.2x is
-    // the top of the curve. In each run of six of those seeds (0-5, 6-11, 12-17, 18-23), staffing to the
-    // workload beat 0.6x by 1.58x or more and 1.6x by 1.31x or more; with spending styles (phase 3a), by
-    // 1.53x and 1.23x or more. With spotlight guests (phase 3b), measured over 96 seeds: 1.60x and 1.39x
-    // (1.61x and 1.34x without them); in runs of 24 seeds 1.47x and 1.29x or more. Six seeds is a thin
-    // sample: re-rolling the random stream alone (no change to the game) fails one six-seed run in five or
-    // so, so a change that fails these seeds needs the 24-seed check before it's blamed.
+    // the top of the curve. With spotlight guests (phase 3b), measured over 96 seeds: staffing to the
+    // workload beats 0.6x by 1.60x and 1.6x by 1.39x (1.61x and 1.34x without them). These 24 seeds:
+    // 1.69x and 1.47x (1.62x and 1.38x without). The test once took six seeds, too few: re-rolling the
+    // random stream alone (no change to the game) failed one six-seed run in five or so, and no run of 24.
+    // Even 24 can fall short: of the four runs of 24 in those 96 seeds, one (48-71) is 1.47x and 1.29x
+    // with spotlight guests, so a change that fails here needs the 96-seed check before it's blamed.
     expect(right).toBeGreaterThan(median('understaffed') * 1.5);
     expect(right).toBeGreaterThan(median('overstaffed') * 1.15);
-  }, 240000);
+  }, 1800000);
 });
 
 describe('The staff on screen do exactly the work the simulation credits', () => {

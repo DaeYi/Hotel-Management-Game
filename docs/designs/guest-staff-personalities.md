@@ -979,8 +979,9 @@ Spotlight guests, behind one switch, `SPOTLIGHT` (it needs guest profiles). With
   | Hoarder | $1.44M | $1.41M (-2.0% ± 2.3) | 1.3 (95%) | 1.2 |
 
   - Nobody goes bankrupt; the order holds. A celebrity pays about $1,400-1,900 a stay. Of about 1,200 writers, one panned a hotel (a hoarder's).
-  - **The staffing gate** (housekeeping.test.ts, seeds 0-5) passes: balanced beats understaffed by 1.78x and overstaffed by 1.46x. Over all 96 seeds the medians are 1.60x and 1.39x (1.61x and 1.34x off).
-  - **The gate's noise.** Re-rolling the random stream alone (no change to the game: one extra draw at the start) fails a six-seed block one time in five or so (5 and 9 of 32; the game itself 6, 3b 5). So six-seed blocks can't judge a change; runs of 24 seeds can (no failure for the game or either re-roll; their worst 1.52x). With 3b one run of 24 in eight falls just short (1.47x, a balanced dip and an understaffed rise together).
+  - **The staffing gate** (housekeeping.test.ts) passes: on its six seeds (0-5) balanced beats understaffed by 1.78x and overstaffed by 1.46x. Over all 96 seeds the medians are 1.60x and 1.39x (1.61x and 1.34x off).
+  - **The gate's noise.** Re-rolling the random stream alone (no change to the game: one extra draw at the start) fails a six-seed block one time in five or so (5 and 9 of 32; the game itself 6, 3b 5). So six-seed blocks can't judge a change; runs of 24 seeds can (no failure for the game or either re-roll; their worst 1.52x). With 3b one run of 24 in four falls just short (seeds 48-71, 1.47x: a balanced dip and an understaffed rise together).
+  - **The gate now takes 24 seeds** (0-23; added after 3b shipped): 1.69x and 1.47x with 3b, 1.62x and 1.38x without. About five minutes instead of one and a half.
   - **What was tried.**
     - The doc's one in two weeks with 48-hour write-ups: +0.4 / +11.1 / +8.4 / +14.5%, and the gate failing.
     - 24-hour write-ups, then rarer rolls: closer, but the same chance at every star left the understaffed bot +5.0% ± 2.0 over 96 seeds.
