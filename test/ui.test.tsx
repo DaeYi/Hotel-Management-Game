@@ -40,6 +40,22 @@ function upgrade(...pieces: string[]) {
 beforeEach(() => localStorage.clear());
 
 describe('Interface', () => {
+  it('shows a storage failure and lets the player retry saving', () => {
+    let blocked = true;
+    const storage: Storage = {
+      length: 0, key: () => null, getItem: key => key === 'hotel-game-tutorial-seen' ? '1' : null, clear: () => {}, removeItem: () => {},
+      setItem: () => { if (blocked) throw new Error('storage full'); },
+    };
+    const controller = new GameController(storage);
+    render(<App controller={controller} worldRef={createRef()} />);
+    act(() => { controller.saveNow(); controller.update(0); });
+    expect(screen.getByRole('alert').textContent).toContain('Progress could not be saved');
+    blocked = false;
+    fireEvent.click(screen.getByText('Try saving again'));
+    act(() => controller.update(0));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('shows cash, the current goal, and the free lobby\'s first-goal progress', () => {
     setup();
     expect(screen.getByText('$50,000')).toBeTruthy();
@@ -250,12 +266,12 @@ describe('Interface', () => {
     expect(screen.getByRole('dialog', { name: /Standard Queen/ }).textContent).toMatch(/out at a meeting, back about \d\d:00/);
 
     // The legend says what the guest colours mean
-    expect(screen.getByRole('group', { name: 'Guests' }).textContent).toBe('Guests:BusinessSightseeingGetaway');
+    expect(screen.getByRole('group', { name: 'Guests' }).textContent).toBe('Guests:BusinessSightseeingGetawayEvent');
     // A guest from an older save, with no purpose: white, and in the legend too
     controller.state = { ...controller.state, guests: controller.state.guests.map(g => ({ ...g, purpose: undefined })) };
     controller.tileDown({ gridX: 5, gridY: 2 });
     flush();
-    expect(screen.getByRole('group', { name: 'Guests' }).textContent).toBe('Guests:BusinessSightseeingGetawayOther');
+    expect(screen.getByRole('group', { name: 'Guests' }).textContent).toBe('Guests:BusinessSightseeingGetawayEventOther');
   });
 
   it('a guest card: who they are, their rhythm and quirks, their mood and where they are; it follows them and closes once they have gone', () => {

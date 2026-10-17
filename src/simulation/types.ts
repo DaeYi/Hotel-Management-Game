@@ -12,7 +12,7 @@ export interface Party {
   size: number;
 }
 /** Why a booking is here: on business, to see the sights, or to get away (see Purpose.ts). */
-export type Purpose = 'business' | 'sightseeing' | 'getaway';
+export type Purpose = 'business' | 'sightseeing' | 'getaway' | 'event';
 
 /** A guest's daily rhythm: up early, regular, or up late (see Profile.ts). */
 export type Chronotype = 'early' | 'regular' | 'night';
@@ -147,6 +147,7 @@ export interface Guest {
   // Why they're here (see Purpose.ts; absent on older saves, or with purposes
   // off: no purpose, and nothing about them changes with it)
   purpose?: Purpose;
+  eventStay?: { name: string; endDay: number }; // leaves on the morning after this event's last day
   // Who they are, beyond the trip (see Profile.ts; absent on older saves, or with
   // profiles off: they do what every guest did before)
   profile?: GuestProfile;
@@ -355,6 +356,7 @@ export interface NoiseSource {
 }
 
 export interface HotelState {
+  eventGuestsAnnouncedDay?: number;
   lateCheckout?: LateCheckoutPolicy; // absent: deny (see Profile.lateCheckoutPolicy)
   // Today at the front desk so far (for the Staff panel): checked in, hours waited, the longest wait, gave up in line, complaints heard
   deskToday?: { day: number; checkedIn: number; waitHours: number; longestWait: number; gaveUp: number; complaints: number };

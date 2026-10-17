@@ -1,11 +1,10 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   base: './',
-  esbuild: {
+  oxc: {
     // Preact's automatic JSX runtime (matches tsconfig's jsxImportSource)
-    jsx: 'automatic',
-    jsxImportSource: 'preact',
+    jsx: { runtime: 'automatic', importSource: 'preact' },
   },
   build: {
     outDir: 'dist',

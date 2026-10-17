@@ -25,6 +25,7 @@ import { processMaintenanceTick, getStaffDailyCost } from './MaintenanceManager.
 import { ECONOMY, REVIEW, HOUSEKEEPING, STAFF, ROOM_CONFIG, FACILITY_CONFIG, LOYALTY } from '../config/balance.js';
 import {
   driftSatisfaction, advanceIncidents, dropIncidentsForGuests, selectNewIncident,
+  appendStoryLogEntry,
   recordReturnGuestEntries, recordPartyTurnAways, checkReviewSemiViral, tickReputationPenalties, recordRoomDislikes, recordBigTabs, recordLostRegulars,
 } from './StoryGenerator.js';
 import type { DepartedGuestReview } from './StoryGenerator.js';
@@ -107,6 +108,14 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   // "A Regular Returns" -- converts this tick's guest_returned arrivals into log entries
   current = recordReturnGuestEntries(current, arrivals.events);
   current = recordPartyTurnAways(current, arrivals.events);
+  const eventGuest = arrivals.checkedIn.find(({ guest }) => guest.eventStay)?.guest;
+  if (eventGuest?.eventStay && current.eventGuestsAnnouncedDay !== current.day) {
+    current = appendStoryLogEntry(current, {
+      type: 'event_guests',
+      message: `${eventGuest.eventStay.name} visitors are checking in. They stay through the event, go out in the evening, and return by 01:00.`,
+    }).state;
+    current = { ...current, eventGuestsAnnouncedDay: current.day };
+  }
 
   // 1.5 Ambient satisfaction drift (Satisfaction System Design point 1 / design-review D3),
   // and the night noise each sleeping guest is putting up with (for their review)
@@ -397,6 +406,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   current = tidyMovement(current, T);
   current = sendOrphanedVisitorsHome(current, T); // their host checked out early, or moved rooms
   current = planDeskComplaints(current); // someone fed up walks down to complain
+  current = planOutings(current, true); // event outings take priority over the hotel facilities
   current = planFacilityVisits(current);
   current = planDinnersOut(current); // thrifty guests head out to eat
   current = planOutings(current);

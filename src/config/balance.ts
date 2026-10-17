@@ -173,21 +173,29 @@ export const GUEST_PURPOSES = {
     business: { chanceMult: 1.3, minHours: 6, maxHours: 10 },
     sightseeing: { chanceMult: 1.15, minHours: 3, maxHours: 8 },
     getaway: { chanceMult: 0.4, minHours: 2, maxHours: 4 },
+    event: { chanceMult: 1, minHours: 5, maxHours: 7 },
   } as Record<PurposeName, { chanceMult: number; minHours: number; maxHours: number }>,
   // Facilities: the visit chance by purpose (x FACILITY_CONFIG[type].visitChance)
   facility: {
     business: { gym: 1.6, restaurant: 1.3, pool: 0.3, shop: 0.6 },
     sightseeing: { gym: 0.6, restaurant: 0.9, pool: 0.8, shop: 1.4 },
     getaway: { gym: 1.0, restaurant: 1.2, pool: 1.8, shop: 1.0 },
+    event: { gym: 0.5, restaurant: 0.8, pool: 0.8, shop: 1.4 },
   } as Record<PurposeName, Record<'gym' | 'restaurant' | 'pool' | 'shop', number>>,
 };
-/**
- * Who guests are, beyond their trip (docs/designs/guest-staff-personalities.md,
- * Body and Temperament; Profile.ts). Rolled from the booking's id when they
- * arrive, never from the shared random stream. With profiles off nobody has
- * one, and the hotel runs exactly as before: noise judged at checkout,
- * everyone out at 11:00, one walking pace.
- */
+/** Calendar-event visitors, rolled from existing bookings rather than adding demand. */
+export const EVENT_GUESTS = {
+  enabled: true,
+  share: 0.05, // long stays occupy more rooms than their arrival share; no extra demand
+  budgetMult: 1.2,
+  leaveHours: [17, 20] as [number, number], // event times follow the clock, not the guest's rhythm
+  leaveChance: 0.8,
+  latestReturnHour: 25, // in their room by 01:00 the following morning
+  chronotype: [['early', 0.1], ['regular', 0.4], ['night', 0.5]] as Array<[ChronotypeName, number]>,
+  rowdyChance: 0.3, // families remain non-rowdy
+};
+
+/** Guest rhythms and temperament, rolled from booking IDs (Profile.ts). */
 export const GUEST_PROFILE = {
   enabled: true,
   // Chronotype: up early (business travellers and families lean that way), regular, or up late (friends)
@@ -392,7 +400,7 @@ type HousekeepingName = 'dnd' | 'standard' | 'makeup';
 type PatienceName = 'patient' | 'normal' | 'impatient';
 type VoiceName = 'vocal' | 'typical' | 'stoic';
 type PartyKindName = 'solo' | 'business' | 'couple' | 'friends' | 'family';
-type PurposeName = 'business' | 'sightseeing' | 'getaway';
+type PurposeName = 'business' | 'sightseeing' | 'getaway' | 'event';
 
 /**
  * What guests like (and dislike) in a room (Preferences.ts): each rule is who

@@ -351,6 +351,7 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
   const lines = [
     `${capitalize(describeGuest(party, guest.purpose))}${guest.isReturning && !LOYALTY.enabled ? ', back again' : ''}`,
     ...describeSpotlight(guest, state),
+    ...(guest.eventStay ? [`${guest.eventStay.name}: here through day ${guest.eventStay.endDay - 1}, out in the evening; back by 01:00`] : []),
     `Night ${night} of ${guest.stayLength}${LOYALTY.enabled ? ` \u00b7 ${describeLoyalty(guest)}` : ''}`,
     ...(favoriteLine ? [favoriteLine] : []),
     ...(housekeeping ? [housekeeping] : []),

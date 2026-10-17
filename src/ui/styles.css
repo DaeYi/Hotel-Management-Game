@@ -57,6 +57,8 @@ button.warn { color: #e67e22; background: #3a2a1a; }
 
 /* ---------- Layout ---------- */
 
+.save-warning { color: var(--warn); border: 1px solid var(--warn); padding: 8px; border-radius: var(--radius); }
+
 .app {
   max-width: 1200px;
   margin: 0 auto;

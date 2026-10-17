@@ -2,6 +2,7 @@
 
 Date: 2026-10-11
 Status: IN PROGRESS. Purpose of stay (three values) and room preferences shipped first, as a slice: see guest-preferences.md. The remainder is being built in six phases (see "Build plan (2026-10-12)" at the end).
+Current implementation: phase 3c (event visitors) is complete; named staff hiring is next. See the phase 3c notes below.
 Follows: aligned-movement.md, open-floor-plan.md, late-game-economy.md
 Builds on: the 11:00 checkout, guest day trips (`OutingManager.ts`, `GUEST_OUTINGS`) and presence-aware noise, which shipped together with this proposal (see aligned-movement.md).
 
@@ -1013,3 +1014,17 @@ Spotlight guests, behind one switch, `SPOTLIGHT` (it needs guest profiles). With
   - The doc's other prep (daily housekeeping, pausing renovations nearby, a quiet floor) works only through the hotel-wide settings: nothing ties it to the spotlight guest's room, or points the player to it.
   - A concierge who spots spotlight guests (open question 6 is settled: always announced).
   - The bots don't prepare for spotlight guests.
+
+### Phase 3c: event visitors (2026-10-17)
+
+- The existing calendar supplies the event name and an absolute checkout day, including New Year across the year boundary. About one in twenty existing bookings is an event visit; total demand and party generation are unchanged. Their nightly budget is 20% higher and they stay through the event's final night.
+- Fresh visitors lean toward late nights and rowdiness; families remain non-rowdy. Returning visitors retain their personal profile. Event trips take priority over facilities, leave 17:00-20:00 and return through a street entrance by 01:00, without shifting the shared random stream.
+- Lavender figures, the legend, a named-event line on the guest card, and one story entry per arrival day explain the behavior. Saves retain the event and the checkout date.
+- The initial 30% arrival mix overfilled the hotel with long stays and disproportionately helped understaffed strategies. The default is 5%, pending broader player feedback. The housekeeping estimate recognizes event stays and the approaching checkout rush. The existing 1.5x/1.15x staffing gates remain unchanged.
+- With EVENT_GUESTS off, the committed 60-day balanced run is pinned exactly. Tests cover calendar boundaries, generation, budgets, overnight trips, profile biases, save round trips, and the workload estimate.
+
+### Reliability and tooling (2026-10-17)
+
+Player actions save immediately, including paused edits. Ticks and page hiding/exiting also save, with the fractional hour, pause and speed restored on reload. Storage failures have a visible warning and retry. Discarding a save prevents the exit handler from restoring it. Supplied storage is now used consistently by the controller and save manager.
+
+Vite 8, Vitest 5, Happy DOM 21 and current tsx replace the vulnerable toolchain; npm audit reports no known vulnerabilities. The project uses Node 22.12+ (22.x), 24.x or 26+. Long synchronous balance tests have explicit timeouts under Vitest 5. The README provides setup, verification, save behavior and the current roadmap.

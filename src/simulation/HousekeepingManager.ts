@@ -186,7 +186,16 @@ export function estimateHousekeepingHours(state: HotelState, occupancy: number):
   const walks = state.rooms.map(r => getStaffTravelHours(state, r)).filter(Number.isFinite);
   const avgWalk = (walks.length > 0 ? walks.reduce((a, b) => a + b, 0) / walks.length : 0) * WALKS_PER_JOB;
   const occupied = state.rooms.length * occupancy;
-  const checkouts = occupied / AVERAGE_STAY_NIGHTS;
+  let checkouts = occupied / AVERAGE_STAY_NIGHTS;
+  // Event visitors stay through the event instead of turning over every two
+  // nights. Count their known checkout rush (today or tomorrow) when planning
+  // a busy day, rather than hiring a permanent turnover crew for empty work.
+  const eventStays = state.guests.filter(g => g.eventStay);
+  if (eventStays.length > 0) {
+    const share = eventStays.length / state.guests.length;
+    const dueSoon = eventStays.filter(g => g.checkInDay + g.stayLength <= state.day + 1).length / eventStays.length;
+    checkouts = occupied * ((1 - share) / AVERAGE_STAY_NIGHTS + share * dueSoon);
+  }
   const turnover = HOUSEKEEPING.turnoverDuration[state.housekeeping.turnoverQuality] ?? HOUSEKEEPING.turnoverDuration.standard;
   // Every other day: half the rooms a day, and (with preferences on) the make-up rooms on the off days too
   const makeupShare = GUEST_HOUSEKEEPING.enabled ? expectedShare('makeup') : 0;

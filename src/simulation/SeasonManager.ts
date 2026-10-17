@@ -52,19 +52,14 @@ export function getDemandMultiplier(day: number): number {
  * Returns event name or null.
  */
 export function getSpecialEvent(day: number): string | null {
-  const dayOfYear = ((day - 1) % SEASON.yearLength);
+  return getActiveEvent(day)?.name ?? null;
+}
 
+/** The active event and its absolute checkout day, including windows across New Year. */
+export function getActiveEvent(day: number): { name: string; endDay: number } | null {
   for (const event of SEASON.specialEvents) {
-    const endDay = event.startDay + event.duration;
-    if (dayOfYear >= event.startDay && dayOfYear < endDay) {
-      return event.name;
-    }
-    // Event window wraps past year-end (e.g. New Year day 355 + 10 = day 365,
-    // but dayOfYear only ever reaches 359) — also match the wrapped remainder
-    // at the start of the next year.
-    if (endDay > SEASON.yearLength && dayOfYear < endDay - SEASON.yearLength) {
-      return event.name;
-    }
+    const elapsed = ((day - 1 - event.startDay) % SEASON.yearLength + SEASON.yearLength) % SEASON.yearLength;
+    if (elapsed < event.duration) return { name: event.name, endDay: day + event.duration - elapsed };
   }
   return null;
 }

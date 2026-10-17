@@ -15,26 +15,28 @@ interface SaveData {
   prngState: number;
   state: HotelState;
   timestamp: number;
+  clock?: { hourProgress: number; paused: boolean; speed: number };
 }
 
-export function saveGame(state: HotelState, prng: PRNG): boolean {
+export function saveGame(state: HotelState, prng: PRNG, storage?: Storage, clock?: SaveData['clock']): boolean {
   try {
     const data: SaveData = {
       version: SAVE_VERSION,
       prngState: prng.getState(),
       state,
       timestamp: Date.now(),
+      ...(clock ? { clock } : {}),
     };
-    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    (storage ?? localStorage).setItem(SAVE_KEY, JSON.stringify(data));
     return true;
   } catch {
     return false;
   }
 }
 
-export function loadGame(): SaveData | null {
+export function loadGame(storage?: Storage): SaveData | null {
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
+    const raw = (storage ?? localStorage).getItem(SAVE_KEY);
     if (!raw) return null;
 
     const data = JSON.parse(raw) as SaveData;
@@ -357,6 +359,6 @@ export function hasSavedGame(): boolean {
   return localStorage.getItem(SAVE_KEY) !== null;
 }
 
-export function deleteSave(): void {
-  localStorage.removeItem(SAVE_KEY);
+export function deleteSave(storage?: Storage): void {
+  (storage ?? localStorage).removeItem(SAVE_KEY);
 }
