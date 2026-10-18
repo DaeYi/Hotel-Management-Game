@@ -17,7 +17,7 @@ import { queueOn, lanesOf, deskArrivalTimes, laneBookings, quoteLane, book, pati
 import { voiceOn, voiceOf } from './Voice.js';
 import { CHECK_IN_HOURS, roomTile } from './GuestMovement.js';
 import { findRoute } from './Layout.js';
-import { rollPurpose } from './Purpose.js';
+import { rollPurpose, withEventStay } from './Purpose.js';
 import { rollProfile, checkoutHour, wantsLateCheckout, lateCheckoutPolicy, guestPace } from './Profile.js';
 import { returnEntry, addToPool, dueIndexes, pickDue, tierOf, staysOf, ordinal, expectationMultFor, bookingWeightFor, isLostRegular, personIdOf } from './Loyalty.js';
 import { moodOf } from './Mood.js';
@@ -365,8 +365,9 @@ export function processArrivals(
     // Who the booking's for, and why they're here, from its id (so nothing
     // else's randomness moves). The purpose stays if they book smaller below.
     guest = withParty(guest, rollParty(guest.id, state.day));
-    const purpose = rollPurpose(guest.id, partyOf(guest));
+    const purpose = rollPurpose(guest.id, partyOf(guest), state.day);
     if (purpose) guest = { ...guest, purpose };
+    guest = withEventStay(guest, state.day);
     // Who they are, beyond the trip (their party and purpose lean it; a family is never rowdy)
     const profile = rollProfile(guest.id, partyOf(guest), purpose, guest.trait);
     if (profile) guest = { ...guest, profile };

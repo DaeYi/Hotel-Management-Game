@@ -1,5 +1,5 @@
 import type { HotelState, Guest, Leg } from './types.js';
-import { GUEST_OUTINGS, GUEST_FAVORITES, SPENDING } from '../config/balance.js';
+import { GUEST_OUTINGS, GUEST_FAVORITES, SPENDING, EVENT_GUESTS } from '../config/balance.js';
 import { findRoute, routeToStreet } from './Layout.js';
 import { hourStart, makeWalk, makeStay, isUnderway, hash01 } from './Movement.js';
 import { roomTile } from './GuestMovement.js';
@@ -21,6 +21,7 @@ const LEAVE_SPREAD = 0.5; // guests set out over the first half of the hour
 
 /** The chance a guest in their room heads out for the day during an hour of the day (business and sightseeing likelier, a getaway less; an early bird two hours earlier, a night owl two later). */
 export function outingChance(guest: Pick<Guest, 'trait' | 'purpose' | 'profile'>, hour: number): number {
+  if (guest.purpose === 'event') return hour >= EVENT_GUESTS.leaveHours[0] && hour < EVENT_GUESTS.leaveHours[1] ? EVENT_GUESTS.leaveChance : 0;
   const h = activityHour(guest, hour);
   const window = GUEST_OUTINGS.leaveChance.find(([from, to]) => h >= from && h < to);
   return window ? Math.min(1, window[2] * (GUEST_OUTINGS.traitMult[guest.trait] ?? 1) * outingChanceMult(guest)) : 0;
@@ -62,12 +63,13 @@ export function fallbackOuting(state: HotelState, guest: Guest, out: 'beach' | '
  * boundary, with the state for the new hour, after facility visits are
  * planned so a guest isn't both).
  */
-export function planOutings(state: HotelState): HotelState {
+export function planOutings(state: HotelState, eventsOnly = false): HotelState {
   if (state.guests.length === 0) return state;
   const T = hourStart(state);
   const dayStart = (state.day - 1) * 24;
   let changed = false;
   const guests = state.guests.map(guest => {
+    if (eventsOnly && guest.purpose !== 'event') return guest;
     if (isUnderway(guest.trip, T)) return guest; // arriving, or already out
     if (isCheckoutDay(guest, state.day)) return guest; // packing to leave
     if (isHosting(state, guest.id, T)) return guest; // friends round: staying in
@@ -76,7 +78,7 @@ export function planOutings(state: HotelState): HotelState {
     const room = state.rooms.find(r => r.guestId === guest.id && r.status === 'occupied');
     if (!room) return guest;
     const pace = guestPace(guest);
-    const dayEnd = dayStart + GUEST_OUTINGS.latestReturnHour + activityOffset(guest); // a night owl's back by 23:00
+    const dayEnd = dayStart + (guest.purpose === 'event' ? EVENT_GUESTS.latestReturnHour : GUEST_OUTINGS.latestReturnHour + activityOffset(guest));
     const out = routeToStreet(state, roomTile(room), pace);
     if (!out || out.path.length < 2) return guest;
     const leave = T + hash01(`${guest.id}|${state.day}|${state.hour}|leave`) * LEAVE_SPREAD;

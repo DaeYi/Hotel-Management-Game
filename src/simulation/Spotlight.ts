@@ -1,4 +1,5 @@
-import type { FacilityType, GameEvent, Guest, GuestProfile, GuestTrait, HotelState, Party, Purpose, Room, SpotlightHold, SpotlightKind, SpotlightPlan } from './types.js';
+import type { FacilityType, GameEvent, Guest, GuestProfile, GuestTrait, HotelState, Party, Purpose, Room, SpotlightHold, SpotlightKind, SpotlightPlan, StaffMember } from './types.js';
+import { staffRate, attendance, nextStaffWork } from './StaffProfiles.js';
 import { SPOTLIGHT, GUEST_PROFILE, GUEST_PURPOSES, GUEST_NAMES, ECONOMY, SATISFACTION, FACILITY_CONFIG, STAR_RATING, AMENITIES, REVIEW, STORY, STAFF, HOUSEKEEPING } from '../config/balance.js';
 import { hash01, hourEnd } from './Movement.js';
 import { getDayOfWeek } from './SeasonManager.js';
@@ -81,18 +82,21 @@ export function freeBy(state: HotelState, room: Room, plan: Pick<SpotlightPlan, 
 }
 
 /** The next moment from t the housekeepers are at work (absolute hours). */
-function atWork(t: number): number {
+function atWork(t: number, member?: StaffMember): number {
+  if (member) return nextStaffWork(member, t);
   const start = Math.floor(t / 24) * 24 + STAFF.housekeeping.workStartHour;
   const end = Math.floor(t / 24) * 24 + STAFF.housekeeping.workEndHour;
   return t < start ? start : t >= end ? start + 24 : t;
 }
 
 /** Time t plus hours of housekeeping, counted in the housekeepers' shift hours (absolute hours). */
-function inShift(t: number, hours: number): number {
+function inShift(t: number, hours: number, member?: StaffMember): number {
   let at = t;
   let work = hours;
   for (let days = 0; days < 60 && work > 1e-9; days++) {
-    const start = Math.floor(at / 24) * 24 + STAFF.housekeeping.workStartHour;
+    const a = member ? attendance(member, Math.floor(at / 24) + 1) : { absent: false, lateHours: 0 };
+    if (a.absent) { at = Math.floor(at / 24) * 24 + 24; continue; }
+    const start = Math.floor(at / 24) * 24 + STAFF.housekeeping.workStartHour + a.lateHours;
     const end = Math.floor(at / 24) * 24 + STAFF.housekeeping.workEndHour;
     if (at < start) at = start;
     if (at >= end) { at = Math.floor(at / 24) * 24 + 24; continue; }
@@ -141,19 +145,21 @@ function cleanedAt(state: HotelState, room: Room, between: boolean): number {
   if (!jobs.some(j => j.id === room.id)) return Infinity;
   const taken = new Set<string>();
   const free: number[] = [];
+  const workers: Array<StaffMember | undefined> = [];
   // Each keeps at the room they're in (no walk to it)
   for (const m of (state.staffRoster ?? []).filter(x => x.role === 'housekeeper' && !x.leaving).slice(0, staff)) {
     const job = m.roomId ? jobs.find(j => j.id === m.roomId && !taken.has(j.id) && j.from <= t + 1e-9) : undefined; // (a turnover under way: not a daily clean)
-    if (!job) continue;
+    if (!job || attendance(m, Math.floor(t / 24) + 1).absent) { free.push(t); workers.push(m); continue; }
     taken.add(job.id);
-    const done = inShift(t, job.hours);
+    const done = inShift(t, job.hours / staffRate(m), m);
     if (job.id === room.id) return done;
     free.push(done);
+    workers.push(m);
   }
-  while (free.length < staff) free.push(t);
+  while (free.length < staff) { free.push(t); workers.push(undefined); }
   for (let guard = 0; guard < 2000; guard++) {
+    for (let k = 0; k < free.length; k++) free[k] = atWork(free[k], workers[k]);
     const i = free.reduce((best, x, k) => (x < free[best] ? k : best), 0);
-    free[i] = atWork(free[i]); // (off shift: from the morning, with the morning's checkouts in the queue)
     const waiting = jobs.filter(j => !taken.has(j.id) && j.from <= free[i] + 1e-9);
     if (waiting.length === 0) {
       // Nothing yet: till the next guest leaves (this room's among them)
@@ -162,7 +168,7 @@ function cleanedAt(state: HotelState, room: Room, between: boolean): number {
     }
     const job = waiting.reduce((best, j) => (j.hours < best.hours || (j.hours === best.hours && j.order < best.order) ? j : best));
     taken.add(job.id);
-    const done = inShift(free[i], job.hours + walk);
+    const done = inShift(free[i], job.hours / (workers[i] ? staffRate(workers[i]!) : 1) + walk, workers[i]);
     if (job.id === room.id) return done;
     free[i] = done;
   }

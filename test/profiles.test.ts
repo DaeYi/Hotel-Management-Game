@@ -95,7 +95,7 @@ describe('Who a guest is: rolled once from their id', () => {
     expect(r.checkedIn.length).toBeGreaterThan(0);
     for (const { guest: g } of r.checkedIn) {
       const party = rollParty(g.id, s.day);
-      expect(g.profile).toEqual(rollProfile(g.id, party, rollPurpose(g.id, party), g.trait));
+      expect(g.profile).toEqual(rollProfile(g.id, party, rollPurpose(g.id, party, s.day), g.trait));
     }
     // A family is never rowdy, even when the shared stream drew the party trait for them
     const traits = { ...GUEST_TRAITS };

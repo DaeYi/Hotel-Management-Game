@@ -6,35 +6,39 @@ import { GUEST_NAMES, LOAN, GRID, STARTER_LAYOUT } from '../config/balance.js';
 import { isEdgeTile } from './Layout.js';
 import { DIRECTIONS, doorTile, isReachableHallway, findOpenDoor } from './Layout.js';
 import { calculateStarRating } from './StarRatingManager.js';
+import { getRoster } from './StaffManager.js';
+import { identifyStaff } from './StaffHiring.js';
 
 const SAVE_KEY = 'hotel-game-save';
-const SAVE_VERSION = 20; // v20: furniture has positions (free placement)
+const SAVE_VERSION = 21; // v21: persistent staff identities, profiles and hire serials
 
 interface SaveData {
   version: number;
   prngState: number;
   state: HotelState;
   timestamp: number;
+  clock?: { hourProgress: number; paused: boolean; speed: number };
 }
 
-export function saveGame(state: HotelState, prng: PRNG): boolean {
+export function saveGame(state: HotelState, prng: PRNG, storage?: Storage, clock?: SaveData['clock']): boolean {
   try {
     const data: SaveData = {
       version: SAVE_VERSION,
       prngState: prng.getState(),
       state,
       timestamp: Date.now(),
+      ...(clock ? { clock } : {}),
     };
-    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+    (storage ?? localStorage).setItem(SAVE_KEY, JSON.stringify(data));
     return true;
   } catch {
     return false;
   }
 }
 
-export function loadGame(): SaveData | null {
+export function loadGame(storage?: Storage): SaveData | null {
   try {
-    const raw = localStorage.getItem(SAVE_KEY);
+    const raw = (storage ?? localStorage).getItem(SAVE_KEY);
     if (!raw) return null;
 
     const data = JSON.parse(raw) as SaveData;
@@ -236,6 +240,11 @@ export function loadGame(): SaveData | null {
       console.log('Migrated save from v19 to v20');
     }
 
+    if (data.version === 20) {
+      data.state = identifyStaff(data.state, getRoster(data.state));
+      data.version = 21;
+    }
+
     if (data.version !== SAVE_VERSION) {
       console.warn(`Save version mismatch: expected ${SAVE_VERSION}, got ${data.version}`);
       return null;
@@ -357,6 +366,6 @@ export function hasSavedGame(): boolean {
   return localStorage.getItem(SAVE_KEY) !== null;
 }
 
-export function deleteSave(): void {
-  localStorage.removeItem(SAVE_KEY);
+export function deleteSave(storage?: Storage): void {
+  (storage ?? localStorage).removeItem(SAVE_KEY);
 }

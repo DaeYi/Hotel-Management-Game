@@ -1,5 +1,5 @@
 import type { Chronotype, FacilityType, Guest, GuestProfile, GuestTrait, HotelState, LateCheckoutPolicy, Mobility, Party, Patience, Purpose, Rowdiness, SleepSensitivity, SpotlightKind, Voice } from './types.js';
-import { ECONOMY, GUEST_PROFILE, NOISE, TRAVEL, GUEST_FAVORITES, GUEST_HOUSEKEEPING, PATIENCE, VOICE, SPOTLIGHT } from '../config/balance.js';
+import { ECONOMY, GUEST_PROFILE, NOISE, TRAVEL, GUEST_FAVORITES, GUEST_HOUSEKEEPING, PATIENCE, VOICE, SPOTLIGHT, EVENT_GUESTS } from '../config/balance.js';
 import { hash01 } from './Movement.js';
 import { pick } from './Party.js';
 import { spendingOn, spendingOf, rollSpending } from './Spending.js';
@@ -18,10 +18,11 @@ import { spendingOn, spendingOf, rollSpending } from './Spending.js';
 export function rollProfile(id: string, party: Party, purpose: Purpose | undefined, trait: GuestTrait): GuestProfile | undefined {
   if (!GUEST_PROFILE.enabled) return undefined;
   const lean = purpose === 'business' || party.kind === 'business' ? 'business' : party.kind === 'family' ? 'family' : party.kind === 'friends' ? 'friends' : 'base';
-  const chronotype = pick(GUEST_PROFILE.chronotype[lean] ?? GUEST_PROFILE.chronotype.base, hash01(`${id}#chronotype`));
+  const chronotype = pick(purpose === 'event' ? EVENT_GUESTS.chronotype : GUEST_PROFILE.chronotype[lean] ?? GUEST_PROFILE.chronotype.base, hash01(`${id}#chronotype`));
   const mobility = pick(GUEST_PROFILE.mobility[lean] ?? GUEST_PROFILE.mobility.base, hash01(`${id}#mobility`));
   const sleep: SleepSensitivity = trait === 'light_sleeper' ? 'light' : hash01(`${id}#sleep`) < GUEST_PROFILE.heavySleeperChance ? 'heavy' : 'normal';
-  const rowdiness: Rowdiness = trait === 'party_guest' ? 'rowdy' : hash01(`${id}#rowdiness`) < GUEST_PROFILE.quietChance ? 'quiet' : 'normal';
+  const rowdiness: Rowdiness = purpose === 'event' && party.kind !== 'family' && hash01(`${id}#event-rowdy`) < EVENT_GUESTS.rowdyChance
+    ? 'rowdy' : trait === 'party_guest' ? 'rowdy' : hash01(`${id}#rowdiness`) < GUEST_PROFILE.quietChance ? 'quiet' : 'normal';
   const [first, last] = GUEST_PROFILE.earlyCheckoutHours;
   const checkoutHour = chronotype === 'early' ? first + Math.floor(hash01(`${id}#checkout`) * (last - first + 1)) : ECONOMY.checkOutHour;
   // The facility they seek out (business travellers the gym, families and getaways the pool)

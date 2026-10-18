@@ -5,6 +5,8 @@ import { getStaffPlan } from '../simulation/StaffManager';
 import { positionAt, legsEnd, hash01 } from '../simulation/Movement';
 import { guestFigures, type Figure } from './figures';
 import { BREAK_ROOM } from '../config/balance';
+import { STAFF_PERSONALITIES } from '../config/staff';
+import { experienceOf } from '../simulation/StaffProfiles';
 import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE } from './GridRenderer';
 import { drawClock, drawComplaint, drawQuirk, drawMoodFace, RING_COLORS, SELECTED_COLOR } from './quirks';
 
@@ -38,6 +40,8 @@ export class ActorLayer {
   private away = new Set<string>();
   private drawn: Array<{ figure: Figure; x: number; y: number; r: number }> = []; // guests drawn last frame, for clicks
   private selectedGuestId: string | null = null;
+  private selectedStaffId: string | null = null;
+  private staffDrawn: Array<{ id: string; x: number; y: number }> = [];
 
   constructor(scene: Phaser.Scene) {
     this.graphics = scene.add.graphics().setDepth(6);
@@ -64,9 +68,20 @@ export class ActorLayer {
     return best?.id ?? null;
   }
 
+  staffAt(px: number, py: number): string | null {
+    let best: { id: string; distance: number } | null = null;
+    for (const f of this.staffDrawn) {
+      const distance = Math.hypot(px - f.x, py - f.y);
+      if (distance <= 9 && (!best || distance < best.distance)) best = { id: f.id, distance };
+    }
+    return best?.id ?? null;
+  }
+
   /** Draw everyone on the floor being viewed, where they are at game time t (absolute hours); the selected guest stands out. */
-  update(state: HotelState, currentFloor: number, t: number, selectedGuestId: string | null = null) {
+  update(state: HotelState, currentFloor: number, t: number, selectedGuestId: string | null = null, selectedStaffId: string | null = null) {
     this.selectedGuestId = selectedGuestId;
+    this.selectedStaffId = selectedStaffId;
+    this.staffDrawn = [];
     // Guests on a trip (walking in, checking in, at a facility, moving rooms)
     // and people walking out: every member of every party
     const guests = guestFigures(state, t);
@@ -77,16 +92,18 @@ export class ActorLayer {
     const plan = this.staffPlan(state);
     const roster = new Map((state.staffRoster ?? []).map(m => [m.id, m]));
     for (const it of plan.itineraries) {
+      const member = roster.get(it.staffId);
+      const marks = STAFF_PERSONALITIES.enabled && member ? { staffId: it.staffId, chevrons: experienceOf(member) === 'veteran' ? 2 : experienceOf(member) === 'skilled' ? 1 : 0 } : {};
       const color = it.staffId.startsWith('housekeeper') ? ACTOR_COLORS.housekeeper : ACTOR_COLORS.maintenance;
       if (it.legs.length === 0) {
         const at = it.end.at ? roster.get(it.staffId)?.at : null; // staying put (null: gone home)
-        if (at) figures.push({ id: it.staffId, kind: 'staff', color, x: at.gridX, y: at.gridY, floor: at.floor, settled: true });
+        if (at) figures.push({ id: it.staffId, kind: 'staff', color, x: at.gridX, y: at.gridY, floor: at.floor, settled: true, ...marks });
         continue;
       }
       if (t < it.legs[0].start) continue; // still off site
       if (t >= legsEnd(it.legs) && !it.end.at) continue; // gone home
       const figure = this.place(it.legs, t, it.staffId, 'staff', color);
-      if (figure) figures.push(figure);
+      if (figure) figures.push({ ...figure, ...marks });
     }
 
     // Front desk staff without a seat at a desk wait in a break room (or the lobby)
@@ -314,6 +331,15 @@ export class ActorLayer {
     } else {
       g.fillRect(cx - 5, cy - 5, 10, 10);
       g.strokeRect(cx - 5, cy - 5, 10, 10);
+      if (f.staffId) {
+        this.staffDrawn.push({ id: f.staffId, x: cx, y: cy });
+        for (let i = 0; i < (f.chevrons ?? 0); i++) {
+          const y = cy - 8 - i * 4;
+          g.lineStyle(1, 0xffffff, 0.9);
+          g.beginPath(); g.moveTo(cx - 3, y + 2); g.lineTo(cx, y); g.lineTo(cx + 3, y + 2); g.strokePath();
+        }
+        if (f.staffId === this.selectedStaffId) { g.lineStyle(2, SELECTED_COLOR, 1); g.strokeRect(cx - 8, cy - 8, 16, 16); }
+      }
     }
   }
 }

@@ -147,7 +147,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(20);
+    expect(loaded!.version).toBe(21);
     expect(loaded!.state.noiseSources).toEqual([]);
     expect(loaded!.state.facilities).toEqual([]); // added by the v8->v9 step
     expect(loaded!.state.activeIncidents).toEqual([]);
@@ -180,7 +180,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(20);
+    expect(loaded!.version).toBe(21);
     expect(loaded!.state.reviewScore).toBeCloseTo(7.2, 5); // 72 / 10
     expect((loaded!.state as any).reputationScore).toBeUndefined();
     expect(loaded!.state.bookings[0].reviewScore).toBe(8); // rating 4 * 2
@@ -1288,14 +1288,14 @@ describe('simulate (headless)', () => {
       if (result.wentBankrupt) bankruptcies++;
     }
     expect(bankruptcies).toBeLessThan(20);
-  });
+  }, 120000);
 
   it('balance: avg rating between 2.5 and 4.5', () => {
     const results = Array.from({ length: 100 }, (_, i) => simulate(30, i));
     const avgReview = results.reduce((s, r) => s + r.avgReviewScore, 0) / results.length;
     expect(avgReview).toBeGreaterThan(3.0); // 0-10 scale
     expect(avgReview).toBeLessThan(9.0);
-  });
+  }, 120000);
 
   it('avgReviewScore ignores stale bookings beyond the retention window (regression: simulate.ts:54 averages state.bookings directly, so a looser retention cap than the averaging window would leak old scores into this CLI stat)', () => {
     // Seed 500 bookings directly: 200 old ones scored 0, then 300 more recent

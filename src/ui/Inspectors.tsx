@@ -34,6 +34,7 @@ import { facilityCapacity, facilityLoad, peopleInFacility, openingHours } from '
 import { roomCleaningAt, describeWait, type RoomCleaning } from '../simulation/CleaningStatus';
 import { useController, useLiveClock } from './context';
 import { formatBar, formatMoney, formatWalk, capitalize } from './format';
+import { StaffDetails, staffActivity } from './StaffPeople';
 
 /** What a visit to the shop or a table at the restaurant costs a party of one or two, and a big spender's (spending styles on). */
 function spendLines(facility: Facility): string[] {
@@ -74,8 +75,22 @@ export function Inspector() {
     return room ? <RoomInspector room={room} state={state} /> : null;
   }
   if (selection.kind === 'guest') return <GuestInspector guestId={selection.id} anchor={selection.anchor} state={state} />;
+  if (selection.kind === 'staff') return <StaffInspector staffId={selection.id} anchor={selection.anchor} />;
   const facility = state.facilities.find(f => f.id === selection.id);
   return facility ? <FacilityInspector facility={facility} state={state} /> : null;
+}
+
+function StaffInspector({ staffId, anchor }: { staffId: string; anchor: Tile }) {
+  const c = useController();
+  useLiveClock();
+  const member = c.state.staffRoster?.find(m => m.id === staffId);
+  if (!member) return null;
+  return <TileCard tile={anchor} title={member.name ?? 'Staff member'}>
+    <div class="body small">{member.role === 'housekeeper' ? 'Housekeeper' : 'Maintenance'}</div>
+    <StaffDetails member={member} />
+    <div class="small" style={{ margin: '6px 0' }}>{staffActivity(member, c.state, c.gameTime)}</div>
+    {!member.leaving && <button class="danger" onClick={() => c.dismissStaff(member.id)}>Let go</button>}
+  </TileCard>;
 }
 
 /** A card beside the selected tile: to its right, or its left on the right half of the floor. */
@@ -167,6 +182,8 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
         </div>
       </div>
       <pre class="stats">{stats.join('\n')}</pre>
+      {room.cleanedBy && <div class="dim small">Last cleaned by {room.cleanedBy.name} ({room.cleanedBy.style}), day {room.cleanedBy.day}.</div>}
+      {room.damageReportedBy && <div class="warn-text small">Damage reported by {room.damageReportedBy}.</div>}
       {fit && (fit.likes.length > 0 || fit.dislikes.length > 0) && (
         <div class="small guest-fit">
           {fit.likes.length > 0 && <span class="good-text">Likes {listFeatures(fit.likes, profile.type)}. </span>}
@@ -351,6 +368,7 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
   const lines = [
     `${capitalize(describeGuest(party, guest.purpose))}${guest.isReturning && !LOYALTY.enabled ? ', back again' : ''}`,
     ...describeSpotlight(guest, state),
+    ...(guest.eventStay ? [`${guest.eventStay.name}: here through day ${guest.eventStay.endDay - 1}, out in the evening; back by 01:00`] : []),
     `Night ${night} of ${guest.stayLength}${LOYALTY.enabled ? ` \u00b7 ${describeLoyalty(guest)}` : ''}`,
     ...(favoriteLine ? [favoriteLine] : []),
     ...(housekeeping ? [housekeeping] : []),

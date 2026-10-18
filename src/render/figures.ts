@@ -27,6 +27,7 @@ export const PURPOSE_COLORS: Record<Purpose, number> = {
   business: 0x5d6d7e, // slate: a suit
   sightseeing: 0xf4d03f, // yellow: a sun hat
   getaway: 0xf1948a, // rose
+  event: 0xc5a3ff, // lavender: distinct from staff and the other trip colours
 };
 export const NO_PURPOSE_COLOR = 0xecf0f1; // a guest from before purposes (or with purposes off)
 
@@ -36,6 +37,8 @@ export function getGuestDotColor(purpose: Purpose | undefined): number {
 }
 
 export interface Figure {
+  staffId?: string;
+  chevrons?: number;
   id: string; // a person: the booking's id for its first member, `${id}#${n}` for the others
   kind: 'guest' | 'staff';
   color: number;

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GameController, TICK_INTERVAL_MS } from '../src/game/GameController.js';
 import { ROOM_CONFIG, ECONOMY } from '../src/config/balance.js';
 import { loadGame } from '../src/simulation/SaveManager.js';
@@ -75,6 +75,62 @@ describe('GameController: the clock', () => {
 });
 
 describe('GameController: building', () => {
+  it('paused building and management changes survive an immediate reload', () => {
+    const c = freshController();
+    c.togglePause();
+    c.selectTool('standard');
+    c.tileDown({ gridX: 5, gridY: 2 });
+    c.setRoomPrice(c.state.rooms[0].id, 95);
+    c.setHousekeeping('thorough', 'every_other_day');
+    const loaded = new GameController();
+    expect(loaded.state).toEqual(c.state);
+    expect(loaded.state.rooms[0].pricePerNight).toBe(95);
+    expect(loaded.paused).toBe(true);
+  });
+
+  it('a mid-hour save resumes the same clock, plans and random stream', () => {
+    const c = freshController();
+    c.selectTool('standard');
+    c.tileDown({ gridX: 5, gridY: 2 });
+    c.update(0.6 * TICK_INTERVAL_MS);
+    c.setRoomPrice(c.state.rooms[0].id, 90); // saves the edit at its actual time
+    const loaded = new GameController();
+    expect(loaded.gameTime).toBeCloseTo(c.gameTime, 12);
+    expect(loaded.state.staffPlan).toEqual(c.state.staffPlan);
+    c.update(0.4 * TICK_INTERVAL_MS);
+    loaded.update(0.4 * TICK_INTERVAL_MS);
+    expect(loaded.state).toEqual(c.state);
+    expect(loadGame()?.prngState).toBeDefined();
+  });
+
+  it('uses the supplied storage, exposes save failure, and can retry', () => {
+    const items = new Map<string, string>([['hotel-game-tutorial-seen', '1']]);
+    let blocked = true;
+    const storage: Storage = {
+      get length() { return items.size; }, key: i => [...items.keys()][i] ?? null,
+      getItem: key => items.get(key) ?? null, clear: () => items.clear(), removeItem: key => { items.delete(key); },
+      setItem: (key, value) => { if (blocked) throw new Error('full'); items.set(key, value); },
+    };
+    const c = new GameController(storage);
+    c.selectTool('standard'); c.tileDown({ gridX: 5, gridY: 2 });
+    expect(c.saveError).toBe(true);
+    blocked = false;
+    expect(c.saveNow()).toBe(true);
+    expect(c.saveError).toBe(false);
+    expect(new GameController(storage).state.rooms).toEqual(c.state.rooms);
+  });
+
+  it('page exit cannot recreate the discarded save when starting over', () => {
+    const c = freshController(); c.togglePause();
+    const reload = vi.fn();
+    vi.stubGlobal('window', { location: { reload } });
+    try {
+      c.startNewGame(); c.saveNow();
+      expect(loadGame()).toBeNull();
+      expect(reload).toHaveBeenCalledOnce();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
   it('builds with the selected tool on a clicked tile, and flags the result for the renderer', () => {
     const c = freshController();
     c.selectTool('standard');

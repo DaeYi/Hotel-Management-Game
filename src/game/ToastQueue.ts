@@ -21,6 +21,7 @@ export const EVENT_COLORS: Record<string, string> = {
   spotlight_announced: '#c39bd3',
   spotlight_arrived: '#c39bd3',
   spotlight_review: '#c39bd3',
+  staff_notice: '#1abc9c',
   guest_returned: '#2ecc71',
   guest_departed: '#3498db',
   guest_walked_out: '#e67e22',
@@ -57,7 +58,7 @@ export const EVENT_COLORS: Record<string, string> = {
 export const INCIDENT_EVENT_TYPES = new Set([
   'guest_returned', 'regular_lost', 'guest_walked_out', 'noise_complaint_filed',
   'noise_complaint_escalated', 'mid_stay_breakdown_resolved', 'visitors_asked_to_leave', 'guest_complained',
-  'spotlight_announced', 'spotlight_arrived', 'spotlight_review',
+  'spotlight_announced', 'spotlight_arrived', 'spotlight_review', 'staff_notice',
 ]);
 
 /** Shown immediately rather than batched. */

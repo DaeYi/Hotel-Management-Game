@@ -1,4 +1,5 @@
 import { it, expect } from 'vitest';
+import { staffRate } from '../src/simulation/StaffProfiles.js';
 import { createStarterHotel, addRoom, getAvailableRooms } from '../src/simulation/HotelState.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import { PRNG } from '../src/simulation/prng.js';
@@ -93,7 +94,10 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
           const room = before.rooms.find(x => x.id === l.placeId);
           const at = positionAt(it.legs, (l.start + l.end) / 2)!;
           if (!room || at.x !== room.gridX || at.y !== room.gridY || at.floor !== room.floor) { bad('working stay not in its room', `${it.staffId} ${l.placeId}`); continue; }
-          m.set(room.id, (m.get(room.id) ?? 0) + Math.min(l.end, T + 1) - Math.max(l.start, T));
+          const worker = before.staffRoster?.find(m => m.id === it.staffId);
+          const rate = worker ? staffRate(worker) : 1;
+          if (Math.abs((l.workRate ?? 1) - rate) > 1e-9) bad('planned rate differs from the worker skill', it.staffId);
+          m.set(room.id, (m.get(room.id) ?? 0) + (Math.min(l.end, T + 1) - Math.max(l.start, T)) * rate);
         }
         return m;
       };

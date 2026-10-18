@@ -2,6 +2,7 @@
 
 Date: 2026-10-11
 Status: IN PROGRESS. Purpose of stay (three values) and room preferences shipped first, as a slice: see guest-preferences.md. The remainder is being built in six phases (see "Build plan (2026-10-12)" at the end).
+Current implementation: phase 3c (event visitors) and phase 4 (named housekeeping and maintenance staff) are implemented. See the implementation notes below. Front desk identities, specialties, fatigue, shifts and morale follow in phases 5-6.
 Follows: aligned-movement.md, open-floor-plan.md, late-game-economy.md
 Builds on: the 11:00 checkout, guest day trips (`OutingManager.ts`, `GUEST_OUTINGS`) and presence-aware noise, which shipped together with this proposal (see aligned-movement.md).
 
@@ -398,7 +399,7 @@ Skill that grows with work.
 
 - **Values:** rookie (0-80 work-hours) / skilled (80-400) / veteran (400+). Hire mix 60/30/10.
   - Work rate ×0.8 / ×1.0 / ×1.2.
-  - Wage ×0.8 / ×1.0 / ×1.3.
+  - Wage ×0.9 / ×1.0 / ×1.3 (rookie discount tuned in phase 4).
   - Front desk check-ins take 25 / 20 / 16 minutes.
 - **Simulation:**
   - **Faster work:** `planStaff` sets a work stay to `job.hours / rate`, so a veteran visibly leaves a room sooner. `plannedWork` credits stay-hours × rate.
@@ -483,13 +484,13 @@ Energy across a shift. This gives break rooms a real job; today they are only wa
 
 Attendance.
 
-- **Values:** dependable (never late, wage ×1.1) / normal (late up to 1h on 5% of days) / flaky (late 0.5-2h on 20% of days, absent on 4%, wage ×0.9).
+- **Values:** dependable (never late, wage ×1.1) / normal (late up to 1h on 5% of days) / flaky (late 0.5-2h on 20% of days, absent on 4%, wage ×0.95).
 - **Simulation:**
   - **Daily rolls:** lateness and absence come from `hash01(staffId|day|late)` and `hash01(staffId|day|absent)`.
   - **Late:** the commute leg moves later, and the worker walks in mid-morning.
   - **Absent:** the worker doesn't arrive and isn't paid.
   - **Collision with checkout:** late mornings run into the 10:00 daily round and the 11:00 checkouts.
-  - **Balance:** a flaky worker's expected lost hours roughly match the 10% wage discount.
+  - **Balance:** absence is already unpaid. A 5% wage discount compensates for lateness and uncertainty; a larger discount made surplus unreliable staff too profitable in phase 4's balance runs.
 - **On screen:** a lone figure walking in at 7:30. An empty slot on the shift timeline.
 - **Hooks into:** `StaffManager.isOnShift`/`planStaff` (commute per member), `MaintenanceManager.getStaffDailyCost`, `StoryGenerator`.
 - **Player decision:** a cheap flaky crew needs spare headcount. Dependable staff are worth it at 5★ and on a spotlight guest's day.
@@ -1013,3 +1014,29 @@ Spotlight guests, behind one switch, `SPOTLIGHT` (it needs guest profiles). With
   - The doc's other prep (daily housekeeping, pausing renovations nearby, a quiet floor) works only through the hotel-wide settings: nothing ties it to the spotlight guest's room, or points the player to it.
   - A concierge who spots spotlight guests (open question 6 is settled: always announced).
   - The bots don't prepare for spotlight guests.
+
+### Phase 3c: event visitors (2026-10-17)
+
+- The existing calendar supplies the event name and an absolute checkout day, including New Year across the year boundary. About one in twenty existing bookings is an event visit; total demand and party generation are unchanged. Their nightly budget is 20% higher and they stay through the event's final night.
+- Fresh visitors lean toward late nights and rowdiness; families remain non-rowdy. Returning visitors retain their personal profile. Event trips take priority over facilities, leave 17:00-20:00 and return through a street entrance by 01:00, without shifting the shared random stream.
+- Lavender figures, the legend, a named-event line on the guest card, and one story entry per arrival day explain the behavior. Saves retain the event and the checkout date.
+- The initial 30% arrival mix overfilled the hotel with long stays and disproportionately helped understaffed strategies. The default is 5%, pending broader player feedback. The housekeeping estimate recognizes event stays and the approaching checkout rush. The existing 1.5x/1.15x staffing gates remain unchanged.
+- With EVENT_GUESTS off, the committed 60-day balanced run is pinned exactly. Tests cover calendar boundaries, generation, budgets, overnight trips, profile biases, save round trips, and the workload estimate.
+
+### Reliability and tooling (2026-10-17)
+
+Player actions save immediately, including paused edits. Ticks and page hiding/exiting also save, with the fractional hour, pause and speed restored on reload. Storage failures have a visible warning and retry. Discarding a save prevents the exit handler from restoring it. Supplied storage is now used consistently by the controller and save manager.
+
+Vite 8, Vitest 5, Happy DOM 21 and current tsx replace the vulnerable toolchain; npm audit reports no known vulnerabilities. The project uses Node 22.12+ (22.x), 24.x or 26+. Long synchronous balance tests have explicit timeouts under Vitest 5. The README provides setup, verification, save behavior and the current roadmap.
+
+### Phase 4: named staff hiring (2026-10-17)
+
+- Housekeeping and maintenance have persistent serial IDs, names, hire dates, agreed wages, experience, work style and reliability. Three deterministic candidates are offered per role; hiring consumes a slot and replaces it, including through a reload. The player can choose a specific employee to dismiss. Count shortcuts and simulation strategies use the same candidates and dismissal rules.
+- Experience increases only for actual cleaning and repair stays, at 80 and 400 work hours. Work rates change real itinerary durations; each leg stores its rate so a promotion or a mid-hour replan cannot change past work. Walks and rest do not earn experience. Promotions automatically raise wages in this phase; negotiated raises and quitting belong to morale in phase 6.
+- Speedy and meticulous workers trade time for cleanliness or repair condition. The employee finishing a clean determines its result. Meticulous cleaners report damage; it is visible on the room card and prioritized for maintenance once vacant. Room cards retain the last cleaner's name and style.
+- Reliability uses hashes of employee ID and day, independent of the shared random stream. Late employees really arrive later; absent employees stay off site and are unpaid. Attendance and promotions produce story entries and notifications. Earned wages survive dismissal and are settled the following day. Cash reserves budget for the full roster rather than treating today's absence as permanent savings.
+- The staff panel shows candidates, the current team, activity, rates, wages and attendance. Click a name or a worker on the floor for their card. Uniform chevrons show experience. Staffing and held-suite readiness estimates account for individual rates and attendance.
+- Save version 21 gives older workers neutral profiles without changing their IDs, wages, current positions or saved plans. Hire serials never get reused. Existing neutral staff begin gaining normal veteran performance when promoted.
+- Front desk staff remain a count. Specialties, fatigue, compulsory breaks, shift patterns, morale, negotiated raises and quitting remain later work.
+- Balance tuning reduced the draft rookie discount from 20% to 10% and the flaky discount from 10% to 5%. In the initial 24-seed, 400-day run, the draft discounts let overstaffing beat the workload-sized team (median $4.88M versus $4.65M). Both staffing gates remain unchanged; cheaper hires must still carry a real performance or attendance tradeoff.
+- Focused tests cover hiring and dismissal, candidate consumption, migrations, individual work credit, mid-hour changes, finisher quality, repairs, promotions, deterministic attendance, earned wages, rendering and interface flows. With both new feature switches off, the committed balanced simulation remains pinned exactly.

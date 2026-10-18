@@ -42,3 +42,9 @@ window.addEventListener('keydown', event => {
 if (import.meta.env.DEV) Object.assign(window, { game: controller, phaser: game });
 
 controller.start();
+
+// Mobile browsers may suspend a hidden page without an unload event.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') controller.saveNow();
+});
+window.addEventListener('pagehide', () => controller.saveNow());

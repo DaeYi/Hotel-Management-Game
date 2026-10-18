@@ -10,10 +10,12 @@ import {
   refitRoom, refitAllLike, cancelPendingRefit,
 } from '../simulation/HotelState';
 import { rotateDirection, doorTile, isReachableHallway } from '../simulation/Layout';
-import { getRoster, getStaffPlan } from '../simulation/StaffManager';
+import { getStaffPlan, syncStaff } from '../simulation/StaffManager';
+import { hireCandidate, dismissStaff } from '../simulation/StaffHiring';
+import type { StaffRole } from '../simulation/types';
 import { settleChanges } from '../simulation/Settle';
 import { furnishingOf } from '../simulation/RoomProfile';
-import { hourStart } from '../simulation/Movement';
+import { hourStart, positionAt } from '../simulation/Movement';
 import { startCampaign } from '../simulation/MarketingManager';
 import { tickSimulation } from '../simulation/tick';
 import { checkBankruptcy, repayLoan } from '../simulation/EconomyManager';
@@ -43,7 +45,7 @@ export const PAINTABLE_TYPES = new Set<BuildType>(['bulldoze']);
 export type PanelId = 'staff' | 'housekeeping' | 'amenities' | 'marketing' | 'finance' | 'story' | 'goals' | 'furnish';
 
 /** What the inspector shows: a room or facility, or a guest (anchored where they were picked, so the card doesn't chase them). */
-export type Selection = { kind: 'room' | 'facility'; id: string } | { kind: 'guest'; id: string; anchor: Tile } | null;
+export type Selection = { kind: 'room' | 'facility'; id: string } | { kind: 'guest' | 'staff'; id: string; anchor: Tile } | null;
 
 export interface Tile {
   gridX: number;
@@ -94,9 +96,14 @@ export class GameController {
   private tickListeners = new Set<(events: GameEvent[], state: HotelState) => void>();
   private dirty = true;
   private version = 0;
+  private observedState: HotelState;
+  private advancing = false;
+  private discardingSave = false;
+  saveError = false;
 
-  constructor(private storage: Storage = localStorage) {
-    const save = loadGame();
+  constructor(private storage?: Storage) {
+    try { this.storage ??= localStorage; } catch { /* Storage may be disabled by the browser. */ }
+    const save = loadGame(this.storage);
     if (save) {
       this.state = withPlans(save.state);
       this.prng = PRNG.fromState(save.prngState);
@@ -104,7 +111,17 @@ export class GameController {
       this.prng = new PRNG(Date.now());
       this.state = withPlans(createStarterHotel()); // all hallway, a free street entrance and a check-in desk beside it
     }
-    this.tutorialOpen = !save && !this.storage.getItem(TUTORIAL_SEEN_KEY);
+    this.observedState = this.state;
+    let seen = false;
+    try { seen = !!this.storage?.getItem(TUTORIAL_SEEN_KEY); } catch { /* The tutorial still works without storage. */ }
+    this.tutorialOpen = !save && !seen;
+    if (save?.clock) {
+      const { hourProgress, paused, speed } = save.clock;
+      this.tickAccumulator = Number.isFinite(hourProgress) ? Math.max(0, Math.min(1 - Number.EPSILON, hourProgress)) * TICK_INTERVAL_MS : 0;
+      this.paused = paused === true;
+      this.speed = [1, 2, 5].includes(speed) ? speed : 1;
+    }
+    this.gameOver = checkBankruptcy(this.state);
   }
 
   // === Subscriptions ===
@@ -128,6 +145,21 @@ export class GameController {
 
   private changed() {
     this.dirty = true;
+    if (!this.advancing && this.state !== this.observedState) {
+      this.observedState = this.state;
+      this.saveNow();
+    }
+  }
+
+  /** Save actions immediately, including paused edits and the current point in an itinerary. */
+  saveNow(): boolean {
+    if (this.discardingSave) return true;
+    const saved = saveGame(this.state, this.prng, this.storage, {
+      hourProgress: this.hourProgress, paused: this.paused, speed: this.speed,
+    });
+    if (this.saveError === saved) this.dirty = true;
+    this.saveError = !saved;
+    return saved;
   }
 
   /** How far through the current game hour the clock is (0-1), for animating within the hour. */
@@ -161,12 +193,18 @@ export class GameController {
 
   /** Advance real time: run due simulation ticks, age toasts, and notify listeners. */
   update(deltaMs: number, now = performance.now()) {
+    this.advancing = true;
     if (this.running) {
       this.tickAccumulator += deltaMs * this.speed;
       while (this.tickAccumulator >= TICK_INTERVAL_MS && !this.gameOver) {
         this.tickAccumulator -= TICK_INTERVAL_MS;
         this.doTick(now);
       }
+    }
+    this.advancing = false;
+    if (this.state !== this.observedState) {
+      this.observedState = this.state;
+      this.saveNow();
     }
     if (this.toasts.update(now)) this.changed();
 
@@ -193,19 +231,18 @@ export class GameController {
   }
 
   private doTick(now: number) {
-    const prevDay = this.state.day;
     const { state, events } = tickSimulation(this.state, this.prng);
     this.state = state;
     this.toasts.add(events, now, this.storyLogVisible);
     for (const listener of this.tickListeners) listener(events, state);
 
-    if (state.day !== prevDay) saveGame(state, this.prng);
     if (checkBankruptcy(state)) this.gameOver = true;
     // A guest's card closes once they've gone (checked out and walked out of the building)
     if (this.selection?.kind === 'guest') {
       const id = this.selection.id;
       if (!state.guests.some(g => g.id === id) && !(state.walkers ?? []).some(w => w.guestId === id)) this.selection = null;
     }
+    if (this.selection?.kind === 'staff' && !this.state.staffRoster?.some(m => m.id === this.selection!.id)) this.selection = null;
     this.changed();
   }
 
@@ -215,11 +252,13 @@ export class GameController {
     this.speed = speed;
     this.paused = false;
     this.changed();
+    this.saveNow();
   }
 
   togglePause() {
     this.paused = !this.paused;
     this.changed();
+    this.saveNow();
   }
 
   // === Panels and overlays ===
@@ -262,10 +301,11 @@ export class GameController {
 
   finishTutorial() {
     this.tutorialOpen = false;
-    this.storage.setItem(TUTORIAL_SEEN_KEY, '1');
+    try { this.storage?.setItem(TUTORIAL_SEEN_KEY, '1'); } catch { /* The save warning explains storage failures. */ }
     this.paused = false;
     this.speed = 1;
     this.changed();
+    this.saveNow();
   }
 
   requestNewGame() {
@@ -280,8 +320,9 @@ export class GameController {
 
   /** Wipe the save and start over (the page reloads into a fresh game). */
   startNewGame() {
-    deleteSave();
-    this.storage.removeItem(TUTORIAL_SEEN_KEY);
+    this.discardingSave = true;
+    deleteSave(this.storage);
+    this.storage?.removeItem(TUTORIAL_SEEN_KEY);
     window.location.reload();
   }
 
@@ -434,6 +475,19 @@ export class GameController {
     this.changed();
   }
 
+  selectStaff(staffId: string, anchor?: Tile) {
+    if (this.tutorialOpen || this.tool) return;
+    const member = this.state.staffRoster?.find(m => m.id === staffId);
+    if (!member) return;
+    const itinerary = getStaffPlan(this.state).itineraries.find(it => it.staffId === staffId);
+    const here = itinerary ? positionAt(itinerary.legs, this.gameTime) : null;
+    if (!anchor && (here || member.at)) this.setFloor(here?.floor ?? member.at!.floor);
+    this.closePanel();
+    const tile = here ? { gridX: Math.floor(here.x), gridY: Math.floor(here.y), floor: here.floor } : member.at;
+    this.selection = { kind: 'staff', id: staffId, anchor: anchor ?? tile ?? { gridX: 1, gridY: 3 } };
+    this.changed();
+  }
+
   /** Whether night owls may stay till the late checkout: no, yes, or yes for a fee. */
   setLateCheckout(policy: LateCheckoutPolicy) {
     this.apply({ ...this.state, lateCheckout: policy });
@@ -481,6 +535,14 @@ export class GameController {
 
   setStaff(staff: StaffConfig) {
     this.apply({ ...this.state, staff });
+  }
+
+  hireStaff(role: StaffRole, candidateId: string) {
+    return this.apply(hireCandidate(this.state, role, candidateId));
+  }
+
+  dismissStaff(staffId: string) {
+    return this.apply(dismissStaff(this.state, staffId));
   }
 
   setHousekeeping(turnoverQuality: CleaningQuality, dailyCadence: DailyCleaningCadence) {
@@ -558,6 +620,6 @@ export class GameController {
 
 /** A state with its staff roster and this hour's plan in place (new games and loaded saves). */
 function withPlans(state: HotelState): HotelState {
-  const staffRoster = getRoster(state);
-  return { ...state, staffRoster, staffPlan: getStaffPlan({ ...state, staffRoster }), walkers: state.walkers ?? [] };
+  const ready = syncStaff(state);
+  return { ...ready, staffPlan: getStaffPlan(ready), walkers: ready.walkers ?? [] };
 }

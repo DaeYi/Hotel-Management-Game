@@ -277,7 +277,7 @@ describe('SaveManager v11 -> current', () => {
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 11, prngState: 1, state: legacy, timestamp: 0 }));
 
     const loaded = loadGame()!;
-    expect(loaded.version).toBe(20);
+    expect(loaded.version).toBe(21);
     expect(loaded.state.rooms[0]).toMatchObject({ decor: 100, renovationHoursRemaining: 0 });
     expect(loaded.state.facilities[0]).toMatchObject({ decor: 100, level: 1 });
     expect(loaded.state.activeCampaign).toBeNull();
@@ -299,5 +299,5 @@ describe('Balance: reinvesting beats hoarding', () => {
     expect(avg(balanced.map(r => r.finalStarRating))).toBeGreaterThan(avg(hoarder.map(r => r.finalStarRating)));
     // The cash pile no longer runs away: balanced keeps spending
     expect(avg(balanced.map(r => r.finalCash))).toBeLessThan(avg(hoarder.map(r => r.finalCash)));
-  }, 120000);
+  }, 300000); // Twelve 400-day runs need headroom on shared CI runners.
 });

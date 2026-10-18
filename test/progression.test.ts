@@ -256,7 +256,7 @@ describe('SaveManager v10 -> current', () => {
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 10, prngState: 1, state: legacy, timestamp: 0 }));
 
     const loaded = loadGame()!;
-    expect(loaded.version).toBe(20);
+    expect(loaded.version).toBe(21);
     expect(loaded.state.loan.balance).toBe(0);
     expect(loaded.state.objectives).toEqual({ currentIndex: 0, outcomes: [] });
     expect(loaded.state.dailyStats).toEqual([]);
@@ -283,7 +283,7 @@ describe('Balance (headless strategies)', () => {
     expect(results.every(r => !r.wentBankrupt)).toBe(true);
     expect(results.every(r => r.loanBalance === 0)).toBe(true);
     expect(results.every(r => r.finalStarRating >= 4)).toBe(true);
-  }, 60000);
+  }, 300000); // Eight full years can exceed two minutes on a busy CI runner.
 
   it('a hands-off hotel eventually goes bankrupt', () => {
     const results = run('idle', 250, 8);

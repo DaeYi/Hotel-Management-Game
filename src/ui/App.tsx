@@ -1,7 +1,7 @@
 import type { Ref } from 'preact';
 import { PURPOSES, PURPOSE_LABELS } from '../simulation/Purpose';
 import { PURPOSE_COLORS, NO_PURPOSE_COLOR } from '../render/figures';
-import { GUEST_PURPOSES, GUEST_PROFILE, MOOD, LOYALTY, GUEST_HOUSEKEEPING, HOSTED_NIGHTS, PATIENCE, VOICE, SPENDING } from '../config/balance';
+import { GUEST_PURPOSES, GUEST_PROFILE, MOOD, LOYALTY, GUEST_HOUSEKEEPING, HOSTED_NIGHTS, PATIENCE, VOICE, SPENDING, EVENT_GUESTS } from '../config/balance';
 import { QUIRK_GLYPHS, MOOD_COLORS, RING_COLORS, HANGER_COLORS, VISITORS_COLOR, DESK_GLYPHS } from '../render/quirks';
 import type { GameController, PanelId } from '../game/GameController';
 import { GameContext, useController, useControllerVersion } from './context';
@@ -12,6 +12,7 @@ import { partySize } from '../simulation/Party';
 import { spotlightOn, spotlightBanner } from '../simulation/Spotlight';
 import { getNextLoanPaymentDay } from '../simulation/EconomyManager';
 import { ACTOR_COLORS } from '../render/ActorLayer';
+import { STAFF_PERSONALITIES } from '../config/staff';
 import { CleaningLegend } from './CleaningKey';
 import { formatMoney, formatMoneyShort, formatStars, capitalize } from './format';
 import { BuildPanel } from './BuildPanel';
@@ -34,6 +35,12 @@ export function App({ controller, worldRef }: { controller: GameController; worl
           <TopBar />
           <GoalTracker />
         </header>
+        {controller.saveError && (
+          <div class="save-warning" role="alert">
+            Progress could not be saved. Keep this tab open; browser storage may be full or unavailable.
+            {' '}<button onClick={() => controller.saveNow()}>Try saving again</button>
+          </div>
+        )}
         <Toolbar />
         <div class="main">
           <section class={`world-column${controller.openPanel && controller.panelCollapsed ? ' panel-docked' : ''}`}>
@@ -200,7 +207,7 @@ function Legend() {
     <div class="legend">
       <span class="legend-group" role="group" aria-label="Guests">
         <span class="legend-title">Guests:</span>
-        {GUEST_PURPOSES.enabled && PURPOSES.map(p => <span key={p}><span class="swatch round" style={{ background: toCss(PURPOSE_COLORS[p]) }} />{PURPOSE_LABELS[p]}</span>)}
+        {GUEST_PURPOSES.enabled && PURPOSES.filter(p => p !== 'event' || EVENT_GUESTS.enabled || c.state.guests.some(g => g.purpose === 'event')).map(p => <span key={p}><span class="swatch round" style={{ background: toCss(PURPOSE_COLORS[p]) }} />{PURPOSE_LABELS[p]}</span>)}
         {/* Guests from before purposes (an older save), or everyone with purposes off */}
         {(!GUEST_PURPOSES.enabled || c.state.guests.some(g => !g.purpose) || (c.state.walkers ?? []).some(w => !w.purpose)) && (
           <span><span class="swatch round" style={{ background: toCss(NO_PURPOSE_COLOR) }} />{GUEST_PURPOSES.enabled ? 'Other' : 'Guest'}</span>
@@ -253,6 +260,7 @@ function Legend() {
       <span><span class="swatch" style={{ background: toCss(ACTOR_COLORS.frontDesk) }} />Front desk</span>
       <span><span class="swatch" style={{ background: toCss(ACTOR_COLORS.housekeeper) }} />Housekeeping</span>
       <span><span class="swatch" style={{ background: toCss(ACTOR_COLORS.maintenance) }} />Maintenance</span>
+      {STAFF_PERSONALITIES.enabled && <span class="dim">Staff: no chevron = rookie, ⌃ skilled, ⌃⌃ veteran (click for details)</span>}
       {c.cleaningOverlay && (
         <span class="legend-group" role="group" aria-label="Cleaning overlay key">
           <span class="legend-title">Cleaning:</span>

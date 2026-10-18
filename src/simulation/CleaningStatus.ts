@@ -47,14 +47,14 @@ export function roomCleaningAt(state: HotelState, t: number, plan: StaffPlan = g
   const isHousekeeper = (staffId: string) => (roles.get(staffId) ?? (staffId.startsWith('housekeeper') ? 'housekeeper' : 'maintenance')) === 'housekeeper';
 
   // Every housekeeper's cleaning stays this hour, by room; and who ends the hour still walking to one
-  const stays = new Map<string, Array<{ staffId: string; job: CleaningJob; start: number; end: number }>>();
+  const stays = new Map<string, Array<{ staffId: string; job: CleaningJob; start: number; end: number; rate: number }>>();
   const heading = new Map<string, string>();
   for (const it of plan.itineraries) {
     if (!isHousekeeper(it.staffId)) continue;
     for (const leg of it.legs) {
       if (leg.kind !== 'stay' || !leg.placeId || (leg.job !== 'turnover' && leg.job !== 'daily')) continue;
       const list = stays.get(leg.placeId) ?? [];
-      list.push({ staffId: it.staffId, job: leg.job, start: leg.start, end: leg.end });
+      list.push({ staffId: it.staffId, job: leg.job, start: leg.start, end: leg.end, rate: leg.workRate ?? 1 });
       stays.set(leg.placeId, list);
     }
     const target = it.end.roomId;
@@ -70,7 +70,7 @@ export function roomCleaningAt(state: HotelState, t: number, plan: StaffPlan = g
     const owed = job === 'turnover' ? room.cleaningHoursRemaining : room.dailyCleanHoursRemaining;
     const mine = (stays.get(room.id) ?? []).filter(s => s.job === job);
     // Work done so far this hour: the part of each stay (within the hour) before now
-    const worked = mine.reduce((sum, s) => sum + Math.max(0, Math.min(s.end, now, T + 1) - Math.max(s.start, T)), 0);
+    const worked = mine.reduce((sum, s) => sum + Math.max(0, Math.min(s.end, now, T + 1) - Math.max(s.start, T)) * s.rate, 0);
     const hoursLeft = Math.max(0, owed - worked);
     if (hoursLeft <= 1e-9) continue;
     // Against the job's own size: the turnover as it was set at checkout (a quality change later doesn't resize it)
