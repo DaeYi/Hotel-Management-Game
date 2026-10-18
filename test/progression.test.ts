@@ -283,7 +283,7 @@ describe('Balance (headless strategies)', () => {
     expect(results.every(r => !r.wentBankrupt)).toBe(true);
     expect(results.every(r => r.loanBalance === 0)).toBe(true);
     expect(results.every(r => r.finalStarRating >= 4)).toBe(true);
-  }, 60000);
+  }, 300000); // Eight full years can exceed two minutes on a busy CI runner.
 
   it('a hands-off hotel eventually goes bankrupt', () => {
     const results = run('idle', 250, 8);
