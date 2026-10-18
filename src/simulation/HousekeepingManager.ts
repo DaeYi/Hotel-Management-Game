@@ -6,6 +6,7 @@ import { getStaffPlan, plannedWork, isOnShift } from './StaffManager.js';
 import { isCheckoutDay } from './GuestManager.js';
 import { occupantFactor, guestsById } from './Party.js';
 import { housekeepingPrefOf } from './CleaningPreference.js';
+import { cleanlinessDelta, staffRate, attendanceShare, attendance } from './StaffProfiles.js';
 
 /**
  * Start turnover cleaning on a room after guest checkout. The housekeepers'
@@ -42,6 +43,22 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
   const plan = getStaffPlan(state);
   const turnoverWork = plannedWork(plan, 'turnover');
   const dailyWork = plannedWork(plan, 'daily');
+  const finisher = (id: string, kind: 'turnover' | 'daily') => {
+    let last: { id: string; end: number } | undefined;
+    for (const it of plan.itineraries) for (const leg of it.legs) {
+      if (leg.kind === 'stay' && leg.placeId === id && leg.job === kind && (!last || leg.end > last.end)) last = { id: it.staffId, end: leg.end };
+    }
+    return last ? state.staffRoster?.find(m => m.id === last.id) : undefined;
+  };
+  const cleanRecord = (room: Room, kind: 'turnover' | 'daily') => {
+    const member = finisher(room.id, kind);
+    const report = member?.profile?.style === 'meticulous' && room.condition < 60 && !room.damageReportedBy;
+    if (report) events.push({ type: 'staff_notice', message: `${member.name} reported damage in Room ${formatRoomLabel(room.gridX, room.gridY, room.floor)}; maintenance will attend when it is empty.`, data: { staffId: member.id, roomId: room.id } });
+    return {
+      delta: cleanlinessDelta(member),
+      fields: member?.name ? { cleanedBy: { id: member.id, name: member.name, style: member.profile?.style ?? 'standard', day: state.day }, ...(report ? { damageReportedBy: member.name } : {}) } : {},
+    };
+  };
   const cleaningRooms = state.rooms.filter(r => r.status === 'cleaning');
 
   const lastShiftHour = state.hour === STAFF.housekeeping.workEndHour - 1;
@@ -59,12 +76,13 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
     if (turnover !== undefined && room.status === 'cleaning') {
       const remaining = room.cleaningHoursRemaining - turnover;
       if (remaining <= 1e-9) {
+        const by = cleanRecord(room, 'turnover');
         events.push({
           type: 'room_cleaned',
           message: `Room ${formatRoomLabel(room.gridX, room.gridY, room.floor)} cleaned (${quality})`,
           data: { roomId: room.id, quality },
         });
-        return { ...room, status: 'vacant' as const, cleanliness: Math.max(room.cleanliness, targetCleanliness), cleaningHoursRemaining: 0, cleaningHoursTotal: undefined };
+        return { ...room, ...by.fields, status: 'vacant' as const, cleanliness: Math.max(room.cleanliness, Math.min(100, targetCleanliness + by.delta)), cleaningHoursRemaining: 0, cleaningHoursTotal: undefined };
       }
       return { ...room, cleaningHoursRemaining: remaining };
     }
@@ -72,12 +90,13 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
     if (room.dailyCleanHoursRemaining > 0 && room.status === 'occupied') {
       const remaining = room.dailyCleanHoursRemaining - (dailyWork.get(room.id) ?? 0);
       if (remaining <= 1e-9) {
+        const by = cleanRecord(room, 'daily');
         dailyDone++;
         dailyCost += HOUSEKEEPING.dailyCleaningCost;
         if (prefs && room.guestId) tally.set(room.guestId, 'done');
         return {
-          ...room,
-          cleanliness: Math.min(100, room.cleanliness + HOUSEKEEPING.dailyCleaningBoost),
+          ...room, ...by.fields,
+          cleanliness: Math.min(100, room.cleanliness + HOUSEKEEPING.dailyCleaningBoost + by.delta),
           lastDailyCleanDay: state.day,
           dailyCleanHoursRemaining: 0,
         };
@@ -186,6 +205,8 @@ export function estimateHousekeepingHours(state: HotelState, occupancy: number):
   const walks = state.rooms.map(r => getStaffTravelHours(state, r)).filter(Number.isFinite);
   const avgWalk = (walks.length > 0 ? walks.reduce((a, b) => a + b, 0) / walks.length : 0) * WALKS_PER_JOB;
   const occupied = state.rooms.length * occupancy;
+  const crew = (state.staffRoster ?? []).filter(m => m.role === 'housekeeper' && !m.leaving);
+  const rate = crew.length ? crew.reduce((sum, m) => sum + staffRate(m), 0) / crew.length : 1;
   let checkouts = occupied / AVERAGE_STAY_NIGHTS;
   // Event visitors stay through the event instead of turning over every two
   // nights. Count their known checkout rush (today or tomorrow) when planning
@@ -201,8 +222,8 @@ export function estimateHousekeepingHours(state: HotelState, occupancy: number):
   const makeupShare = GUEST_HOUSEKEEPING.enabled ? expectedShare('makeup') : 0;
   const cadence = state.housekeeping.dailyCadence === 'daily' ? 1 : state.housekeeping.dailyCadence === 'every_other_day' ? 0.5 + 0.5 * makeupShare : 0;
   const stayovers = occupied - checkouts; // guests leaving today get the turnover, not a daily clean (processDailyHousekeeping skips them)
-  const dailyRound = stayovers * cadence * (1 / STAFF.housekeeping.dailyCleanRoomsPerHour + avgWalk);
-  return checkouts * (turnover + avgWalk) + dailyRound;
+  const dailyRound = stayovers * cadence * (1 / STAFF.housekeeping.dailyCleanRoomsPerHour / rate + avgWalk);
+  return checkouts * (turnover / rate + avgWalk) + dailyRound;
 }
 
 /** The share of guests who want a kind of housekeeping (by the usual weights). */
@@ -222,7 +243,9 @@ export function housekeepingHoursAvailable(housekeepers: number): number {
 
 /** Housekeepers needed to keep up at a given occupancy. */
 export function housekeepersNeeded(state: HotelState, occupancy: number): number {
-  return Math.ceil(estimateHousekeepingHours(state, occupancy) / housekeepingHoursAvailable(1));
+  const crew = (state.staffRoster ?? []).filter(m => m.role === 'housekeeper' && !m.leaving);
+  const available = crew.length ? crew.reduce((sum, m) => sum + attendanceShare(m), 0) / crew.length : 1;
+  return Math.ceil(estimateHousekeepingHours(state, occupancy) / (housekeepingHoursAvailable(1) * available));
 }
 
 /**
@@ -285,7 +308,11 @@ export function getHousekeepingStatus(state: HotelState): {
   const roomsBeingCleaned = state.rooms.filter(r => r.status === 'cleaning').length;
   const roomsWaiting = Math.max(0, roomsBeingCleaned - housekeepers);
   const hoursNeeded = estimateHousekeepingHours(state, PLANNING_OCCUPANCY);
-  const hoursAvailable = housekeepingHoursAvailable(housekeepers);
+  const crew = (state.staffRoster ?? []).filter(m => m.role === 'housekeeper' && !m.leaving).slice(0, housekeepers);
+  const hoursAvailable = crew.reduce((hours, m) => {
+    const a = attendance(m, state.day);
+    return hours + (a.absent ? 0 : Math.max(0, STAFF.housekeeping.workEndHour - Math.max(HOUSEKEEPING.dailyCleaningHour, STAFF.housekeeping.workStartHour + a.lateHours)));
+  }, housekeepingHoursAvailable(Math.max(0, housekeepers - crew.length)));
 
   let recommendation: string | null = null;
   if (housekeepers === 0 && state.rooms.length > 0) {

@@ -10,6 +10,7 @@ import { useController, useLiveClock } from '../context';
 import { queueOn, deskToday, waitingInLine } from '../../simulation/DeskQueue';
 import { formatMoney, formatWalk } from '../format';
 import { PanelCard } from './PanelCard';
+import { StaffPeople } from '../StaffPeople';
 
 const LONG_WALK_HOURS = 0.33; // 20 minutes: worth a closet
 
@@ -106,6 +107,20 @@ export function StaffPanel() {
       <StaffRow label={`Front Desk (${formatMoney(STAFF.frontDesk.dailyWage)}/day)`} staffKey="frontDesk"
         status={`Check-in: ${getCheckInCapacity(state)}/hr at ${desks} desk${desks === 1 ? '' : 's'}${deskWarning}`} />
       {queueOn() && <DeskToday />}
+      <hr class="divider" />
+      <StaffRow label={`Housekeepers (base ${formatMoney(STAFF.housekeeping.dailyWage)}/day)`} staffKey="housekeepers"
+        status={`Cleaning: ${hk.roomsBeingCleaned}${hk.roomsWaiting > 0 ? ` (${hk.roomsWaiting} waiting!)` : ''}  |  Busy day: ${Math.round(hk.hoursNeeded)}h of ${Math.round(hk.hoursAvailable * 10) / 10}h`} />
+      <hr class="divider" />
+      <StaffRow label={`Maintenance (base ${formatMoney(STAFF.maintenance.dailyWage)}/day)`} staffKey="maintenanceWorkers"
+        status={`Needs repair: ${maint.roomsNeedingRepair}  |  Cap: ${maint.effectiveCapacity} rooms`} />
+      <hr class="divider" />
+      <div class="gold small">
+        Total staff: {formatMoney(getStaffDailyCost(state))}/day{upkeep > 1 ? ` (${state.starRating}★ wages x${upkeep})` : ''}
+      </div>
+      <div class="gold small">Avg walk to rooms: {formatWalk(avgWalk)}</div>
+      {recommendations.length > 0 && <div class="gold tiny" style={{ marginTop: '8px' }}>{'ℹ'} {recommendations[0]}</div>}
+      <StaffPeople />
+      <hr class="divider" />
       {HOSTED_NIGHTS.enabled && GUEST_PROFILE.enabled && (
         <div class="stack" style={{ marginTop: '6px' }}>
           <div class="body small">When a neighbour complains about a guest's visitors at night:</div>
@@ -139,18 +154,6 @@ export function StaffPanel() {
           </div>
         </div>
       )}
-      <hr class="divider" />
-      <StaffRow label={`Housekeepers (${formatMoney(STAFF.housekeeping.dailyWage)}/day)`} staffKey="housekeepers"
-        status={`Cleaning: ${hk.roomsBeingCleaned}${hk.roomsWaiting > 0 ? ` (${hk.roomsWaiting} waiting!)` : ''}  |  Busy day: ${Math.round(hk.hoursNeeded)}h of ${hk.hoursAvailable}h`} />
-      <hr class="divider" />
-      <StaffRow label={`Maintenance (${formatMoney(STAFF.maintenance.dailyWage)}/day)`} staffKey="maintenanceWorkers"
-        status={`Needs repair: ${maint.roomsNeedingRepair}  |  Cap: ${maint.effectiveCapacity} rooms`} />
-      <hr class="divider" />
-      <div class="gold small">
-        Total staff: {formatMoney(getStaffDailyCost(state))}/day{upkeep > 1 ? ` (${state.starRating}★ wages x${upkeep})` : ''}
-      </div>
-      <div class="gold small">Avg walk to rooms: {formatWalk(avgWalk)}</div>
-      {recommendations.length > 0 && <div class="gold tiny" style={{ marginTop: '8px' }}>{'ℹ'} {recommendations[0]}</div>}
     </PanelCard>
   );
 }

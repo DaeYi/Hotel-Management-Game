@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { EVENT_GUESTS, GUEST_PURPOSES } from '../src/config/balance.js';
+import { STAFF_PERSONALITIES } from '../src/config/staff.js';
 import { getActiveEvent, getSpecialEvent } from '../src/simulation/SeasonManager.js';
 import { rollPurpose, withEventStay, awayActivity } from '../src/simulation/Purpose.js';
 import { rollProfile } from '../src/simulation/Profile.js';
@@ -15,7 +16,7 @@ import { PRNG } from '../src/simulation/prng.js';
 import type { Guest } from '../src/simulation/types.js';
 
 const guest = (id: string): Guest => ({ id, name: 'Sam', budget: 200, stayLength: 2, trait: 'normal', satisfaction: 60, checkInDay: 46, isReturning: false, hadNoiseComplaint: false });
-afterEach(() => { EVENT_GUESTS.enabled = true; GUEST_PURPOSES.enabled = true; localStorage.clear(); });
+afterEach(() => { EVENT_GUESTS.enabled = true; GUEST_PURPOSES.enabled = true; STAFF_PERSONALITIES.enabled = true; localStorage.clear(); });
 
 describe('Event visitors', () => {
   it('calendar windows have one absolute end, including the New Year wrap', () => {
@@ -114,6 +115,7 @@ describe('Event visitors', () => {
 
   it('with event guests off, committed balance runs are unchanged', () => {
     EVENT_GUESTS.enabled = false;
+    STAFF_PERSONALITIES.enabled = false;
     const run = simulate(60, 9, undefined, STRATEGIES.balanced);
     expect(run.finalCash).toBeCloseTo(18185.5, 6);
     expect(run.avgReviewScore).toBeCloseTo(7.768753167219546, 9);

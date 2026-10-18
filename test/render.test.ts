@@ -6,7 +6,7 @@ import { createStarterHotel, addRoom, addFixture } from '../src/simulation/Hotel
 import { lanesOf, type Lane } from '../src/simulation/DeskQueue.js';
 import { CHECK_IN_HOURS } from '../src/simulation/GuestMovement.js';
 import { makeStay, hourStart } from '../src/simulation/Movement.js';
-import type { Guest, GuestProfile, HotelState, Party, Walker } from '../src/simulation/types.js';
+import type { Guest, GuestProfile, HotelState, Party, Walker, StaffMember } from '../src/simulation/types.js';
 
 // The front desk as it's drawn (render/ActorLayer.ts): each clerk's line in
 // front of them, in the order they'll be served, nobody on top of anybody.
@@ -16,15 +16,43 @@ const PROFILE: GuestProfile = { chronotype: 'regular', mobility: 'normal', sleep
 /** An ActorLayer drawing into nothing, keeping where it put each staff square (and, as ever, each guest). */
 function layer() {
   const squares: Array<[number, number]> = [];
+  const strokes: number[][] = [];
   const g: unknown = new Proxy({}, {
     get: (_t, name) => (...args: number[]) => {
       if (name === 'fillRect' && args[2] === 10 && args[3] === 10) squares.push([args[0] + 5, args[1] + 5]);
+      if (name === 'lineTo') strokes.push(args);
       return g;
     },
   });
   const actors = new ActorLayer({ add: { graphics: () => g } } as never);
-  return { actors, squares };
+  return { actors, squares, strokes };
 }
+
+describe('Named staff on screen', () => {
+  it('draws experience chevrons and picks only the visible worker on the current floor', () => {
+    let s = { ...createStarterHotel(), day: 4, hour: 12 };
+    const T = hourStart(s);
+    const workers: StaffMember[] = ([0, 80, 400] as const).map((workHours, i) => ({
+      id: `housekeeper-${100 + i}`, name: `Worker ${i}`, role: 'housekeeper',
+      at: { gridX: 4 + i, gridY: 2, floor: 0 },
+      profile: { experience: 'rookie', style: 'standard', reliability: 'dependable' },
+      stats: { workHours, lateDays: 0, absentDays: 0 },
+    }));
+    s = { ...s, staffRoster: workers, staffPlan: { start: T, itineraries: workers.map(m => ({ staffId: m.id, legs: [makeStay(m.at!, T, T + 1, 'rest')], end: { at: m.at } })) } };
+    const { actors, strokes } = layer();
+    actors.update(s, 0, T + 0.5);
+    const staff = (actors as unknown as { staffDrawn: Array<{ id: string; x: number; y: number }> }).staffDrawn;
+    expect(staff).toHaveLength(3);
+    expect(strokes).toHaveLength(6); // one skilled chevron + two veteran chevrons
+    for (const f of staff) {
+      expect(actors.staffAt(f.x, f.y)).toBe(f.id);
+      expect(actors.guestAt(f.x, f.y)).toBeNull();
+    }
+    expect(actors.staffAt(-100, -100)).toBeNull();
+    actors.update(s, 1, T + 0.5);
+    expect(actors.staffAt(staff[0].x, staff[0].y)).toBeNull();
+  });
+});
 
 /** Where on tile (tx, ty) a point is, as fractions of it. */
 const onTile = ([x, y]: [number, number], tx: number, ty: number): [number, number] => [(x - GRID_OFFSET_X) / TILE_SIZE - tx, (y - GRID_OFFSET_Y) / TILE_SIZE - ty];

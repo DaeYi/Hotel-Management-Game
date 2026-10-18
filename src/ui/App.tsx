@@ -12,6 +12,7 @@ import { partySize } from '../simulation/Party';
 import { spotlightOn, spotlightBanner } from '../simulation/Spotlight';
 import { getNextLoanPaymentDay } from '../simulation/EconomyManager';
 import { ACTOR_COLORS } from '../render/ActorLayer';
+import { STAFF_PERSONALITIES } from '../config/staff';
 import { CleaningLegend } from './CleaningKey';
 import { formatMoney, formatMoneyShort, formatStars, capitalize } from './format';
 import { BuildPanel } from './BuildPanel';
@@ -259,6 +260,7 @@ function Legend() {
       <span><span class="swatch" style={{ background: toCss(ACTOR_COLORS.frontDesk) }} />Front desk</span>
       <span><span class="swatch" style={{ background: toCss(ACTOR_COLORS.housekeeper) }} />Housekeeping</span>
       <span><span class="swatch" style={{ background: toCss(ACTOR_COLORS.maintenance) }} />Maintenance</span>
+      {STAFF_PERSONALITIES.enabled && <span class="dim">Staff: no chevron = rookie, ⌃ skilled, ⌃⌃ veteran (click for details)</span>}
       {c.cleaningOverlay && (
         <span class="legend-group" role="group" aria-label="Cleaning overlay key">
           <span class="legend-title">Cleaning:</span>

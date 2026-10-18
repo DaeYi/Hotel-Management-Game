@@ -6,9 +6,11 @@ import { GUEST_NAMES, LOAN, GRID, STARTER_LAYOUT } from '../config/balance.js';
 import { isEdgeTile } from './Layout.js';
 import { DIRECTIONS, doorTile, isReachableHallway, findOpenDoor } from './Layout.js';
 import { calculateStarRating } from './StarRatingManager.js';
+import { getRoster } from './StaffManager.js';
+import { identifyStaff } from './StaffHiring.js';
 
 const SAVE_KEY = 'hotel-game-save';
-const SAVE_VERSION = 20; // v20: furniture has positions (free placement)
+const SAVE_VERSION = 21; // v21: persistent staff identities, profiles and hire serials
 
 interface SaveData {
   version: number;
@@ -236,6 +238,11 @@ export function loadGame(storage?: Storage): SaveData | null {
       data.state.rooms = data.state.rooms.map((r: any) => ({ ...r, furnishing: place(r.furnishing), ...(r.pendingRefit ? { pendingRefit: place(r.pendingRefit) } : {}) }));
       data.version = 20;
       console.log('Migrated save from v19 to v20');
+    }
+
+    if (data.version === 20) {
+      data.state = identifyStaff(data.state, getRoster(data.state));
+      data.version = 21;
     }
 
     if (data.version !== SAVE_VERSION) {

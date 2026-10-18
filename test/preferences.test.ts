@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { EVENT_GUESTS } from '../src/config/balance.js';
+import { STAFF_PERSONALITIES } from '../src/config/staff.js';
 import { createStarterHotel, addRoom } from '../src/simulation/HotelState.js';
 import { processArrivals, calculateGuestReviewBreakdown } from '../src/simulation/GuestManager.js';
 import { rollParty } from '../src/simulation/Party.js';
@@ -379,8 +380,8 @@ describe('Telling the player', () => {
 
 describe('Balance', () => {
   // These pinned runs predate event guests.
-  beforeEach(() => { EVENT_GUESTS.enabled = false; });
-  afterEach(() => { EVENT_GUESTS.enabled = true; });
+  beforeEach(() => { EVENT_GUESTS.enabled = false; STAFF_PERSONALITIES.enabled = false; });
+  afterEach(() => { EVENT_GUESTS.enabled = true; STAFF_PERSONALITIES.enabled = true; });
   it('purposes and preferences off: a run is exactly as it was', () => {
     // With both off, nothing new happens: no purposes, no room fit
     GUEST_PURPOSES.enabled = false;

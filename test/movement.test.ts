@@ -422,10 +422,13 @@ describe('Save migration to v18', () => {
     localStorage.clear();
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 17, prngState: 1, state }));
     const loaded = loadGame()!;
-    expect(loaded.version).toBe(20);
+    expect(loaded.version).toBe(21);
     expect(loaded.state.guests[0]).toMatchObject({ trip: null, facilitiesUsed: {} });
     expect(loaded.state.walkers).toEqual([]);
-    expect(loaded.state.staffRoster).toBeUndefined();
+    // v21 also gives the rebuilt roster neutral named identities; the stale
+    // pre-v18 location is still discarded.
+    expect(loaded.state.staffRoster!.every(m => m.name && m.profile?.legacy)).toBe(true);
+    expect(loaded.state.staffRoster!.some(m => m.at?.gridX === 9 && m.at?.gridY === 9)).toBe(false);
     expect(loaded.state.staffPlan).toBeNull();
     localStorage.clear();
   });

@@ -10,10 +10,12 @@ import {
   refitRoom, refitAllLike, cancelPendingRefit,
 } from '../simulation/HotelState';
 import { rotateDirection, doorTile, isReachableHallway } from '../simulation/Layout';
-import { getRoster, getStaffPlan } from '../simulation/StaffManager';
+import { getStaffPlan, syncStaff } from '../simulation/StaffManager';
+import { hireCandidate, dismissStaff } from '../simulation/StaffHiring';
+import type { StaffRole } from '../simulation/types';
 import { settleChanges } from '../simulation/Settle';
 import { furnishingOf } from '../simulation/RoomProfile';
-import { hourStart } from '../simulation/Movement';
+import { hourStart, positionAt } from '../simulation/Movement';
 import { startCampaign } from '../simulation/MarketingManager';
 import { tickSimulation } from '../simulation/tick';
 import { checkBankruptcy, repayLoan } from '../simulation/EconomyManager';
@@ -43,7 +45,7 @@ export const PAINTABLE_TYPES = new Set<BuildType>(['bulldoze']);
 export type PanelId = 'staff' | 'housekeeping' | 'amenities' | 'marketing' | 'finance' | 'story' | 'goals' | 'furnish';
 
 /** What the inspector shows: a room or facility, or a guest (anchored where they were picked, so the card doesn't chase them). */
-export type Selection = { kind: 'room' | 'facility'; id: string } | { kind: 'guest'; id: string; anchor: Tile } | null;
+export type Selection = { kind: 'room' | 'facility'; id: string } | { kind: 'guest' | 'staff'; id: string; anchor: Tile } | null;
 
 export interface Tile {
   gridX: number;
@@ -240,6 +242,7 @@ export class GameController {
       const id = this.selection.id;
       if (!state.guests.some(g => g.id === id) && !(state.walkers ?? []).some(w => w.guestId === id)) this.selection = null;
     }
+    if (this.selection?.kind === 'staff' && !this.state.staffRoster?.some(m => m.id === this.selection!.id)) this.selection = null;
     this.changed();
   }
 
@@ -472,6 +475,19 @@ export class GameController {
     this.changed();
   }
 
+  selectStaff(staffId: string, anchor?: Tile) {
+    if (this.tutorialOpen || this.tool) return;
+    const member = this.state.staffRoster?.find(m => m.id === staffId);
+    if (!member) return;
+    const itinerary = getStaffPlan(this.state).itineraries.find(it => it.staffId === staffId);
+    const here = itinerary ? positionAt(itinerary.legs, this.gameTime) : null;
+    if (!anchor && (here || member.at)) this.setFloor(here?.floor ?? member.at!.floor);
+    this.closePanel();
+    const tile = here ? { gridX: Math.floor(here.x), gridY: Math.floor(here.y), floor: here.floor } : member.at;
+    this.selection = { kind: 'staff', id: staffId, anchor: anchor ?? tile ?? { gridX: 1, gridY: 3 } };
+    this.changed();
+  }
+
   /** Whether night owls may stay till the late checkout: no, yes, or yes for a fee. */
   setLateCheckout(policy: LateCheckoutPolicy) {
     this.apply({ ...this.state, lateCheckout: policy });
@@ -519,6 +535,14 @@ export class GameController {
 
   setStaff(staff: StaffConfig) {
     this.apply({ ...this.state, staff });
+  }
+
+  hireStaff(role: StaffRole, candidateId: string) {
+    return this.apply(hireCandidate(this.state, role, candidateId));
+  }
+
+  dismissStaff(staffId: string) {
+    return this.apply(dismissStaff(this.state, staffId));
   }
 
   setHousekeeping(turnoverQuality: CleaningQuality, dailyCadence: DailyCleaningCadence) {
@@ -596,6 +620,6 @@ export class GameController {
 
 /** A state with its staff roster and this hour's plan in place (new games and loaded saves). */
 function withPlans(state: HotelState): HotelState {
-  const staffRoster = getRoster(state);
-  return { ...state, staffRoster, staffPlan: getStaffPlan({ ...state, staffRoster }), walkers: state.walkers ?? [] };
+  const ready = syncStaff(state);
+  return { ...ready, staffPlan: getStaffPlan(ready), walkers: ready.walkers ?? [] };
 }

@@ -1,4 +1,5 @@
 import type { FurnitureKind, Tier, Rot, PresetId, ArrangementId } from '../config/furniture';
+import type { StaffIdentity } from './StaffProfiles';
 export type RoomType = 'standard' | 'deluxe' | 'suite';
 export type FacilityType = 'gym' | 'restaurant' | 'pool' | 'shop';
 export type TileType = RoomType | FacilityType;
@@ -84,6 +85,8 @@ export interface Room {
   guestId?: string;
   cleaningHoursRemaining: number; // hours left in turnover cleaning
   cleaningHoursTotal?: number; // the whole turnover's hours, for showing how far along it is (absent on older saves)
+  cleanedBy?: { id: string; name: string; style: string; day: number };
+  damageReportedBy?: string;
   lastDailyCleanDay: number; // last day daily housekeeping ran
   decor: number; // 0-100, how fresh the furnishings are; fades daily, restored by renovation
   renovationHoursRemaining: number; // hours left while status is 'renovating'
@@ -214,6 +217,7 @@ export interface StayLeg {
   activity: StayActivity;
   placeId?: string; // the room, facility, desk, or break room being stayed in
   job?: 'turnover' | 'daily' | 'repair'; // what the stay works on, for staff
+  workRate?: number; // work units per hour, fixed when this leg was planned
   credited?: boolean; // a facility visit whose bonus and sale have been counted (once the guest got there)
   out?: 'beach' | 'breakfast' | 'lunch' | 'dinner'; // an outing instead of a facility the hotel doesn't have
   lane?: string; // the front desk clerk ("deskId:seat") a check-in or complaint takes, and whose line a wait is in (see DeskQueue.ts)
@@ -245,7 +249,7 @@ export interface Walker {
 export type StaffRole = 'housekeeper' | 'maintenance';
 
 /** A housekeeper or maintenance worker, as of the last hour boundary. */
-export interface StaffMember {
+export interface StaffMember extends StaffIdentity {
   id: string;
   role: StaffRole;
   at: TilePos | null; // where they are; null = off site
@@ -356,6 +360,9 @@ export interface NoiseSource {
 }
 
 export interface HotelState {
+  nextStaffSerial?: number;
+  staffCandidatesUsed?: { day: number; ids: string[] };
+  staffPayroll?: Record<string, Record<string, number>>; // earned base wages, retained until the next midnight
   eventGuestsAnnouncedDay?: number;
   lateCheckout?: LateCheckoutPolicy; // absent: deny (see Profile.lateCheckoutPolicy)
   // Today at the front desk so far (for the Staff panel): checked in, hours waited, the longest wait, gave up in line, complaints heard
@@ -502,7 +509,7 @@ export interface TickResult {
 }
 
 export interface GameEvent {
-  type: 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'party_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked' | 'renovation_complete' | 'campaign_ended' | 'floor_built' | 'regular_lost' | 'visitors_asked_to_leave' | 'dnd_rooms_left' | 'guest_complained' | 'spotlight_announced' | 'spotlight_arrived' | 'spotlight_review';
+  type: 'staff_notice' | 'guest_arrived' | 'guest_returned' | 'guest_departed' | 'guest_walked_out' | 'guest_turned_away' | 'party_turned_away' | 'guest_impatient' | 'review_score_changed' | 'star_rating_changed' | 'season_changed' | 'bankrupt' | 'room_broken' | 'construction_noise' | 'room_cleaned' | 'daily_cleaning' | 'maintenance_repair' | 'noise_complaint_filed' | 'noise_complaint_escalated' | 'mid_stay_breakdown_resolved' | 'loan_payment' | 'loan_paid_off' | 'objective_completed' | 'objective_failed' | 'build_unlocked' | 'renovation_complete' | 'campaign_ended' | 'floor_built' | 'regular_lost' | 'visitors_asked_to_leave' | 'dnd_rooms_left' | 'guest_complained' | 'spotlight_announced' | 'spotlight_arrived' | 'spotlight_review';
   message: string;
   data?: Record<string, unknown>;
 }

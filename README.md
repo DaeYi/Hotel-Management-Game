@@ -29,6 +29,8 @@ Progress is stored in this browser. Building and management actions save immedia
 
 Event visitors complete the guest-personality phase: during calendar events, about one in twenty existing bookings attends the event, stays through its last night, and goes out in the evening. Long stays make up a larger share of occupied rooms. This changes the mix of visitors without adding to calendar demand.
 
-Next: individual staff identity and hiring choices. The detailed roadmap is in [guest and staff personalities](docs/designs/guest-staff-personalities.md). Larger rooms and 3D are later milestones described in [rethinking rooms](docs/designs/rooms-rethink.md).
+Housekeepers and maintenance workers now have persistent names, experience, work styles, individual wages, and attendance records. Choose from three candidates per role, inspect a worker in the team list or on the floor, and choose who leaves. Experience grows from actual cleaning and repairs; promotions increase speed and wages. Work style trades speed for thoroughness, and unreliable employees can arrive late or miss a day unpaid. Older saves keep their existing staff and positions.
+
+Next: staff specialties, fatigue and breaks, shift choices, and putting the front desk on the individual roster. The detailed roadmap is in [guest and staff personalities](docs/designs/guest-staff-personalities.md). Larger rooms and 3D are later milestones described in [rethinking rooms](docs/designs/rooms-rethink.md).
 
 The simulation is in `src/simulation`, player actions and the clock in `src/game`, the Preact interface in `src/ui`, and Phaser drawing in `src/render`.

@@ -11,7 +11,7 @@ import { startCampaign, getCampaignCost } from './MarketingManager.js';
 import { FACILITY_LEVELS } from '../config/balance.js';
 import { getRoomExpectedPrice } from './StarRatingManager.js';
 import { repayLoan, processDailyCosts } from './EconomyManager.js';
-import { getStaffDailyCost } from './MaintenanceManager.js';
+import { getProjectedStaffDailyCost } from './MaintenanceManager.js';
 import { housekeepersNeeded, PLANNING_OCCUPANCY } from './HousekeepingManager.js';
 import { getAverageOccupancy } from './ObjectivesManager.js';
 import { getExpectedArrivalsPerDay } from './GuestManager.js';
@@ -135,7 +135,7 @@ const SAFETY_DAYS = 10;
 
 /** What the hotel spends per day before revenue: operating costs, amenities, facilities, staff. */
 function getDailyRunningCost(state: HotelState): number {
-  return -processDailyCosts(state).cashDelta + getStaffDailyCost(state);
+  return -processDailyCosts(state).cashDelta + getProjectedStaffDailyCost(state);
 }
 
 /** Add an elevator on the next reserved shaft tile, if one is free and affordable. */

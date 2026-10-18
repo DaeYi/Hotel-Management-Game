@@ -1,6 +1,7 @@
 import type { HotelState } from './types.js';
 import { layoutKey } from './Layout.js';
-import { replanStaff, staffWorkKey } from './StaffManager.js';
+import { replanStaff, staffWorkKey, syncStaff } from './StaffManager.js';
+import { STAFF_PERSONALITIES } from '../config/staff.js';
 import { rerouteTrips, checkInLanes } from './GuestMovement.js';
 import { GUEST_HOUSEKEEPING } from '../config/balance.js';
 import { reseatLanes } from './DeskQueue.js';
@@ -20,6 +21,7 @@ function lanesKey(state: HotelState): string {
  * checks in at a desk nobody's sitting at.
  */
 export function settleChanges(before: HotelState, after: HotelState, t: number): HotelState {
+  if (STAFF_PERSONALITIES.enabled && (before.staff.housekeepers !== after.staff.housekeepers || before.staff.maintenanceWorkers !== after.staff.maintenanceWorkers)) after = syncStaff(after);
   const layoutChanged = layoutKey(before) !== layoutKey(after);
   const workChanged = layoutChanged || staffWorkKey(before) !== staffWorkKey(after);
   const lanesChanged = layoutChanged || lanesKey(before) !== lanesKey(after);

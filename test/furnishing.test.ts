@@ -622,7 +622,7 @@ describe('Saves from before', () => {
     const v18 = { ...s, rooms: s.rooms.map(({ furnishing: _, ...r }) => r) };
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 18, prngState: 7, state: v18, timestamp: 0 }));
     const loaded = loadGame()!;
-    expect(loaded.version).toBe(20);
+    expect(loaded.version).toBe(21);
     for (const room of loaded.state.rooms) {
       expect(room.furnishing).toEqual(defaultFurnishing(PRESET_FOR_TYPE[room.type]));
       expect(profileRoom(room).type).toBe(room.type);
@@ -642,7 +642,7 @@ describe('Saves from before', () => {
     };
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 19, prngState: 7, state: v19, timestamp: 0 }));
     const loaded = loadGame()!;
-    expect(loaded.version).toBe(20);
+    expect(loaded.version).toBe(21);
     expect(loaded.state.rooms[0].furnishing).toEqual(custom);
     expect(loaded.state.rooms[1].pendingRefit).toEqual(custom);
     for (const room of loaded.state.rooms.slice(1)) expect(room.furnishing).toEqual(defaultFurnishing(PRESET_FOR_TYPE[room.type]));
