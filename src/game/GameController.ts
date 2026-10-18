@@ -11,8 +11,8 @@ import {
 } from '../simulation/HotelState';
 import { rotateDirection, doorTile, isReachableHallway } from '../simulation/Layout';
 import { getStaffPlan, syncStaff } from '../simulation/StaffManager';
-import { hireCandidate, dismissStaff } from '../simulation/StaffHiring';
-import type { StaffRole } from '../simulation/types';
+import { hireCandidate, dismissStaff, assignDeskShift } from '../simulation/StaffHiring';
+import type { StaffRole, FrontDeskShift } from '../simulation/types';
 import { settleChanges } from '../simulation/Settle';
 import { furnishingOf } from '../simulation/RoomProfile';
 import { hourStart, positionAt } from '../simulation/Movement';
@@ -537,12 +537,16 @@ export class GameController {
     this.apply({ ...this.state, staff });
   }
 
-  hireStaff(role: StaffRole, candidateId: string) {
-    return this.apply(hireCandidate(this.state, role, candidateId));
+  hireStaff(role: StaffRole, candidateId: string, shift?: FrontDeskShift) {
+    return this.apply(hireCandidate(this.state, role, candidateId, shift, this.gameTime));
   }
 
   dismissStaff(staffId: string) {
-    return this.apply(dismissStaff(this.state, staffId));
+    return this.apply(dismissStaff(this.state, staffId, this.gameTime));
+  }
+
+  setDeskShift(staffId: string, shift: FrontDeskShift) {
+    return this.apply(assignDeskShift(this.state, staffId, shift, this.gameTime));
   }
 
   setHousekeeping(turnoverQuality: CleaningQuality, dailyCadence: DailyCleaningCadence) {

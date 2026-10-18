@@ -681,7 +681,8 @@ describe('The front desk and complaints', () => {
     expect(desk).toContain('2 gave up in line');
     expect(desk).toContain('1 complaint at the desk');
     expect(desk).toContain('another clerk would serve them'); // one clerk, a desk that seats two
-    controller.state = { ...controller.state, staff: { ...controller.state.staff, frontDesk: 2 } };
+    const night = controller.state.staffRoster!.find(m => m.role === 'front_desk' && m.shift === 'night')!;
+    controller.state = { ...controller.state, staff: { ...controller.state.staff, frontDesk: 4 }, staffRoster: [...controller.state.staffRoster!, { ...night, id: 'extra-night', serial: 99, deskLane: undefined }], staffPlan: null };
     controller.togglePanel('staff');
     controller.togglePanel('staff');
     flush();

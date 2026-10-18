@@ -81,7 +81,7 @@ function sleepsBetween(guest: Pick<Guest, 'profile'>, a: number, b: number): boo
  * nobody at the desk, or without the desk queue.
  */
 export function planDeskComplaints(state: HotelState): HotelState {
-  if (!voiceOn() || !queueOn() || state.guests.length === 0) return state;
+  if (!voiceOn() || !queueOn(state) || state.guests.length === 0) return state;
   const lanes: Lane[] = lanesOf(state);
   if (lanes.length === 0) return state;
   const T = hourStart(state);
@@ -104,7 +104,7 @@ export function planDeskComplaints(state: HotelState): HotelState {
     const there = walkLegs(ways.get(slot.lane.key)!, setOff, pace);
     const arrive = there.length > 0 ? legsEnd(there) : setOff;
     const start = Math.max(arrive, slot.start);
-    const lane = { lane: slot.lane.key };
+    const lane = { lane: slot.lane.key, serviceStaffId: slot.staffId };
     const legs: Leg[] = [
       ...there,
       ...(start > arrive + 1e-12 ? [makeStay(slot.lane.front, arrive, start, 'wait', { placeId: slot.lane.desk.id, ...lane })] : []),

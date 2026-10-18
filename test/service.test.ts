@@ -883,6 +883,8 @@ describe('Hosted nights: complaints and "keep it down"', () => {
   it('a whole night in the tick: friends round at 22:00, a complaint, sent home', () => {
     const id = sleeperWho(true);
     let s = party({ id, name: id }, {}, { hour: 21 });
+    // The whole hotel needs the night shift covered, as well as its daytime crew.
+    s = { ...s, staff: { ...s.staff, frontDesk: 3 } };
     const prng = new PRNG(1);
     const events: string[] = [];
     for (let h = 0; h < 6; h++) {

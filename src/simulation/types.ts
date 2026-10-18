@@ -131,7 +131,7 @@ export interface HousekeepingConfig {
 export interface StaffConfig {
   maintenanceWorkers: number; // 0 = manual repair only
   housekeepers: number; // 0 = no cleaning happens
-  frontDesk: number; // staff at check-in desks (each desk seats DESK.staffPerDesk)
+  frontDesk: number; // total clerks employed; named clerks cover their own shift (each desk seats DESK.staffPerDesk)
 }
 
 export interface Guest {
@@ -207,7 +207,7 @@ export interface WalkLeg {
   hoursPerTile: number; // walking pace (a ride costs TRAVEL.hoursPerFloor per floor)
 }
 
-export type StayActivity = 'clean' | 'repair' | 'rest' | 'wait' | 'check_in' | 'inquire' | 'visit' | 'in_room' | 'away' | 'complain'; // away: out of the building; complain: at the front desk, being heard
+export type StayActivity = 'clean' | 'repair' | 'rest' | 'wait' | 'check_in' | 'inquire' | 'visit' | 'in_room' | 'away' | 'complain' | 'desk';
 
 export interface StayLeg {
   kind: 'stay';
@@ -221,6 +221,7 @@ export interface StayLeg {
   credited?: boolean; // a facility visit whose bonus and sale have been counted (once the guest got there)
   out?: 'beach' | 'breakfast' | 'lunch' | 'dinner'; // an outing instead of a facility the hotel doesn't have
   lane?: string; // the front desk clerk ("deskId:seat") a check-in or complaint takes, and whose line a wait is in (see DeskQueue.ts)
+  serviceStaffId?: string; // the employee who actually supplies this service
 }
 
 export type Leg = WalkLeg | StayLeg;
@@ -246,7 +247,8 @@ export interface Walker {
   spotlight?: { kind: SpotlightKind }; // a spotlight guest checked out (their mark stays on them)
 }
 
-export type StaffRole = 'housekeeper' | 'maintenance';
+export type FrontDeskShift = 'early' | 'late' | 'night';
+export type StaffRole = 'housekeeper' | 'maintenance' | 'front_desk';
 
 /** A housekeeper or maintenance worker, as of the last hour boundary. */
 export interface StaffMember extends StaffIdentity {
@@ -256,6 +258,11 @@ export interface StaffMember extends StaffIdentity {
   roomId?: string; // the room they were working on when the hour ended (they keep at it)
   carry?: WalkLeg; // a walk still under way when the hour ended
   leaving?: boolean; // let go: walks out through the street entrance next hour
+  shift?: FrontDeskShift;
+  deskLane?: string;
+  hiredAt?: number;
+  dismissedAt?: number;
+  restUntil?: number;
 }
 
 /** Every housekeeper's and maintenance worker's hour, planned at its start; the tick credits exactly the work in it. */
@@ -267,7 +274,7 @@ export interface StaffPlan {
 export interface StaffItinerary {
   staffId: string;
   legs: Leg[];
-  end: Pick<StaffMember, 'at' | 'roomId' | 'carry'>; // where the hour leaves them
+  end: Pick<StaffMember, 'at' | 'roomId' | 'carry' | 'deskLane'>;
 }
 
 export interface Booking {
@@ -400,7 +407,9 @@ export interface HotelState {
   elevators: Elevator[];
   fixtures: Fixture[]; // street entrances, desks, closets, break rooms (every tile with nothing built on it is hallway)
   daysAtFiveStars: number; // consecutive end-of-day snapshots at 5 stars (legacy goals)
-  staffRoster?: StaffMember[]; // housekeepers and maintenance workers, one per head (see StaffManager.ts)
+  staffRoster?: StaffMember[];
+  frontDeskRosterReady?: boolean;
+  staffPayrollThrough?: Record<string, number>;
   staffPlan?: StaffPlan | null; // this hour's plan for them, made at the last hour boundary
   walkers?: Walker[]; // people walking out who are no longer guests
   onSite?: OnSiteTakings; // shop and restaurant takings so far (spending styles on)

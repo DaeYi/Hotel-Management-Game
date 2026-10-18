@@ -6,6 +6,7 @@ import { isTileAccessible, findOpenDoor, isEdgeTile, isFacilityOpen, getOpenFaci
 import { createConstructionNoise } from './NoiseManager.js';
 import { holdBlocksRenovation, heldNow } from './Spotlight.js';
 import { getExpectedPrice, getRoomExpectedPrice, getPriceMultiplier } from './StarRatingManager.js';
+import { frontDeskOn } from './StaffProfiles.js';
 
 /** The free street entrance every hotel starts with. */
 function starterEntrance(): Fixture {
@@ -67,7 +68,7 @@ export function createStarterHotel(): HotelState {
   const [deskX, deskY] = STARTER_LAYOUT.deskTiles[0];
   const desk: Fixture = { id: `desk-0-${deskX}-${deskY}`, type: 'desk', gridX: deskX, gridY: deskY, floor: 0 };
   const state = createHotelState();
-  return { ...state, fixtures: [...state.fixtures, desk] };
+  return { ...state, staff: { ...state.staff, frontDesk: frontDeskOn() ? 3 : 1 }, fixtures: [...state.fixtures, desk] };
 }
 
 /** Star rating a room or facility type unlocks at. */

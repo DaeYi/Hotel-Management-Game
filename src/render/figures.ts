@@ -37,6 +37,7 @@ export function getGuestDotColor(purpose: Purpose | undefined): number {
 }
 
 export interface Figure {
+  counter?: { deskId: string; seat: number };
   staffId?: string;
   chevrons?: number;
   id: string; // a person: the booking's id for its first member, `${id}#${n}` for the others

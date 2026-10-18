@@ -31,6 +31,10 @@ Event visitors complete the guest-personality phase: during calendar events, abo
 
 Housekeepers and maintenance workers now have persistent names, experience, work styles, individual wages, and attendance records. Choose from three candidates per role, inspect a worker in the team list or on the floor, and choose who leaves. Experience grows from actual cleaning and repairs; promotions increase speed and wages. Work style trades speed for thoroughness, and unreliable employees can arrive late or miss a day unpaid. Older saves keep their existing staff and positions.
 
-Next: staff specialties, fatigue and breaks, shift choices, and putting the front desk on the individual roster. The detailed roadmap is in [guest and staff personalities](docs/designs/guest-staff-personalities.md). Larger rooms and 3D are later milestones described in [rethinking rooms](docs/designs/rooms-rethink.md).
+Front desk clerks now join the named roster. Hire for early (06:00–14:00), late (14:00–22:00), or night (22:00–06:00) shifts; a new hotel starts with one clerk on each. Each desk seats two clerks at a time. Coverage gaps, late arrivals and absences affect the real queue. Rookie, skilled and veteran check-ins take 25, 20 and 16 minutes; actual check-ins and complaints build experience. Night contracts pay 25% more, with earned shift wages split across midnight and retained after dismissal. Off-duty shift changes allow rest before another shift.
+
+Save version 22 replaces each old 24-hour front desk position with three named shifts, retaining its total wage budget and existing coverage. Names, shifts, candidates, attendance, pay and partial movement plans survive reloads.
+
+Next: staff specialties, hospitality, fatigue and breaks, cross-training, then morale and quitting. The detailed roadmap is in [guest and staff personalities](docs/designs/guest-staff-personalities.md). Larger rooms and 3D are later milestones described in [rethinking rooms](docs/designs/rooms-rethink.md).
 
 The simulation is in `src/simulation`, player actions and the clock in `src/game`, the Preact interface in `src/ui`, and Phaser drawing in `src/render`.

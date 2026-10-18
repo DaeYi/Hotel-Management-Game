@@ -6,7 +6,7 @@ import { positionAt, legsEnd, hash01 } from '../simulation/Movement';
 import { guestFigures, type Figure } from './figures';
 import { BREAK_ROOM } from '../config/balance';
 import { STAFF_PERSONALITIES } from '../config/staff';
-import { experienceOf } from '../simulation/StaffProfiles';
+import { experienceOf, namedFrontDesk } from '../simulation/StaffProfiles';
 import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE } from './GridRenderer';
 import { drawClock, drawComplaint, drawQuirk, drawMoodFace, RING_COLORS, SELECTED_COLOR } from './quirks';
 
@@ -94,7 +94,7 @@ export class ActorLayer {
     for (const it of plan.itineraries) {
       const member = roster.get(it.staffId);
       const marks = STAFF_PERSONALITIES.enabled && member ? { staffId: it.staffId, chevrons: experienceOf(member) === 'veteran' ? 2 : experienceOf(member) === 'skilled' ? 1 : 0 } : {};
-      const color = it.staffId.startsWith('housekeeper') ? ACTOR_COLORS.housekeeper : ACTOR_COLORS.maintenance;
+      const color = member?.role === 'front_desk' ? ACTOR_COLORS.frontDesk : it.staffId.startsWith('housekeeper') ? ACTOR_COLORS.housekeeper : ACTOR_COLORS.maintenance;
       if (it.legs.length === 0) {
         const at = it.end.at ? roster.get(it.staffId)?.at : null; // staying put (null: gone home)
         if (at) figures.push({ id: it.staffId, kind: 'staff', color, x: at.gridX, y: at.gridY, floor: at.floor, settled: true, ...marks });
@@ -103,13 +103,15 @@ export class ActorLayer {
       if (t < it.legs[0].start) continue; // still off site
       if (t >= legsEnd(it.legs) && !it.end.at) continue; // gone home
       const figure = this.place(it.legs, t, it.staffId, 'staff', color);
-      if (figure) figures.push({ ...figure, ...marks });
+      const leg = positionAt(it.legs, t)?.leg;
+      const counter = leg?.kind === 'stay' && leg.activity === 'desk' && leg.placeId && leg.lane ? { deskId: leg.placeId, seat: Number(leg.lane.slice(leg.lane.lastIndexOf(':') + 1)) } : undefined;
+      if (figure) figures.push({ ...figure, ...marks, counter });
     }
 
     // Front desk staff without a seat at a desk wait in a break room (or the lobby)
     const breakRooms = getAccessibleBreakRooms(state);
     const lobby = getStaffBases(state)[0];
-    const spare = Math.max(0, state.staff.frontDesk - getMannedDeskStaff(state));
+    const spare = namedFrontDesk(state) ? 0 : Math.max(0, state.staff.frontDesk - getMannedDeskStaff(state));
     for (let i = 0; i < spare; i++) {
       const spot = breakRooms.length > 0 ? breakRooms[i % breakRooms.length] : lobby;
       if (spot) figures.push({ id: `frontdesk-spare-${i}`, kind: 'staff', color: ACTOR_COLORS.frontDesk, x: spot.gridX, y: spot.gridY, floor: spot.floor, settled: true });
@@ -142,7 +144,7 @@ export class ActorLayer {
 
     // Front desk staff behind their counters (two per desk at most), side by side across the desk from
     // the spot in front of it, seat 0 first -- the way their lines are laid out (layOutLines)
-    let seated = getMannedDeskStaff(state);
+    let seated = namedFrontDesk(state) ? 0 : getMannedDeskStaff(state);
     for (const desk of getAccessibleDesks(state)) {
       const front = getFixtureFront(state, desk);
       const fx = front ? Math.sign(front.gridX - desk.gridX) : 0;
@@ -161,7 +163,17 @@ export class ActorLayer {
     // (the next free one if it's taken), so others coming and going don't move
     // them. Walkers get a small fixed offset so two on the same path don't
     // merge into one.
-    const onFloor = figures.filter(f => f.floor === currentFloor);
+    for (const figure of figures.filter(f => f.floor === currentFloor && f.counter)) {
+      const desk = state.fixtures.find(d => d.id === figure.counter!.deskId);
+      if (!desk) continue;
+      const front = getFixtureFront(state, desk);
+      const fx = front ? Math.sign(front.gridX - desk.gridX) : 0;
+      const fy = front && fx === 0 ? Math.sign(front.gridY - desk.gridY) || 1 : 0;
+      const [ax, ay] = acrossDesk(fx), off = figure.counter!.seat === 0 ? -0.17 : 0.17;
+      this.drawFigure(GRID_OFFSET_X + (desk.gridX + 0.5 + ax * off - fx * 0.2) * TILE_SIZE,
+        GRID_OFFSET_Y + (desk.gridY + 0.5 + ay * off - fy * 0.2) * TILE_SIZE, figure);
+    }
+    const onFloor = figures.filter(f => f.floor === currentFloor && !f.counter);
     // The front desk: each clerk's line, laid out (who's being served at the counter, the rest behind)
     const lineSpots = this.layOutLines(onFloor.filter(f => f.settled && f.line));
     const byTile = new Map<string, Figure[]>();

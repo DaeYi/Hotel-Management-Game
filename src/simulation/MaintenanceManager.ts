@@ -1,6 +1,7 @@
 import type { HotelState, GameEvent } from './types.js';
-import { STAFF_PERSONALITIES } from '../config/staff.js';
-import { staffWage, attendance, repairTarget } from './StaffProfiles.js';
+import { STAFF_PERSONALITIES, FRONT_DESK_STAFF } from '../config/staff.js';
+import { staffWage, attendance, repairTarget, namedFrontDesk, deskPaidHours, baseWage } from './StaffProfiles.js';
+import { hourStart } from './Movement.js';
 import { STAFF } from '../config/balance.js';
 import { getUpkeepMultiplier } from './StarRatingManager.js';
 import { getStaffPlan, plannedWork, isOnShift } from './StaffManager.js';
@@ -52,8 +53,10 @@ export function processMaintenanceTick(state: HotelState): { state: HotelState; 
  */
 export function getStaffDailyCost(state: HotelState): number {
   if (STAFF_PERSONALITIES.enabled && state.staffRoster) {
-    const wages = state.staffRoster.filter(m => !m.leaving && !attendance(m, state.day).absent).reduce((sum, m) => sum + staffWage(m), 0);
-    return (wages + state.staff.frontDesk * STAFF.frontDesk.dailyWage) * getUpkeepMultiplier(state.starRating);
+    const start = (state.day - 1) * 24;
+    const wages = state.staffRoster.reduce((sum, m) => sum + (m.role === 'front_desk' ? deskPaidHours(m, start, start + 24) * staffWage(m) / 8
+      : !m.leaving && !attendance(m, state.day).absent ? staffWage(m) : 0), 0);
+    return (wages + (namedFrontDesk(state) ? 0 : state.staff.frontDesk * STAFF.frontDesk.dailyWage)) * getUpkeepMultiplier(state.starRating);
   }
   const maintenanceCost = state.staff.maintenanceWorkers * STAFF.maintenance.dailyWage;
   const housekeepingCost = state.staff.housekeepers * STAFF.housekeeping.dailyWage;
@@ -68,8 +71,9 @@ export function getProjectedStaffDailyCost(state: HotelState): number {
   const wages = active.reduce((sum, m) => sum + staffWage(m), 0);
   const pendingHousekeepers = Math.max(0, state.staff.housekeepers - active.filter(m => m.role === 'housekeeper').length);
   const pendingMaintenance = Math.max(0, state.staff.maintenanceWorkers - active.filter(m => m.role === 'maintenance').length);
+  const pendingFrontDesk = namedFrontDesk(state) ? Math.max(0, state.staff.frontDesk - active.filter(m => m.role === 'front_desk').length) * baseWage('front_desk') * (2 + FRONT_DESK_STAFF.nightPremium) / 3 : state.staff.frontDesk * STAFF.frontDesk.dailyWage;
   return (wages + pendingHousekeepers * STAFF.housekeeping.dailyWage + pendingMaintenance * STAFF.maintenance.dailyWage
-    + state.staff.frontDesk * STAFF.frontDesk.dailyWage) * getUpkeepMultiplier(state.starRating);
+    + pendingFrontDesk) * getUpkeepMultiplier(state.starRating);
 }
 
 /** Earned pay survives a dismissal; an absent worker earns no wage. */
@@ -77,18 +81,26 @@ export function recordStaffPayroll(state: HotelState): HotelState {
   if (!STAFF_PERSONALITIES.enabled) return state;
   const key = String(state.day);
   const earned = { ...(state.staffPayroll?.[key] ?? {}) };
+  const through = { ...state.staffPayrollThrough };
+  const T = hourStart(state);
   for (const m of state.staffRoster ?? []) {
+    if (m.role === 'front_desk') {
+      const from = Math.max(T, through[m.id] ?? T);
+      earned[m.id] = (earned[m.id] ?? 0) + deskPaidHours(m, from, T + 1) * staffWage(m) / 8;
+      through[m.id] = Math.max(through[m.id] ?? T, T + 1);
+      continue;
+    }
     const shift = m.role === 'housekeeper' ? STAFF.housekeeping : STAFF.maintenance;
     const a = attendance(m, state.day);
     const workedBeforeLeaving = m.leaving && state.staffPlan?.itineraries.some(it => it.staffId === m.id && it.legs.length > 0);
     if ((!m.leaving || workedBeforeLeaving) && !a.absent && state.hour + 1 > shift.workStartHour + a.lateHours && state.hour < shift.workEndHour) earned[m.id] = Math.max(earned[m.id] ?? 0, staffWage(m));
   }
-  return { ...state, staffPayroll: { ...state.staffPayroll, [key]: earned } };
+  return { ...state, staffPayroll: { ...state.staffPayroll, [key]: earned }, staffPayrollThrough: through };
 }
 
 export function getStaffPaydayCost(state: HotelState): number {
   const earned = STAFF_PERSONALITIES.enabled ? state.staffPayroll?.[String(state.day - 1)] : undefined;
-  return earned ? (Object.values(earned).reduce((sum, wage) => sum + wage, 0) + state.staff.frontDesk * STAFF.frontDesk.dailyWage) * getUpkeepMultiplier(state.starRating) : getStaffDailyCost(state);
+  return earned ? (Object.values(earned).reduce((sum, wage) => sum + wage, 0) + (namedFrontDesk(state) ? 0 : state.staff.frontDesk * STAFF.frontDesk.dailyWage)) * getUpkeepMultiplier(state.starRating) : getStaffDailyCost(state);
 }
 
 /**

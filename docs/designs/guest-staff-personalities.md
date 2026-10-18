@@ -2,7 +2,7 @@
 
 Date: 2026-10-11
 Status: IN PROGRESS. Purpose of stay (three values) and room preferences shipped first, as a slice: see guest-preferences.md. The remainder is being built in six phases (see "Build plan (2026-10-12)" at the end).
-Current implementation: phase 3c (event visitors) and phase 4 (named housekeeping and maintenance staff) are implemented. See the implementation notes below. Front desk identities, specialties, fatigue, shifts and morale follow in phases 5-6.
+Current implementation: phase 3c (event visitors), phase 4 (named housekeeping and maintenance staff), and the named front desk / shift slice of phase 5 are implemented. See the implementation notes below. Specialties, hospitality, fatigue, cross-training and morale remain in phases 5-6.
 Follows: aligned-movement.md, open-floor-plan.md, late-game-economy.md
 Builds on: the 11:00 checkout, guest day trips (`OutingManager.ts`, `GUEST_OUTINGS`) and presence-aware noise, which shipped together with this proposal (see aligned-movement.md).
 
@@ -21,6 +21,8 @@ Builds on: the 11:00 checkout, guest day trips (`OutingManager.ts`, `GUEST_OUTIN
 - Not asked, so the defaults stand: returning guests keep their Body, Temperament and Tastes and re-roll Purpose and Party (open question 3); no night shift until something happens overnight besides noise (open question 9).
 
 ## Request
+
+Owner update (2026-10-18): front desk clerks work shifts now, and multiple clerks are required for 24-hour coverage. This supersedes the earlier default of postponing night shifts.
 
 > Come up with a list of attributes or personalities that staff/guests can have that help inform/guide their behavior.
 
@@ -723,7 +725,7 @@ Each phase ships on its own (tests, an adversarial review, a 12-seed 400-day bal
 2. **Guests and service.** Housekeeping preference, hosted nights and "keep it down", Patience and the desk queue, Voice and complaint trips.
 3. **Money and spotlight.** Spending style, the restaurant tab, Spotlight guests and the glowing write-up, event-goers.
 4. **Staff identity.** Serial ids, names, the 3-candidate hiring card and choosing who goes; Experience, Work style, Reliability.
-5. **Staff load and shifts.** Stamina and fatigue, Specialty, the front desk on the roster, Hospitality, Cross-trained, Shift pattern.
+5. **Staff load and shifts.** Named front desk staff and eight-hour desk shifts implemented first (2026-10-18). Stamina and fatigue, Specialty, Hospitality and Cross-trained remain.
 6. **Morale and quitting,** with a rehiring rule for the bots.
 
 ### Phase 1a as shipped (2026-10-12)
@@ -1037,6 +1039,17 @@ Vite 8, Vitest 5, Happy DOM 21 and current tsx replace the vulnerable toolchain;
 - Reliability uses hashes of employee ID and day, independent of the shared random stream. Late employees really arrive later; absent employees stay off site and are unpaid. Attendance and promotions produce story entries and notifications. Earned wages survive dismissal and are settled the following day. Cash reserves budget for the full roster rather than treating today's absence as permanent savings.
 - The staff panel shows candidates, the current team, activity, rates, wages and attendance. Click a name or a worker on the floor for their card. Uniform chevrons show experience. Staffing and held-suite readiness estimates account for individual rates and attendance.
 - Save version 21 gives older workers neutral profiles without changing their IDs, wages, current positions or saved plans. Hire serials never get reused. Existing neutral staff begin gaining normal veteran performance when promoted.
-- Front desk staff remain a count. Specialties, fatigue, compulsory breaks, shift patterns, morale, negotiated raises and quitting remain later work.
+- At phase 4 completion, front desk staff remained a count. Its named roster and shift implementation is described below. Specialties, fatigue, compulsory breaks, morale, negotiated raises and quitting remain later work.
 - Balance tuning reduced the draft rookie discount from 20% to 10% and the flaky discount from 10% to 5%. In the initial 24-seed, 400-day run, the draft discounts let overstaffing beat the workload-sized team (median $4.88M versus $4.65M). Both staffing gates remain unchanged; cheaper hires must still carry a real performance or attendance tradeoff.
 - Focused tests cover hiring and dismissal, candidate consumption, migrations, individual work credit, mid-hour changes, finisher quality, repairs, promotions, deterministic attendance, earned wages, rendering and interface flows. With both new feature switches off, the committed balanced simulation remains pinned exactly.
+
+### Phase 5 slice: named front desk clerks and shifts (2026-10-18)
+
+- The owner requested shifts as part of this milestone. Early is 06:00–14:00, late 14:00–22:00, and night 22:00–06:00. A new hotel has three neutral skilled clerks, one per shift. The front desk count is total employees, rather than simultaneous seats. Each reachable desk still seats two clerks. The panel shows scheduled coverage for every shift and how many are actually at the counter now.
+- Clerks share the persistent identity, candidate and dismissal system. A shortlist describes experience, reliability and the selected shift's wage. The player chooses a hiring shift or changes an existing clerk's shift while off duty. Reassignment retains the rest interval until at least 24 hours after the previous shift began, preventing one person covering consecutive shifts. The + shortcut fills the least-covered shift; − removes a surplus-shift clerk first, then the lowest value employee.
+- Check-ins take 25 / 20 / 16 minutes for rookie / skilled / veteran clerks. Complaints take 15 minutes. Only actual service grows experience, attributed to the employee stored on the guest's service leg; idle counter time and commuting do not. A service already underway keeps its duration through promotion. Hospitality and specialties remain future work; work style does not alter front desk service.
+- The queue books a physical desk seat within a particular clerk's duty window. A check-in must fit before the shift ends; otherwise the next clerk serves it. Late clerks really walk in after their due time, and absences leave a gap. Attendance after midnight belongs to the day the night shift started. Waiting guests are rescheduled after staffing changes, without bypassing the counter during a coverage gap. Night visitor requests and checkout delays use actual coverage.
+- A new eight-hour contract starts at 55% of the former $70 full-day front desk wage ($38.50), with experience and reliability factors and a 25% night premium. Shift wages accrue proportionally over eight paid hours. Attendance gaps are unpaid; night pay is apportioned to the calendar days on either side of midnight. Earned wages survive dismissal, and repeated payroll recording cannot pay an hour twice. The bots budget and hire one crew per shift.
+- Save version 22 converts every former 24-hour position into three neutral, dependable named clerks. Their eight-hour wages total the former $70 ($23.33 / $23.33 / $23.34), keeping existing coverage and wage budgets. Housekeeping and maintenance identities, current positions, saved plans and the fractional clock are preserved. New hires use current contract rates.
+- Blue staff figures follow their commute and counter itinerary and open their individual card on a click. The team and inspector show shift, check-in time, wages, service experience, attendance and current activity. Paused hiring, shift changes and partial walks survive reloads. The `FRONT_DESK_STAFF` switch gates this slice alongside `STAFF_PERSONALITIES`.
+- Verification covers handovers, missing shifts, overnight attendance, late commutes, check-in durations, service experience and promotion, prorated pay and dismissal, migration and reloads, named counter rendering, and the hiring and assignment controls. The existing 24-seed, 400-day staffing gate retains its 1.5x / 1.15x assertions.

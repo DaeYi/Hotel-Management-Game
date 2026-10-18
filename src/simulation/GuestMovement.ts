@@ -7,6 +7,8 @@ import {
 import { makeWalk, makeStay, legsEnd, truncateLegs, walkProgress, stepStillOpen, sameTile, hash01 } from './Movement.js';
 import { guestPace } from './Profile.js';
 import { guestMood } from './Mood.js';
+import { physicalDeskLanes } from './FrontDesk.js';
+import { namedFrontDesk } from './StaffProfiles.js';
 
 // Guests' comings and goings as trips the simulation plans when it decides
 // them: walking in from the street and checking in at a staffed desk, heading
@@ -60,6 +62,7 @@ export function isGuestAway(guest: Guest, t: number): boolean {
 
 /** Check-in lanes: one per front desk worker seated at a desk guests can reach, in seat order. */
 export function checkInLanes(state: HotelState): Array<{ desk: Fixture; seat: number; front: TilePos }> {
+  if (namedFrontDesk(state)) return physicalDeskLanes(state);
   const lanes: Array<{ desk: Fixture; seat: number; front: TilePos }> = [];
   let manned = getMannedDeskStaff(state);
   for (const desk of getAccessibleDesks(state)) {
@@ -115,7 +118,7 @@ export function walkLegs(route: Route, start: number, pace: number): Leg[] {
  */
 export function planArrivalTrips(
   state: HotelState,
-  checkedIn: Array<{ guest: Guest; roomId: string; desk?: { lane: string; arriveAt: number; start: number } }>,
+  checkedIn: Array<{ guest: Guest; roomId: string; desk?: { lane: string; arriveAt: number; start: number; hours?: number; staffId?: string } }>,
   walkIns: Array<{ guest: Guest; outcome: 'impatient' | 'turned_away'; desk?: { arriveAt: number; lane?: string; leaveAt?: number; wanted?: PartyKind } }>,
   T: number,
 ): { trips: Map<string, Leg[]>; walkers: Walker[] } {
@@ -139,9 +142,10 @@ export function planArrivalTrips(
     const at = walk.path.length > 1 ? walk.end : desk!.arriveAt;
     const start = Math.max(at, desk!.start);
     if (start > at + 1e-12) legs.push(makeStay(lane.front, at, start, 'wait', { placeId: lane.desk.id, lane: desk!.lane }));
-    legs.push(makeStay(lane.front, start, start + CHECK_IN_HOURS, 'check_in', { placeId: lane.desk.id, lane: desk!.lane }));
+    const hours = desk!.hours ?? CHECK_IN_HOURS;
+    legs.push(makeStay(lane.front, start, start + hours, 'check_in', { placeId: lane.desk.id, lane: desk!.lane, serviceStaffId: desk!.staffId }));
     const toRoom = routeVia(state, lane.front, roomTile(room), pace);
-    if (toRoom) legs.push(...walkLegs(toRoom, start + CHECK_IN_HOURS, pace));
+    if (toRoom) legs.push(...walkLegs(toRoom, start + hours, pace));
     trips.set(guest.id, legs);
   }
   checkedIn = checkedIn.filter(c => !queued.includes(c));

@@ -5,10 +5,11 @@ import { STAFF_PERSONALITIES } from '../config/staff.js';
 import { rerouteTrips, checkInLanes } from './GuestMovement.js';
 import { GUEST_HOUSEKEEPING } from '../config/balance.js';
 import { reseatLanes } from './DeskQueue.js';
+import { namedFrontDesk } from './StaffProfiles.js';
 
 /** Who's checking guests in, and where. */
 function lanesKey(state: HotelState): string {
-  return checkInLanes(state).map(l => `${l.desk.id}:${l.seat}`).join(',');
+  return checkInLanes(state).map(l => `${l.desk.id}:${l.seat}`).join(',') + (namedFrontDesk(state) ? (state.staffRoster ?? []).filter(m => m.role === 'front_desk').map(m => `${m.id}:${m.leaving}:${m.shift}:${m.restUntil}`).join(',') : '');
 }
 
 /**
@@ -21,11 +22,16 @@ function lanesKey(state: HotelState): string {
  * checks in at a desk nobody's sitting at.
  */
 export function settleChanges(before: HotelState, after: HotelState, t: number): HotelState {
-  if (STAFF_PERSONALITIES.enabled && (before.staff.housekeepers !== after.staff.housekeepers || before.staff.maintenanceWorkers !== after.staff.maintenanceWorkers)) after = syncStaff(after);
+  if (STAFF_PERSONALITIES.enabled && (before.staff.housekeepers !== after.staff.housekeepers || before.staff.maintenanceWorkers !== after.staff.maintenanceWorkers || namedFrontDesk(after) && before.staff.frontDesk !== after.staff.frontDesk)) after = syncStaff(after, t);
   const layoutChanged = layoutKey(before) !== layoutKey(after);
   const workChanged = layoutChanged || staffWorkKey(before) !== staffWorkKey(after);
   const lanesChanged = layoutChanged || lanesKey(before) !== lanesKey(after);
   let state = after;
+  if (namedFrontDesk(state)) {
+    if (workChanged) state = replanStaff(state, t);
+    if (lanesChanged) state = reseatLanes(rerouteTrips(state, t), t);
+    return state;
+  }
   // Guests first, so the staff plan around where they'll really be (a do-not-disturb room is
   // cleaned only while they're out); with housekeeping preferences off, the old order
   const guestsFirst = GUEST_HOUSEKEEPING.enabled;

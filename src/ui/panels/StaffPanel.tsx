@@ -11,6 +11,9 @@ import { queueOn, deskToday, waitingInLine } from '../../simulation/DeskQueue';
 import { formatMoney, formatWalk } from '../format';
 import { PanelCard } from './PanelCard';
 import { StaffPeople } from '../StaffPeople';
+import { namedFrontDesk } from '../../simulation/StaffProfiles';
+import { deskCoverage } from '../../simulation/FrontDesk';
+import { FRONT_DESK_STAFF } from '../../config/staff';
 
 const LONG_WALK_HOURS = 0.33; // 20 minutes: worth a closet
 
@@ -68,7 +71,7 @@ function DeskToday() {
   ].filter(Boolean);
   const seats = getAccessibleDesks(state).length * DESK.staffPerDesk;
   const advice = today.gaveUp === 0 ? null
-    : state.staff.frontDesk < seats ? 'Guests are giving up in line: another clerk would serve them (a desk seats two).'
+    : (namedFrontDesk(state) ? deskCoverage(state, c.gameTime).length : state.staff.frontDesk) < seats ? 'Guests are giving up in line: another clerk would serve them (a desk seats two).'
     : 'Guests are giving up in line, and every desk seat is taken: build another desk for another clerk.';
   return (
     <div class="tiny" aria-label="Front desk today">
@@ -80,12 +83,15 @@ function DeskToday() {
 
 export function StaffPanel() {
   const c = useController();
+  useLiveClock();
   const { state } = c;
+  const namedDesk = namedFrontDesk(state);
 
   const desks = getAccessibleDesks(state).length;
-  const seated = getMannedDeskStaff(state);
+  const seated = namedDesk ? deskCoverage(state, c.gameTime).length : getMannedDeskStaff(state);
   const deskWarning = desks === 0 ? ' (no desk!)'
-    : seated < state.staff.frontDesk ? ` (${state.staff.frontDesk - seated} idle: need desks)`
+    : namedDesk && seated === 0 ? ' (desk unattended)'
+    : !namedDesk && seated < state.staff.frontDesk ? ` (${state.staff.frontDesk - seated} idle: need desks)`
     : state.staff.frontDesk === 0 ? ' (unstaffed!)' : '';
 
   const hk = getHousekeepingStatus(state);
@@ -104,9 +110,16 @@ export function StaffPanel() {
 
   return (
     <PanelCard title="STAFF">
-      <StaffRow label={`Front Desk (${formatMoney(STAFF.frontDesk.dailyWage)}/day)`} staffKey="frontDesk"
-        status={`Check-in: ${getCheckInCapacity(state)}/hr at ${desks} desk${desks === 1 ? '' : 's'}${deskWarning}`} />
-      {queueOn() && <DeskToday />}
+      <StaffRow label={namedDesk ? 'Front Desk' : `Front Desk (${formatMoney(STAFF.frontDesk.dailyWage)}/day)`} staffKey="frontDesk"
+        status={namedDesk ? `${seated} on duty at ${desks} desk${desks === 1 ? '' : 's'} · ${state.staff.frontDesk} clerks hired${deskWarning}` : `Check-in: ${getCheckInCapacity(state)}/hr at ${desks} desk${desks === 1 ? '' : 's'}${deskWarning}`} />
+      {namedDesk && <div class="tiny" aria-label="Front desk shift coverage">
+        {Object.entries(FRONT_DESK_STAFF.shifts).map(([key, shift]) => {
+          const count = (state.staffRoster ?? []).filter(m => m.role === 'front_desk' && !m.leaving && m.shift === key).length;
+          return <div key={key} class={count === 0 ? 'warn-text' : 'dim'}>{shift.label}: {count === 0 ? 'No clerk assigned' : `${count} clerk${count === 1 ? '' : 's'}`}{count > desks * DESK.staffPerDesk ? ' (needs more desk seats)' : ''}</div>;
+        })}
+        <div class="dim">24-hour coverage needs a clerk on each shift. Night shifts pay 25% more. + fills the least-covered shift.</div>
+      </div>}
+      {queueOn(state) && <DeskToday />}
       <hr class="divider" />
       <StaffRow label={`Housekeepers (base ${formatMoney(STAFF.housekeeping.dailyWage)}/day)`} staffKey="housekeepers"
         status={`Cleaning: ${hk.roomsBeingCleaned}${hk.roomsWaiting > 0 ? ` (${hk.roomsWaiting} waiting!)` : ''}  |  Busy day: ${Math.round(hk.hoursNeeded)}h of ${Math.round(hk.hoursAvailable * 10) / 10}h`} />

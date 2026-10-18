@@ -1,7 +1,7 @@
 import type { ActiveIncident, GameEvent, HotelState, Leg, Walker } from './types.js';
 import { HOSTED_NIGHTS, GUEST_PROFILE, TRAVEL, SATISFACTION, NOISE, VOICE } from '../config/balance.js';
 import { voiceOn, voiceOf, hasComplained } from './Voice.js';
-import { routeFromStreet, routeToStreet } from './Layout.js';
+import { routeFromStreet, routeToStreet, getMannedDeskStaff } from './Layout.js';
 import { makeWalk, makeStay, truncateLegs, legsEnd, hourStart, hash01, isUnderway } from './Movement.js';
 import { roomTile, isGuestAway } from './GuestMovement.js';
 import { pick, partyLabel, PartyLabel, partySize } from './Party.js';
@@ -88,8 +88,8 @@ function sentHome(state: HotelState, walker: Walker, t: number, delay: number): 
 }
 
 /** Whether there's someone at the front desk to ask visitors to leave. */
-export function canAskVisitorsToLeave(state: HotelState): boolean {
-  return state.staff.frontDesk > 0;
+export function canAskVisitorsToLeave(state: HotelState, t = hourStart(state)): boolean {
+  return getMannedDeskStaff(state, t) > 0;
 }
 
 /**
@@ -105,7 +105,7 @@ export function askToKeepItDown(state: HotelState, hostId: string, t: number): {
   const visiting = visitorsOf(state, hostId).filter(w => (inRoomStay(w)?.end ?? -Infinity) > t);
   // Asked already (by hand, before a complaint came in): they're gone or going; a complaint about them is just answered
   const already = host?.hostedNight?.keptDownAt !== undefined;
-  if (!host || (!already && (visiting.length === 0 || !canAskVisitorsToLeave(state)))) return null;
+  if (!host || (!already && (visiting.length === 0 || !canAskVisitorsToLeave(state, t)))) return null;
   const sent = new Map(already ? [] : visiting.map(w => [w.id, sentHome(state, w, t, HOSTED_NIGHTS.leaveDelay)]));
   const who = theVisitors(visitorsOf(state, hostId).reduce((sum, w) => sum + partySize(w), 0));
   const walkers = (state.walkers ?? []).flatMap(w => (!sent.has(w.id) ? [w] : sent.get(w.id) ? [sent.get(w.id)!] : []));

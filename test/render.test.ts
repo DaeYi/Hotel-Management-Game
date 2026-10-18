@@ -7,6 +7,7 @@ import { lanesOf, type Lane } from '../src/simulation/DeskQueue.js';
 import { CHECK_IN_HOURS } from '../src/simulation/GuestMovement.js';
 import { makeStay, hourStart } from '../src/simulation/Movement.js';
 import type { Guest, GuestProfile, HotelState, Party, Walker, StaffMember } from '../src/simulation/types.js';
+import { syncStaff } from '../src/simulation/StaffManager.js';
 
 // The front desk as it's drawn (render/ActorLayer.ts): each clerk's line in
 // front of them, in the order they'll be served, nobody on top of anybody.
@@ -29,6 +30,19 @@ function layer() {
 }
 
 describe('Named staff on screen', () => {
+  it('draws exactly the on-duty named clerk behind the counter and opens that employee on a click', () => {
+    const s = syncStaff(createStarterHotel());
+    const { actors, squares } = layer();
+    actors.update(s, 0, hourStart(s) + 0.5);
+    const drawn = (actors as unknown as { staffDrawn: Array<{ id: string; x: number; y: number }> }).staffDrawn;
+    const clerks = drawn.filter(f => s.staffRoster!.find(m => m.id === f.id)?.role === 'front_desk');
+    expect(clerks).toHaveLength(1);
+    expect(s.staffRoster!.find(m => m.id === clerks[0].id)?.shift).toBe('night');
+    const desk = s.fixtures.find(f => f.type === 'desk')!;
+    expect(clerks[0].y).toBeLessThan(GRID_OFFSET_Y + (desk.gridY + 1) * TILE_SIZE);
+    expect(actors.staffAt(clerks[0].x, clerks[0].y)).toBe(clerks[0].id);
+    expect(squares).toHaveLength(drawn.length); // no anonymous desk squares duplicating the roster
+  });
   it('draws experience chevrons and picks only the visible worker on the current floor', () => {
     let s = { ...createStarterHotel(), day: 4, hour: 12 };
     const T = hourStart(s);
