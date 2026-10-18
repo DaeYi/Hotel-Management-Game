@@ -4,6 +4,8 @@ import { GUEST_PROFILE, PATIENCE, TRAVEL } from '../config/balance.js';
 import { checkInLanes } from './GuestMovement.js';
 import { routeFromStreet } from './Layout.js';
 import { hash01, makeStay, sameTile } from './Movement.js';
+import { scheduledDeskLanes, type DeskDuty } from './FrontDesk.js';
+import { namedFrontDesk } from './StaffProfiles.js';
 
 // The front desk queue (docs/designs/guest-staff-personalities.md, Patience):
 // each seated clerk is a lane, and what a lane is doing is read from people's
@@ -18,7 +20,7 @@ import { hash01, makeStay, sameTile } from './Movement.js';
 // them (complaints in the order they got there), so a complaint never makes
 // anyone checking in wait longer than they would have.
 
-export interface Lane { desk: Fixture; seat: number; front: TilePos; key: string }
+export interface Lane { desk: Fixture; seat: number; front: TilePos; key: string; duties?: DeskDuty[] }
 
 /** A lane's key: the desk and the seat. */
 export const laneKey = (deskId: string, seat: number) => `${deskId}:${seat}`;
@@ -27,12 +29,13 @@ export const laneKey = (deskId: string, seat: number) => `${deskId}:${seat}`;
 export const seatOf = (key: string) => Number(key.slice(key.lastIndexOf(':') + 1));
 
 /** Whether the desk queue is on (it needs guest profiles: patience lives there). */
-export function queueOn(): boolean {
-  return PATIENCE.enabled && GUEST_PROFILE.enabled;
+export function queueOn(state?: HotelState): boolean {
+  return PATIENCE.enabled && GUEST_PROFILE.enabled || !!state && namedFrontDesk(state);
 }
 
 /** The check-in lanes, keyed. */
 export function lanesOf(state: HotelState): Lane[] {
+  if (namedFrontDesk(state)) return scheduledDeskLanes(state);
   return checkInLanes(state).map(l => ({ ...l, key: laneKey(l.desk.id, l.seat) }));
 }
 
@@ -91,15 +94,21 @@ export function book(busy: Map<string, Array<[number, number]>>, key: string, st
  * does, else all; ties to the earlier lane.
  */
 export function quoteLane(
-  lanes: Lane[], busy: Map<string, Array<[number, number]>>, arriveAt: (lane: Lane) => number | null, hours: number, prefer?: (lane: Lane) => boolean,
-): { lane: Lane; arriveAt: number; start: number } | null {
+  lanes: Lane[], busy: Map<string, Array<[number, number]>>, arriveAt: (lane: Lane) => number | null, hours: number, prefer?: (lane: Lane) => boolean, checkIn = false,
+): { lane: Lane; arriveAt: number; start: number; hours: number; staffId?: string } | null {
   const pool = prefer && lanes.some(prefer) ? lanes.filter(prefer) : lanes;
-  let best: { lane: Lane; arriveAt: number; start: number } | null = null;
+  let best: { lane: Lane; arriveAt: number; start: number; hours: number; staffId?: string } | null = null;
   for (const lane of pool) {
     const a = arriveAt(lane);
     if (a === null) continue;
-    const start = firstFree(busy.get(lane.key), a, hours);
-    if (!best || start < best.start - 1e-9) best = { lane, arriveAt: a, start };
+    const duties = lane.duties ?? [{ from: -Infinity, to: Infinity, checkInHours: hours, staffId: undefined }];
+    for (const duty of duties) {
+      const length = checkIn ? duty.checkInHours : hours;
+      const start = firstFree(busy.get(lane.key), Math.max(a, duty.from), length);
+      if (start + length > duty.to + 1e-9) continue;
+      if (!best || start < best.start - 1e-9 || Math.abs(start - best.start) < 1e-9 && length < best.hours - 1e-9) best = { lane, arriveAt: a, start, hours: length, staffId: duty.staffId };
+      break;
+    }
   }
   return best;
 }
@@ -163,7 +172,7 @@ export function describeWait(hours: number): string {
  * turned away, when they came in.
  */
 export function recordGiveUps(state: HotelState, T: number): { state: HotelState; events: GameEvent[] } {
-  if (!queueOn()) return { state, events: [] };
+  if (!queueOn(state)) return { state, events: [] };
   const events: GameEvent[] = [];
   for (const w of state.walkers ?? []) {
     if (w.reason !== 'impatient') continue;
@@ -188,7 +197,7 @@ export function recordGiveUps(state: HotelState, T: number): { state: HotelState
  * long wait (in proportion to their patience), and the day's counts.
  */
 export function creditCheckIns(state: HotelState, T: number): HotelState {
-  if (!queueOn()) return state;
+  if (!queueOn(state)) return state;
   let today = deskToday(state);
   let changed = false;
   const guests = state.guests.map(g => {
@@ -200,7 +209,7 @@ export function creditCheckIns(state: HotelState, T: number): HotelState {
     const joined = before && before.kind === 'stay' && before.activity === 'wait' && before.lane === stay.lane ? before.start : stay.start;
     const waited = stay.start - joined;
     const minded = Math.max(0, waited - PATIENCE.waitGrace);
-    const loss = PATIENCE.waitMood * Math.min(1, minded / patienceHours(g));
+    const loss = PATIENCE.enabled && GUEST_PROFILE.enabled ? PATIENCE.waitMood * Math.min(1, minded / patienceHours(g)) : 0;
     today = { ...today, checkedIn: today.checkedIn + 1, waitHours: today.waitHours + waited, longestWait: Math.max(today.longestWait, waited) };
     changed = true;
     const trip = g.trip.map((l, k) => (k === i ? { ...l, credited: true } : l));
@@ -228,7 +237,7 @@ function shiftLegs(legs: Leg[], delta: number): Leg[] {
  * goes on without (as before the queue).
  */
 export function reseatLanes(state: HotelState, t: number): HotelState {
-  if (!queueOn()) return state;
+  if (!queueOn(state)) return state;
   const lanes = lanesOf(state);
   const live = new Set(lanes.map(l => l.key));
   const busy = new Map<string, Array<[number, number]>>();
@@ -242,9 +251,16 @@ export function reseatLanes(state: HotelState, t: number): HotelState {
     const index = trip.findIndex(l => isLaneService(l) && l.end > t);
     if (index < 0) return g;
     const stay = trip[index] as StayLeg & { lane: string };
-    if (stay.start <= t) {
-      if (live.has(stay.lane)) {
+    if (stay.start < t - 1e-9) {
+      const lane = lanes.find(l => l.key === stay.lane);
+      const duty = lane?.duties?.find(d => (stay.serviceStaffId === undefined || d.staffId === stay.serviceStaffId) && d.from <= t + 1e-9 && d.to >= stay.end - 1e-9);
+      const available = !lane?.duties || !!duty;
+      if (live.has(stay.lane) && available) {
         book(busy, stay.lane, stay.start, stay.end); // being served: carries on
+        if (!stay.serviceStaffId && duty) {
+          changed = true;
+          return { ...g, trip: trip.map((l, i) => i === index ? { ...stay, serviceStaffId: duty.staffId } : l) };
+        }
         return g;
       }
       // Their clerk went mid-service: that'll do; they walk on now
@@ -275,11 +291,21 @@ export function reseatLanes(state: HotelState, t: number): HotelState {
       changed = true;
       continue;
     }
-    const slot = quoteLane(here, busy, () => from, hours)!;
-    book(busy, slot.lane.key, slot.start, slot.start + hours);
+    const slot = quoteLane(here, busy, () => from, hours, undefined, !m.complaint);
+    if (!slot) {
+      // Keep an already admitted guest at the counter until coverage returns. Revisited on every tick/hire.
+      if (namedFrontDesk(state)) {
+        const start = Math.max(from + 24, stay.start);
+        const wait = [makeStay(stay.at, m.ready, start, 'wait', { placeId: stay.placeId, lane: stay.lane })];
+        byId.set(g.id, { ...g, trip: [...head, ...wait, { ...stay, start, end: start + hours, serviceStaffId: undefined }, ...shiftLegs(tail, start + hours - stay.end)] });
+        changed = true;
+      }
+      continue;
+    }
+    book(busy, slot.lane.key, slot.start, slot.start + slot.hours);
     const wait = slot.start > m.ready + 1e-12 ? [makeStay(stay.at, m.ready, slot.start, 'wait', { placeId: stay.placeId, lane: slot.lane.key })] : [];
-    const next: Leg[] = [...head, ...wait, { ...stay, start: slot.start, end: slot.start + hours, lane: slot.lane.key }, ...shiftLegs(tail, slot.start + hours - stay.end)];
-    const same = next.length === trip.length && next.every((l, k) => l.start === trip[k].start && l.end === trip[k].end && (l.kind !== 'stay' || (l as StayLeg).lane === (trip[k] as StayLeg).lane));
+    const next: Leg[] = [...head, ...wait, { ...stay, start: slot.start, end: slot.start + slot.hours, lane: slot.lane.key, serviceStaffId: slot.staffId }, ...shiftLegs(tail, slot.start + slot.hours - stay.end)];
+    const same = next.length === trip.length && next.every((l, k) => l.start === trip[k].start && l.end === trip[k].end && (l.kind !== 'stay' || l.lane === (trip[k] as StayLeg).lane && l.serviceStaffId === (trip[k] as StayLeg).serviceStaffId));
     if (!same) {
       byId.set(g.id, { ...g, trip: next });
       changed = true;

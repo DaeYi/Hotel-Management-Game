@@ -1,5 +1,7 @@
 import type { HotelState, Direction, Facility } from './types.js';
 import { GRID, DESK, STAFF, TRAVEL } from '../config/balance.js';
+import { deskCoverage } from './FrontDesk.js';
+import { namedFrontDesk } from './StaffProfiles.js';
 
 /** A tile position anywhere in the building. */
 export interface Pos {
@@ -222,13 +224,13 @@ export function getAccessibleBreakRooms(state: HotelState) {
 }
 
 /** Front desk staff actually working: each accessible desk seats DESK.staffPerDesk. */
-export function getMannedDeskStaff(state: HotelState): number {
-  return Math.min(state.staff.frontDesk, getAccessibleDesks(state).length * DESK.staffPerDesk);
+export function getMannedDeskStaff(state: HotelState, t?: number): number {
+  return namedFrontDesk(state) ? deskCoverage(state, t).length : Math.min(state.staff.frontDesk, getAccessibleDesks(state).length * DESK.staffPerDesk);
 }
 
 /** Guests that can be checked in per hour. Zero without a reachable, staffed desk. */
 export function getCheckInCapacity(state: HotelState): number {
-  return getMannedDeskStaff(state) * STAFF.frontDesk.checkInsPerHour;
+  return namedFrontDesk(state) ? deskCoverage(state).reduce((sum, d) => sum + 1 / d.checkInHours, 0) : getMannedDeskStaff(state) * STAFF.frontDesk.checkInsPerHour;
 }
 
 /**

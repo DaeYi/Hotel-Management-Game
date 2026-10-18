@@ -15,6 +15,7 @@ import { PRNG } from '../src/simulation/prng.js';
 import { guestFigures } from '../src/render/figures.js';
 import { ECONOMY, PATIENCE, GUEST_PROFILE, ELEVATOR } from '../src/config/balance.js';
 import type { Guest, GuestProfile, HotelState, Leg, StayLeg, Walker } from '../src/simulation/types.js';
+import { syncStaff } from '../src/simulation/StaffManager.js';
 
 const PROFILE: GuestProfile = { chronotype: 'regular', mobility: 'normal', sleep: 'normal', rowdiness: 'normal', checkoutHour: 11 };
 const with_ = (extra: Partial<GuestProfile>): GuestProfile => ({ ...PROFILE, ...extra });
@@ -415,6 +416,8 @@ describe('The front desk queue', () => {
 
   it('a whole day in the tick with one clerk on a busy afternoon: some wait, some give up, the toasts come as they leave', () => {
     let s = hotel(6, 1, { hour: 13 });
+    s = syncStaff(s);
+    s = { ...s, staffRoster: s.staffRoster!.map(m => m.role === 'front_desk' ? { ...m, shift: 'late' as const, at: null, deskLane: undefined } : m) };
     const prng = new PRNG(3);
     const types: string[] = [];
     busy(() => {

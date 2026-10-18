@@ -16,6 +16,7 @@ import { housekeepersNeeded, PLANNING_OCCUPANCY } from './HousekeepingManager.js
 import { getAverageOccupancy } from './ObjectivesManager.js';
 import { getExpectedArrivalsPerDay } from './GuestManager.js';
 import { getTotalDemandMultiplier } from './SeasonManager.js';
+import { frontDeskOn } from './StaffProfiles.js';
 
 /**
  * A scripted player for headless balance runs. Called once per game hour;
@@ -120,7 +121,7 @@ function addClosetsIfNeeded(state: HotelState, afford: Afford): HotelState {
 /** Add a check-in desk on the next reserved desk tile when front desk staff outnumber the seats. */
 function addDeskIfNeeded(state: HotelState, afford: Afford): HotelState {
   const desks = state.fixtures.filter(f => f.type === 'desk').length;
-  if (state.staff.frontDesk <= desks * DESK.staffPerDesk || !afford(state, DESK.buildCost)) return state;
+  if ((frontDeskOn() ? Math.ceil(state.staff.frontDesk / 3) : state.staff.frontDesk) <= desks * DESK.staffPerDesk || !afford(state, DESK.buildCost)) return state;
   for (const [x, y] of STARTER_LAYOUT.deskTiles) {
     const next = addFixture(state, 'desk', x, y, 0);
     if (next) return next;
@@ -200,7 +201,7 @@ function managedStrategy(opts: ManagedOptions): Strategy {
         // walks included); a maintenance worker keeps up with ~40 rooms, front desk ~20.
         housekeepers: Math.max(1, Math.round(housekeepersNeeded(s, staffingOccupancy(s)) * (opts.staffing ?? 1))),
         maintenanceWorkers: Math.max(1, Math.ceil(rooms / 40)),
-        frontDesk: Math.max(1, Math.ceil(rooms / 20)),
+        frontDesk: Math.max(1, Math.ceil(rooms / 20)) * (frontDeskOn() ? 3 : 1),
       },
       housekeeping: { turnoverQuality: s.peakStarRating >= 2 ? 'thorough' : 'standard', dailyCadence: 'daily' },
     };

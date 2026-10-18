@@ -307,10 +307,13 @@ describe('GameController: people keep up with changes mid-hour', () => {
     delete state.staffRoster;
     delete state.staffPlan;
     delete state.walkers;
+    delete state.frontDeskRosterReady;
+    state.staff.frontDesk = 1; // one 24-hour position in a v17 save
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 17, prngState: 1, state }));
     const c = new GameController();
-    expect(c.state.staffRoster!.map(m => m.role).sort()).toEqual(['housekeeper', 'housekeeper', 'maintenance']);
-    expect(c.state.staffRoster!.every(m => m.at !== null)).toBe(true); // on shift at noon
+    expect(c.state.staffRoster!.map(m => m.role).sort()).toEqual(['front_desk', 'front_desk', 'front_desk', 'housekeeper', 'housekeeper', 'maintenance']);
+    expect(c.state.staffRoster!.filter(m => m.role !== 'front_desk').every(m => m.at !== null)).toBe(true); // on shift at noon
+    expect(c.state.staffRoster!.filter(m => m.role === 'front_desk' && m.at !== null)).toHaveLength(1);
     expect(c.state.staffPlan).not.toBeNull();
     localStorage.clear();
   });

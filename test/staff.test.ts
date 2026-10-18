@@ -55,7 +55,7 @@ describe('People, candidates, shortcuts and saves', () => {
     expect(hireCandidate(s, 'housekeeper', candidate.id)).toBeNull();
     saveGame(s, new PRNG(1));
     const loaded = loadGame()!;
-    expect(loaded.version).toBe(21);
+    expect(loaded.version).toBe(22);
     expect(hiringCandidates(loaded.state, 'housekeeper').some(c => c.id === candidate.id)).toBe(false);
     s = syncStaff(dismissStaff(loaded.state, hired.id)!);
     const next = hiringCandidates(s, 'housekeeper')[0];
@@ -72,7 +72,7 @@ describe('People, candidates, shortcuts and saves', () => {
     const offered = hiringCandidates(c.state, 'housekeeper');
     c.setStaff({ ...c.state.staff, housekeepers: 2 });
     expect(c.state.staffRoster!.find(m => m.id === original.id)?.name).toBe(original.name);
-    const hired = c.state.staffRoster!.find(m => m.id !== original.id)!;
+    const hired = c.state.staffRoster!.find(m => m.role === 'housekeeper' && m.id !== original.id)!;
     expect(offered.some(o => o.id === hired.candidateId)).toBe(true);
     c.dismissStaff(original.id);
     expect(c.state.staff.housekeepers).toBe(1);
@@ -87,7 +87,7 @@ describe('People, candidates, shortcuts and saves', () => {
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 20, prngState: 10, state: s }));
     const migrated = loadGame()!;
     const person = migrated.state.staffRoster![0];
-    expect(migrated.version).toBe(21);
+    expect(migrated.version).toBe(22);
     expect(person.id).toBe(m.id); expect(person.at).toEqual(m.at);
     expect(person.name).toBeTruthy(); expect(staffRate(person)).toBe(1); expect(staffWage(person)).toBe(70);
     const hired = hireCandidate(migrated.state, 'housekeeper', hiringCandidates(migrated.state, 'housekeeper')[0].id)!;

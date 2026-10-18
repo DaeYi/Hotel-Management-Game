@@ -422,7 +422,7 @@ describe('Save migration to v18', () => {
     localStorage.clear();
     localStorage.setItem('hotel-game-save', JSON.stringify({ version: 17, prngState: 1, state }));
     const loaded = loadGame()!;
-    expect(loaded.version).toBe(21);
+    expect(loaded.version).toBe(22);
     expect(loaded.state.guests[0]).toMatchObject({ trip: null, facilitiesUsed: {} });
     expect(loaded.state.walkers).toEqual([]);
     // v21 also gives the rebuilt roster neutral named identities; the stale

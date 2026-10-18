@@ -8,6 +8,7 @@ import { decayDecor, processRenovationTick } from './DecorManager.js';
 import { tickCampaign } from './MarketingManager.js';
 import { formatRoomLabel, startPendingRefits } from './HotelState.js';
 import { getStaffPlan, getRoster, rosterAfter, syncStaff, planStaff } from './StaffManager.js';
+import { getMannedDeskStaff } from './Layout.js';
 import { planArrivalTrips, departureWalker, tidyMovement } from './GuestMovement.js';
 import { planFacilityVisits, creditFacilityVisits } from './FacilityManager.js';
 import { planOutings, planDinnersOut, creditDinnersOut } from './OutingManager.js';
@@ -46,7 +47,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   const staffPlan = getStaffPlan(current);
   current = { ...current, staffPlan }; // one plan for crediting and for where everyone ends up
   for (const m of getRoster(current)) {
-    if (m.leaving || current.hour !== shiftFor(m.role).workStartHour) continue;
+    if (m.leaving || current.hour !== shiftFor(m.role, m.shift).workStartHour) continue;
     const a = attendance(m, current.day);
     if (a.absent || a.lateHours > 0) events.push({ type: 'staff_notice', message: a.absent ? `${m.name} is absent today (unpaid).` : `${m.name} is running ${Math.round(a.lateHours * 60)} minutes late.`, data: { staffId: m.id } });
   }
@@ -70,7 +71,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   const staffAfter = rosterAfter(current, staffPlan);
   for (const m of staffAfter) {
     const before = current.staffRoster?.find(p => p.id === m.id);
-    if (before && experienceOf(before) !== experienceOf(m)) events.push({ type: 'staff_notice', message: `${m.name} is now ${experienceOf(m)}; wage $${staffWage(m).toFixed(2)} a day.`, data: { staffId: m.id } });
+    if (before && experienceOf(before) !== experienceOf(m)) events.push({ type: 'staff_notice', message: `${m.name} is now ${experienceOf(m)}; wage $${staffWage(m).toFixed(2)} ${m.role === 'front_desk' ? 'per shift' : 'a day'}.`, data: { staffId: m.id } });
   }
   current = { ...current, staffRoster: staffAfter };
   for (const e of events.filter(e => e.type === 'staff_notice')) current = appendStoryLogEntry(current, { type: 'staff_notice', message: e.message }).state;
@@ -232,7 +233,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
 
   // Rooms enter cleaning state after checkout -- normal and walkout departures
   // share this same accumulation (eng-review D7), not a separate pipeline.
-  const checkoutDelay = current.staff.frontDesk > 0 ? 0 : STAFF.frontDesk.checkoutDelayWithoutStaff;
+  const checkoutDelay = getMannedDeskStaff(current, T) > 0 ? 0 : STAFF.frontDesk.checkoutDelayWithoutStaff;
 
   const roomsAfterDeparture = current.rooms.map(room => {
     if (room.guestId && departedGuestIds.has(room.guestId)) {
@@ -335,6 +336,10 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
     const staffCost = getStaffPaydayCost(current);
     current = { ...current, cash: current.cash + costs.cashDelta - staffCost };
     if (current.staffPayroll) current = { ...current, staffPayroll: Object.fromEntries(Object.entries(current.staffPayroll).filter(([day]) => Number(day) >= current.day)) };
+    if (current.staffPayrollThrough) {
+      const employed = new Set(current.staffRoster?.map(m => m.id));
+      current = { ...current, staffPayrollThrough: Object.fromEntries(Object.entries(current.staffPayrollThrough).filter(([id]) => employed.has(id))) };
+    }
     current = degradeCleanliness(current);
     current = decayDecor(current);
 
@@ -426,6 +431,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   current = planOutings(current);
   current = planVisitors(current); // a rowdy guest's friends round, at 22:00
   current = { ...current, staffPlan: planStaff(current) };
+  current = reseatLanes(current, T);
 
   return { state: current, events };
 }

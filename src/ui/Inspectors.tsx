@@ -35,6 +35,7 @@ import { roomCleaningAt, describeWait, type RoomCleaning } from '../simulation/C
 import { useController, useLiveClock } from './context';
 import { formatBar, formatMoney, formatWalk, capitalize } from './format';
 import { StaffDetails, staffActivity } from './StaffPeople';
+import { roleLabel } from '../simulation/StaffProfiles';
 
 /** What a visit to the shop or a table at the restaurant costs a party of one or two, and a big spender's (spending styles on). */
 function spendLines(facility: Facility): string[] {
@@ -86,7 +87,7 @@ function StaffInspector({ staffId, anchor }: { staffId: string; anchor: Tile }) 
   const member = c.state.staffRoster?.find(m => m.id === staffId);
   if (!member) return null;
   return <TileCard tile={anchor} title={member.name ?? 'Staff member'}>
-    <div class="body small">{member.role === 'housekeeper' ? 'Housekeeper' : 'Maintenance'}</div>
+    <div class="body small">{roleLabel(member.role)}</div>
     <StaffDetails member={member} />
     <div class="small" style={{ margin: '6px 0' }}>{staffActivity(member, c.state, c.gameTime)}</div>
     {!member.leaving && <button class="danger" onClick={() => c.dismissStaff(member.id)}>Let go</button>}
@@ -243,7 +244,7 @@ function AskVisitorsButton({ hostId, state }: { hostId: string; state: HotelStat
   const c = useController();
   const host = state.guests.find(g => g.id === hostId);
   if (!host || host.hostedNight?.keptDownAt !== undefined || !isHosting(state, hostId, c.gameTime)) return null;
-  const staffed = canAskVisitorsToLeave(state);
+  const staffed = canAskVisitorsToLeave(state, c.gameTime);
   return (
     <button class="warn" disabled={!staffed} title={staffed ? `${PartyLabel(host)} will mind` : 'Nobody at the front desk to ask'}
       onClick={() => c.askVisitorsToLeave(hostId)}>

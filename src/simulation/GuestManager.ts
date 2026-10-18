@@ -202,7 +202,7 @@ export interface ArrivalResult {
 }
 
 /** A guest's place in the front desk queue: the clerk, when they reach the desk, and when they're served. */
-export interface DeskSlot { lane: string; arriveAt: number; start: number }
+export interface DeskSlot { lane: string; arriveAt: number; start: number; hours?: number; staffId?: string }
 
 /**
  * A guest at the counter: the room they'll take -- a party too big for any free
@@ -313,7 +313,7 @@ export function processArrivals(
   const booked = new Set<string>();
   let checkedInThisHour = 0;
   let pool = [...state.returningGuestPool];
-  const lanes = queueOn() ? lanesOf(state) : [];
+  const lanes = queueOn(state) ? lanesOf(state).filter(l => !l.duties || l.duties.length > 0) : [];
   const queue = lanes.length > 0 ? lanes : null; // (no lanes: nobody to queue for, as before)
   const waiting: Array<{ guest: Guest; pulled: ReturningGuestProfile | null; priceTolerance: number; reserved?: Room }> = [];
   // Guest ids come from a random draw, so two can clash: give a clash a suffix
@@ -451,9 +451,10 @@ export function processArrivals(
       const at = arriveAt(guest.id, i, waiting.length);
       if (reserved) {
         // The spotlight guest: expected, and seen however long the line (they never give up)
-        const slot = quoteLane(queue, busy, () => at, CHECK_IN_HOURS, lane => !!findRoute(state, lane.front, roomTile(reserved), guestPace(guest)))!;
-        book(busy, slot.lane.key, slot.start, slot.start + CHECK_IN_HOURS);
-        result.checkedIn.push({ guest, roomId: reserved.id, desk: { lane: slot.lane.key, arriveAt: at, start: slot.start } });
+        const slot = quoteLane(queue, busy, () => at, CHECK_IN_HOURS, lane => !!findRoute(state, lane.front, roomTile(reserved), guestPace(guest)), true);
+        if (!slot) { result.spotlight = { guest, room: null, noDesk: true }; return; }
+        book(busy, slot.lane.key, slot.start, slot.start + slot.hours);
+        result.checkedIn.push({ guest, roomId: reserved.id, desk: { lane: slot.lane.key, arriveAt: at, start: slot.start, hours: slot.hours, staffId: slot.staffId } });
         announceArrival(result, guest, reserved, undefined, false);
         return;
       }
@@ -471,18 +472,18 @@ export function processArrivals(
         return;
       }
       const pace = guestPace(guest);
-      const slot = quoteLane(queue, busy, () => at, CHECK_IN_HOURS, lane => !!findRoute(state, lane.front, roomTile(room), pace))!;
+      const slot = quoteLane(queue, busy, () => at, CHECK_IN_HOURS, lane => !!findRoute(state, lane.front, roomTile(room), pace), true);
       const patience = patienceHours(guest);
-      if (slot.start - at > patience + 1e-9) {
+      if (!slot || slot.start - at > patience + 1e-9) {
         // (the toast comes as they walk out: DeskQueue.recordGiveUps)
         result.turnedAway++;
-        result.walkIns.push({ guest, outcome: 'impatient', desk: { arriveAt: at, lane: slot.lane.key, leaveAt: at + patience, ...(match.wanted ? { wanted: match.wanted } : {}) } });
+        result.walkIns.push({ guest, outcome: 'impatient', desk: { arriveAt: at, lane: slot?.lane.key ?? queue[0].key, leaveAt: at + patience, ...(match.wanted ? { wanted: match.wanted } : {}) } });
         requeue();
         return;
       }
-      book(busy, slot.lane.key, slot.start, slot.start + CHECK_IN_HOURS);
+      book(busy, slot.lane.key, slot.start, slot.start + slot.hours);
       booked.add(room.id);
-      result.checkedIn.push({ guest, roomId: room.id, desk: { lane: slot.lane.key, arriveAt: at, start: slot.start } });
+      result.checkedIn.push({ guest, roomId: room.id, desk: { lane: slot.lane.key, arriveAt: at, start: slot.start, hours: slot.hours, staffId: slot.staffId } });
       announceArrival(result, guest, room, match.wanted, match.inOldRoom);
     });
   }

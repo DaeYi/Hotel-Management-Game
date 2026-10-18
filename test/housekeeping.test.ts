@@ -236,7 +236,7 @@ describe('The staff on screen do exactly the work the simulation credits', () =>
     let s = hotel(3, 2);
     s = { ...s, hour: 12, rooms: s.rooms.map(r => startTurnoverCleaning(r, 'standard')) };
     const first = getStaffPlan(s);
-    const rooms = (plan: typeof first) => new Map(plan.itineraries.map(it => [it.staffId, it.legs.filter(l => l.kind === 'stay' && l.job).map(l => (l as any).placeId).pop()]));
+    const rooms = (plan: typeof first) => new Map(plan.itineraries.filter(it => it.staffId.startsWith('housekeeper')).map(it => [it.staffId, it.legs.filter(l => l.kind === 'stay' && l.job).map(l => (l as any).placeId).pop()]));
     s = tickSimulation(s, new PRNG(1)).state;
     expect(rooms(getStaffPlan(s))).toEqual(rooms(first));
   });
@@ -263,7 +263,8 @@ describe('Shifts, hiring, and letting staff go', () => {
     s = { ...s, hour: 12, staffRoster: getRoster({ ...s, hour: 12 }), staff: { ...s.staff, housekeepers: 2 } };
     let roster = syncRoster(s);
     expect(roster.filter(m => m.role === 'housekeeper').map(m => m.at === null)).toEqual([false, true]);
-    const hire = planStaff({ ...s, staffRoster: roster }).itineraries.find(it => it.staffId === roster[1].id)!;
+    const hireId = roster.find(m => m.role === 'housekeeper' && m.at === null)!.id;
+    const hire = planStaff({ ...s, staffRoster: roster }).itineraries.find(it => it.staffId === hireId)!;
     const firstStep = hire.legs[0];
     expect(firstStep.kind === 'walk' && isEntranceTile(s, firstStep.path[0])).toBe(true);
 

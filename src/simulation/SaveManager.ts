@@ -7,10 +7,10 @@ import { isEdgeTile } from './Layout.js';
 import { DIRECTIONS, doorTile, isReachableHallway, findOpenDoor } from './Layout.js';
 import { calculateStarRating } from './StarRatingManager.js';
 import { getRoster } from './StaffManager.js';
-import { identifyStaff } from './StaffHiring.js';
+import { identifyStaff, initializeFrontDesk } from './StaffHiring.js';
 
 const SAVE_KEY = 'hotel-game-save';
-const SAVE_VERSION = 21; // v21: persistent staff identities, profiles and hire serials
+const SAVE_VERSION = 22; // v22: named front desk shifts; existing coverage and wage budgets survive
 
 interface SaveData {
   version: number;
@@ -243,6 +243,11 @@ export function loadGame(storage?: Storage): SaveData | null {
     if (data.version === 20) {
       data.state = identifyStaff(data.state, getRoster(data.state));
       data.version = 21;
+    }
+
+    if (data.version === 21) {
+      data.state = initializeFrontDesk(data.state, true);
+      data.version = 22;
     }
 
     if (data.version !== SAVE_VERSION) {

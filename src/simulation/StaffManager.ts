@@ -1,4 +1,4 @@
-import type { HotelState, Room, StaffMember, StaffPlan, StaffItinerary, StaffRole, Leg, WalkLeg, TilePos } from './types.js';
+import type { HotelState, Room, StaffMember, StaffPlan, StaffItinerary, StaffRole, FrontDeskShift, Leg, WalkLeg, TilePos } from './types.js';
 import { STAFF, TRAVEL, GUEST_PROFILE, GUEST_HOUSEKEEPING } from '../config/balance.js';
 import { findRoute, routeFromStreet, routeToStreet, getStaffBases, getAccessibleBreakRooms, isEntranceTile, stepHours, doorTile } from './Layout.js';
 import { isRoomReachable } from './HotelState.js';
@@ -8,8 +8,9 @@ import { guestsById } from './Party.js';
 import { housekeepingPrefOf, dndOpening, dndCleanStart, dndSetOff } from './CleaningPreference.js';
 import { isSleepHour } from './Profile.js';
 import { STAFF_PERSONALITIES } from '../config/staff.js';
-import { reconcileStaff } from './StaffHiring.js';
-import { staffRate, attendance, afterWork, repairTarget, nextStaffWork } from './StaffProfiles.js';
+import { reconcileStaff, initializeFrontDesk } from './StaffHiring.js';
+import { staffRate, attendance, afterWork, repairTarget, nextStaffWork, staffDutyAt, shiftFor } from './StaffProfiles.js';
+import { planDeskClerk } from './FrontDesk.js';
 
 // Housekeepers and maintenance workers are people with a place in the
 // building. Each hour boundary, every one of them gets an itinerary for the
@@ -27,9 +28,9 @@ function shiftOf(role: StaffRole) {
 }
 
 /** Whether a role works during an hour of the day. */
-export function isOnShift(role: StaffRole, hour: number): boolean {
-  const shift = shiftOf(role);
-  return hour >= shift.workStartHour && hour < shift.workEndHour;
+export function isOnShift(role: StaffRole, hour: number, frontShift?: FrontDeskShift): boolean {
+  const shift = shiftFor(role, frontShift);
+  return shift.workEndHour > 24 ? hour >= shift.workStartHour || hour < shift.workEndHour - 24 : hour >= shift.workStartHour && hour < shift.workEndHour;
 }
 
 function headcount(state: HotelState, role: StaffRole): number {
@@ -98,8 +99,10 @@ function syncLegacyRoster(state: HotelState): StaffMember[] {
   return roster;
 }
 
-export function syncStaff(state: HotelState): HotelState {
-  return STAFF_PERSONALITIES.enabled ? reconcileStaff(state, getRoster(state)) : { ...state, staffRoster: syncLegacyRoster(state) };
+export function syncStaff(state: HotelState, t = hourStart(state)): HotelState {
+  if (!STAFF_PERSONALITIES.enabled) return { ...state, staffRoster: syncLegacyRoster(state) };
+  const ready = initializeFrontDesk({ ...state, staffRoster: getRoster(state) });
+  return reconcileStaff(ready, ready.staffRoster!, t);
 }
 
 export function syncRoster(state: HotelState): StaffMember[] {
@@ -143,7 +146,7 @@ function jobQueues(state: HotelState, done: { turnover: Map<string, number>; dai
       || r.condition < (continuingRepairs.get(r.id) ?? 0)))
     .sort((a, b) => Number(!!b.damageReportedBy) - Number(!!a.damageReportedBy) || a.condition - b.condition)
     .map(room => ({ room, kind: 'repair' as const, hours: Infinity }));
-  return { housekeeper: housekeeping, maintenance };
+  return { housekeeper: housekeeping, maintenance, front_desk: [] };
 }
 
 /**
@@ -231,6 +234,7 @@ export function planStaff(
   }
 
   const itineraries: StaffItinerary[] = roster.map(m => {
+    if (m.role === 'front_desk') return planDeskClerk(roster === state.staffRoster ? state : { ...state, staffRoster: roster, staffPlan: undefined }, m, from);
     const rate = staffRate(m);
     const targetCondition = repairTarget(m);
     const needed = (j: Job) => j.kind === 'repair' && targetCondition !== null
@@ -477,7 +481,12 @@ export function planStaff(
 
 /** This hour's staff plan: the one made at the hour boundary, or (for a state without one) planned now. */
 export function getStaffPlan(state: HotelState): StaffPlan {
-  if (state.staffPlan && state.staffPlan.start === hourStart(state)) return state.staffPlan;
+  if (state.staffPlan && state.staffPlan.start === hourStart(state)) {
+    const ids = new Set(state.staffPlan.itineraries.map(it => it.staffId));
+    const missing = (state.staffRoster ?? []).filter(m => m.role === 'front_desk' && !ids.has(m.id));
+    if (missing.length) return { ...state.staffPlan, itineraries: [...state.staffPlan.itineraries, ...missing.map(m => planDeskClerk(state, m, hourStart(state)))] };
+    return state.staffPlan;
+  }
   return planStaff(state);
 }
 
@@ -497,11 +506,22 @@ export function plannedWork(plan: StaffPlan, kind: 'turnover' | 'daily' | 'repai
 /** The roster as the plan leaves it at the end of the hour. */
 export function rosterAfter(state: HotelState, plan: StaffPlan): StaffMember[] {
   const ends = new Map(plan.itineraries.map(it => [it.staffId, it.end]));
-  return getRoster(state).map(m => {
+  const roster = getRoster(state);
+  const members = new Map(roster.map(m => [m.id, m]));
+  const serviceHours = new Map<string, number>();
+  for (const guest of state.guests) for (const leg of guest.trip ?? []) {
+    if (leg.kind !== 'stay' || !leg.serviceStaffId || (leg.activity !== 'check_in' && leg.activity !== 'complain')) continue;
+    const to = Math.min(leg.end, plan.start + 1, members.get(leg.serviceStaffId)?.dismissedAt ?? Infinity);
+    const hours = Math.max(0, to - Math.max(leg.start, plan.start));
+    if (hours > 0) serviceHours.set(leg.serviceStaffId, (serviceHours.get(leg.serviceStaffId) ?? 0) + hours);
+  }
+  return roster.map(m => {
     const e = ends.get(m.id);
-    const workHours = (plan.itineraries.find(it => it.staffId === m.id)?.legs ?? []).reduce((hours, leg) =>
-      hours + (leg.kind === 'stay' && leg.job ? Math.max(0, Math.min(leg.end, plan.start + 1) - Math.max(leg.start, plan.start)) : 0), 0);
-    return afterWork(e ? { ...m, at: e.at, roomId: e.roomId, carry: e.carry } : m, workHours, state.day);
+    const workHours = m.role === 'front_desk' ? serviceHours.get(m.id) ?? 0 : (plan.itineraries.find(it => it.staffId === m.id)?.legs ?? [])
+      .reduce((hours, leg) => hours + (leg.kind === 'stay' && leg.job ? Math.max(0, Math.min(leg.end, plan.start + 1) - Math.max(leg.start, plan.start)) : 0), 0);
+    const duty = m.role === 'front_desk' ? staffDutyAt(m, plan.start) : undefined;
+    const recordAttendance = !duty || (m.hiredAt ?? -Infinity) < duty.end && (m.dismissedAt ?? Infinity) > duty.start;
+    return afterWork(e ? { ...m, at: e.at, roomId: e.roomId, carry: e.carry, deskLane: e.deskLane } : m, workHours, duty?.day ?? state.day, recordAttendance);
   });
 }
 
@@ -555,6 +575,6 @@ function legsBefore(legs: Leg[], leg: Leg): Leg[] {
 
 /** What there is for staff to do: which rooms need cleaning or repair. When it changes mid-hour, re-plan (replanStaff). */
 export function staffWorkKey(state: HotelState): string {
-  const people = STAFF_PERSONALITIES.enabled ? (state.staffRoster ?? []).map(m => `${m.id}:${!!m.leaving}:${staffRate(m)}`).join(',') : '';
+  const people = STAFF_PERSONALITIES.enabled ? (state.staffRoster ?? []).map(m => `${m.id}:${!!m.leaving}:${staffRate(m)}:${m.shift}:${m.restUntil}`).join(',') : '';
   return state.rooms.map(r => `${r.id}:${r.status}:${r.condition < STAFF.maintenance.conditionThreshold ? 1 : 0}`).join(',') + people;
 }

@@ -147,7 +147,7 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(21);
+    expect(loaded!.version).toBe(22);
     expect(loaded!.state.noiseSources).toEqual([]);
     expect(loaded!.state.facilities).toEqual([]); // added by the v8->v9 step
     expect(loaded!.state.activeIncidents).toEqual([]);
@@ -180,11 +180,11 @@ describe('SaveManager', () => {
 
     const loaded = loadGame();
     expect(loaded).not.toBeNull();
-    expect(loaded!.version).toBe(21);
+    expect(loaded!.version).toBe(22);
     expect(loaded!.state.reviewScore).toBeCloseTo(7.2, 5); // 72 / 10
     expect((loaded!.state as any).reputationScore).toBeUndefined();
     expect(loaded!.state.bookings[0].reviewScore).toBe(8); // rating 4 * 2
-    expect(loaded!.state.staff.frontDesk).toBe(1); // filled by v6->v7
+    expect(loaded!.state.staff.frontDesk).toBe(3); // filled by v6->v7, then one person per shift in v22
     expect(loaded!.state.amenities).toEqual({ standard: 'basic', deluxe: 'basic', suite: 'basic' }); // filled by v7->v8
     // v9->v10 backfill: a pre-v10 booking predates satisfactionAtCheckout.
     expect(loaded!.state.bookings[0].satisfactionAtCheckout).toBe(50);
