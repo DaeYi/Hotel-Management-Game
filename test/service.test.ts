@@ -443,7 +443,7 @@ describe('Settling a change mid-hour: with preferences off, the old order', () =
       s = { ...s, walkers: [walker], staffRoster: [{ id: 'housekeeper-0', role: 'housekeeper', at: { gridX: room.gridX, gridY: room.gridY - 1, floor: 0 } }] };
       s = { ...s, staffPlan: planStaff(s) };
       const before = s.staffPlan!.itineraries[0].legs.find(l => l.kind === 'stay' && l.job === 'turnover')!;
-      expect(before.start).toBeCloseTo(T + slow, 9); // waits for them to step out
+      expect(before.start).toBeCloseTo(T + slow + TRAVEL.hoursPerTile, 9); // waits outside, then steps in
       // The entrance they're heading for goes, while they're still in the doorway
       const exit = walker.trip[0] as any;
       const end = exit.path[exit.path.length - 1];
@@ -451,9 +451,9 @@ describe('Settling a change mid-hour: with preferences off, the old order', () =
       return { T, slow, clean: after.staffPlan!.itineraries[0].legs.find(l => l.kind === 'stay' && l.job === 'turnover' && l.end > T + slow / 2)! };
     };
     const off = withSwitch(GUEST_HOUSEKEEPING, false, run);
-    expect(off.clean.start).toBeCloseTo(off.T + off.slow, 9); // planned around the walk as it was
+    expect(off.clean.start).toBeCloseTo(off.T + off.slow + TRAVEL.hoursPerTile, 9); // planned around the walk as it was
     const on = run();
-    expect(on.clean.start).toBeCloseTo(on.T + on.slow / 2 + on.slow, 9); // around the walk as it now is
+    expect(on.clean.start).toBeCloseTo(on.T + on.slow / 2 + on.slow + TRAVEL.hoursPerTile, 9); // around the walk as it now is
   });
 });
 

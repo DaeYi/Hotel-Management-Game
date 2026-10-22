@@ -24,3 +24,24 @@ export const FRONT_DESK_STAFF = {
     night: { start: 22, end: 30, label: 'Night · 22:00–06:00' },
   },
 };
+
+export const STAFF_SPECIALTIES = {
+  enabled: true,
+  preventiveBelow: 40,
+  preventiveTarget: 85,
+  upsellChance: 0.25,
+};
+
+/** Hospitality changes an encounter, never a guest who merely shares the hotel. */
+export const STAFF_HOSPITALITY = {
+  enabled: true,
+  checkInTime: { warm: 0.75, polite: 1, curt: 1.2 },
+  checkInMood: { warm: 4, polite: 0, curt: -3 },
+  dailyCleanMood: { warm: 2, polite: 0, curt: -2 },
+  wage: { warm: 1.15, polite: 1, curt: 0.9 },
+  warmComplaintMood: 10,
+  warmNoiseGrace: 3,
+  reviewPerMood: 0.05,
+  maxReview: 0.6,
+  maxContacts: 12,
+};

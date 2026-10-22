@@ -13,6 +13,7 @@ import { queueOn, lanesOf, laneBookings, quoteLane, book, deskToday, reseatLanes
 import { appendStoryLogEntry } from './StoryGenerator.js';
 import { PartyLabel } from './Party.js';
 import { voiceOn, complainsBelow, hasComplained } from './Voice.js';
+import { recordHospitality, serviceSnapshot, serviceMember } from './StaffHospitality.js';
 
 // Voice (docs/designs/guest-staff-personalities.md, Temperament #8): how a
 // guest complains. A vocal guest speaks up once they're irritated, a typical
@@ -104,7 +105,7 @@ export function planDeskComplaints(state: HotelState): HotelState {
     const there = walkLegs(ways.get(slot.lane.key)!, setOff, pace);
     const arrive = there.length > 0 ? legsEnd(there) : setOff;
     const start = Math.max(arrive, slot.start);
-    const lane = { lane: slot.lane.key, serviceStaffId: slot.staffId };
+    const lane = { lane: slot.lane.key, serviceStaffId: slot.staffId, ...serviceSnapshot(state.staffRoster?.find(m => m.id === slot.staffId)) };
     const legs: Leg[] = [
       ...there,
       ...(start > arrive + 1e-12 ? [makeStay(slot.lane.front, arrive, start, 'wait', { placeId: slot.lane.desk.id, ...lane })] : []),
@@ -140,10 +141,13 @@ export function hearComplaints(state: HotelState, T: number): { state: HotelStat
     const room = current.rooms.find(r => r.guestId === g.id);
     const label = room ? formatRoomLabel(room.gridX, room.gridY, room.floor) : '';
     const cause = (g.complaint.cause ?? 'stay') as ComplaintCause;
+    const member = serviceMember(current, stay);
+    const heard = { ...g, trip: g.trip!.map((l, k) => (k === i ? { ...l, credited: true } : l)), satisfaction: Math.min(100, g.satisfaction + VOICE.heardMood), complaint: { ...g.complaint!, at: stay.start } };
+    const met = member ? recordHospitality(heard, member, 'complaint', stay.start) : heard;
     current = {
       ...current,
       guests: current.guests.map(x => (x.id === g.id
-        ? { ...x, trip: x.trip!.map((l, k) => (k === i ? { ...l, credited: true } : l)), satisfaction: Math.min(100, x.satisfaction + VOICE.heardMood), complaint: { ...x.complaint!, at: stay.start } }
+        ? met
         : x)),
     };
     const chainId = `complaints-${current.day}`;
@@ -153,7 +157,7 @@ export function hearComplaints(state: HotelState, T: number): { state: HotelStat
       type: 'guest_complained',
       guestName: PartyLabel(g),
       roomId: room?.id,
-      message: `${PartyLabel(g)}${label ? ` (Room ${label})` : ''} complained at the front desk about ${g.complaint.about}.${advice && !advised ? ` ${advice}` : ''}`,
+      message: `${PartyLabel(g)}${label ? ` (Room ${label})` : ''} complained at the front desk about ${g.complaint.about}.${member ? ` ${member.name} heard them${met.satisfaction - g.satisfaction > VOICE.heardMood ? ' and put them at ease' : ''}.` : ''}${advice && !advised ? ` ${advice}` : ''}`,
       chainId,
     }).state;
     const today = deskToday(current);

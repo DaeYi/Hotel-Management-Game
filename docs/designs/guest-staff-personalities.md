@@ -2,7 +2,16 @@
 
 Date: 2026-10-11
 Status: IN PROGRESS. Purpose of stay (three values) and room preferences shipped first, as a slice: see guest-preferences.md. The remainder is being built in six phases (see "Build plan (2026-10-12)" at the end).
-Current implementation: phase 3c (event visitors), phase 4 (named housekeeping and maintenance staff), and the named front desk / shift slice of phase 5 are implemented. See the implementation notes below. Specialties, hospitality, fatigue, cross-training and morale remain in phases 5-6.
+Current implementation: phase 3c (event visitors), phase 4 (named housekeeping and maintenance staff), and phase 5's named front desk, shifts, specialties and hospitality are implemented. See the implementation notes below. Fatigue, cross-training and morale remain in phases 5-6.
+
+### Specialties and hospitality implementation (2026-10-21)
+
+- Specialties are role-specific and reassigned from the team list or staff inspector, with no wage or experience reset. Turnover runners retain the original order; room attendants prefer daily rounds, with parties out first. Responders retain vacant-room repairs; preventive workers use spare capacity to service occupied rooms below 40 to 85, only when approach, remaining work and exit fit the whole party's away window and the shift. They skip DND rooms. Work goals and contributions survive hourly planning and mid-hour changes.
+- Greeters keep normal reception duties. Upsellers offer splurgers a higher room class with deterministic 25% acceptance, beyond the splurger's ordinary self-selected trade-up cap but within their original fair-price tolerance and budget. Only suitable, reachable free rooms are offered; held suites, a regular's promised old room and active repair targets are protected. Upgrades keep movement history, finish a step already underway and route from the guest's real position. A room already entered needs turnover cleaning. Billing uses the new room's actual rate; the story names the clerk and premium.
+- Concierges reveal a stoic guest's mood after that guest's own check-in or desk complaint. Early spotlight identification was superseded by the owner's always-announced spotlight policy, so this adds no hidden announcement or demand roll.
+- New desk and housekeeping candidates roll warm/polite/curt at 25/50/25, independently of experience and reliability, with wage multipliers 1.15/1/0.9. Desk service multiplies the experience duration by 0.75/1/1.2 and gives +4/0/−3 mood. A warm desk complaint gives 10 total mood (normal heard benefit: 5); a physically present warm clerk grants phone noise complaints three additional grace hours once when filed. Daily cleans give +2/0/−2 only when the actual finisher meets the guest in the room, never for DND or an absent guest.
+- A bounded per-stay encounter history identifies the staff involved. Net hospitality contributes 0.05 review points per mood point, capped at ±0.6/10. The guest inspector and a daily named checkout write-up show that same component. Repeated credit, reloads and a history reaching its cap cannot award an encounter twice. Queued service snapshots change on reassignment; service already underway keeps its original duration and traits.
+- Save v22 remains compatible: the new fields are optional and stored by the existing serializer. Missing hospitality is polite and missing specialties retain original priorities; old employees, wage agreements, experience and plans are preserved. Feature switches are separate, and no added roll consumes the shared PRNG.
 Follows: aligned-movement.md, open-floor-plan.md, late-game-economy.md
 Builds on: the 11:00 checkout, guest day trips (`OutingManager.ts`, `GUEST_OUTINGS`) and presence-aware noise, which shipped together with this proposal (see aligned-movement.md).
 
@@ -725,7 +734,7 @@ Each phase ships on its own (tests, an adversarial review, a 12-seed 400-day bal
 2. **Guests and service.** Housekeeping preference, hosted nights and "keep it down", Patience and the desk queue, Voice and complaint trips.
 3. **Money and spotlight.** Spending style, the restaurant tab, Spotlight guests and the glowing write-up, event-goers.
 4. **Staff identity.** Serial ids, names, the 3-candidate hiring card and choosing who goes; Experience, Work style, Reliability.
-5. **Staff load and shifts.** Named front desk staff and eight-hour desk shifts implemented first (2026-10-18). Stamina and fatigue, Specialty, Hospitality and Cross-trained remain.
+5. **Staff load and shifts.** Named front desk staff and eight-hour desk shifts implemented first (2026-10-18); specialties and hospitality followed (2026-10-21). Stamina and fatigue and Cross-trained remain.
 6. **Morale and quitting,** with a rehiring rule for the bots.
 
 ### Phase 1a as shipped (2026-10-12)

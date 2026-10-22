@@ -1,16 +1,51 @@
 import { useState } from 'preact/hooks';
 import type { StaffRole, StaffMember, HotelState, FrontDeskShift } from '../simulation/types';
 import { hiringCandidates } from '../simulation/StaffHiring';
-import { attendance, experienceOf, roleLabel, shiftFor, staffRate, staffWage, repairTarget, staffDutyAt, checkInHours, frontDeskOn, type StaffCandidate } from '../simulation/StaffProfiles';
+import { attendance, experienceOf, roleLabel, shiftFor, staffRate, staffWage, repairTarget, staffDutyAt, checkInHours, frontDeskOn, hospitalityOf, specialtyOf, specialtiesFor, specialtyLabel, type StaffCandidate } from '../simulation/StaffProfiles';
 import { getStaffPlan } from '../simulation/StaffManager';
 import { positionAt } from '../simulation/Movement';
-import { STAFF_PERSONALITIES, FRONT_DESK_STAFF } from '../config/staff';
+import { STAFF_PERSONALITIES, FRONT_DESK_STAFF, STAFF_HOSPITALITY, STAFF_SPECIALTIES } from '../config/staff';
 import { getUpkeepMultiplier } from '../simulation/StarRatingManager';
 import { useController, useLiveClock } from './context';
 import { capitalize } from './format';
 
 export const wageLabel = (wage: number) => `$${wage.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
 const rateLabel = (m: StaffMember) => `${Math.round(staffRate(m) * 100) / 100}×`;
+
+function specialtyDescription(member: StaffMember): string {
+  switch (specialtyOf(member)) {
+    case 'turnover_runner': return 'Turnovers first, then daily cleans.';
+    case 'room_attendant': return 'Daily cleans first; rooms with guests out first.';
+    case 'responder': return 'Repairs the worst vacant room first.';
+    case 'preventive': return 'Vacant repairs first; also services occupied rooms below 40% to 85% while guests are out. Respects Do not disturb and finishes before they return.';
+    case 'greeter': return 'Handles check-ins and complaints.';
+    case 'upseller': return 'Offers big spenders a higher room class at its price; 25% accept if a suitable room is free and within budget.';
+    case 'concierge': return 'Learns a stoic guest’s mood after serving their check-in or desk complaint.';
+  }
+}
+
+function HospitalityDetails({ member }: { member: StaffMember }) {
+  const hospitality = hospitalityOf(member);
+  const effect = member.role === 'front_desk'
+    ? hospitality === 'warm' ? '25% shorter check-ins; +4 mood at check-in. Desk complaints: +10 mood; phone noise complaints gain 3h grace.'
+      : hospitality === 'curt' ? '20% longer check-ins; −3 mood at check-in.' : 'No change to check-in time or guest mood.'
+    : member.role === 'housekeeper'
+      ? hospitality === 'warm' ? 'Daily clean with the guest present: +2 mood.'
+        : hospitality === 'curt' ? 'Daily clean with the guest present: −2 mood.' : 'No extra mood change during daily cleans.'
+      : 'No hospitality mood change during repairs.';
+  return <div class="dim tiny">Hospitality: {capitalize(hospitality)} · {effect}</div>;
+}
+
+function SpecialtyPicker({ member }: { member: StaffMember }) {
+  const c = useController();
+  return <div class="stack">
+    <label class="tiny">Specialty <select aria-label={`Specialty for ${member.name}`} value={specialtyOf(member)} disabled={member.leaving}
+      onChange={e => c.setStaffSpecialty(member.id, e.currentTarget.value as ReturnType<typeof specialtiesFor>[number])}>
+      {specialtiesFor(member.role).map(specialty => <option key={specialty} value={specialty}>{specialtyLabel(specialty)}</option>)}
+    </select></label>
+    <div class="dim tiny">{specialtyDescription(member)}</div>
+  </div>;
+}
 
 /** Current work, from the very same itinerary the world draws. */
 export function staffActivity(member: StaffMember, state: HotelState, t: number): string {
@@ -34,7 +69,7 @@ export function staffActivity(member: StaffMember, state: HotelState, t: number)
   const it = getStaffPlan(state).itineraries.find(i => i.staffId === member.id);
   const leg = it ? positionAt(it.legs, t)?.leg : undefined;
   if (leg?.kind === 'walk') return 'Walking';
-  if (leg?.kind === 'stay' && leg.job) return leg.job === 'repair' ? 'Repairing a room' : leg.job === 'turnover' ? 'Turning over a room' : 'Making up a room';
+  if (leg?.kind === 'stay' && leg.job) return leg.job === 'repair' ? leg.preventive ? 'Preventive repairs while the guest is out' : 'Repairing a room' : leg.job === 'turnover' ? 'Turning over a room' : 'Making up a room';
   if (leg?.kind === 'stay' && leg.activity === 'rest') return 'Resting';
   if (leg?.kind === 'stay' && leg.activity === 'desk') return 'At the front desk';
   return member.at ? 'Waiting for work' : 'Off site';
@@ -52,8 +87,10 @@ export function StaffDetails({ member }: { member: StaffMember }) {
     <div class="dim tiny">{Math.floor(member.stats?.workHours ?? 80)} work hours · hired day {member.hiredDay ?? 1}</div>
     {profile && !profile.legacy && !desk && <div class="dim tiny">{member.role === 'housekeeper'
       ? profile.style === 'speedy' ? 'Finishes 10 cleanliness points below the target' : profile.style === 'meticulous' ? 'Adds 10 cleanliness points; reports damage' : 'Cleans to the hotel’s target'
-      : `Repairs to ${target}% condition`}</div>}
+      : `${specialtyOf(member) === 'preventive' ? 'Vacant-room repairs' : 'Repairs'} to ${target}% condition`}</div>}
     <div class="dim tiny">Attendance: {member.stats?.lateDays ?? 0} late days · {member.stats?.absentDays ?? 0} absent days</div>
+    {STAFF_HOSPITALITY.enabled && <HospitalityDetails member={member} />}
+    {STAFF_SPECIALTIES.enabled && <SpecialtyPicker member={member} />}
     {desk && <DeskShiftPicker member={member} />}
   </>;
 }
@@ -83,7 +120,9 @@ function CandidateCard({ candidate }: { candidate: StaffCandidate }) {
     <div class="dim tiny">{candidate.profile.reliability === 'dependable' ? 'Always on time' : candidate.profile.reliability === 'flaky' ? '20% late days; 4% absent (unpaid)' : '5% late days, up to an hour'}</div>
     {!desk && <div class="dim tiny">{candidate.role === 'housekeeper'
       ? candidate.profile.style === 'speedy' ? '10 points less clean' : candidate.profile.style === 'meticulous' ? '10 points cleaner; reports damage' : 'Standard thoroughness'
-      : `Repairs to ${repairTarget(member)}% condition`}</div>}
+      : `${specialtyOf(member) === 'preventive' ? 'Vacant-room repairs' : 'Repairs'} to ${repairTarget(member)}% condition`}</div>}
+    {STAFF_SPECIALTIES.enabled && <div class="dim tiny">Specialty: {specialtyLabel(specialtyOf(member))} · {specialtyDescription(member)}</div>}
+    {STAFF_HOSPITALITY.enabled && <HospitalityDetails member={member} />}
     <button class="good" onClick={() => c.hireStaff(candidate.role, candidate.id, candidate.shift)} aria-label={`Hire ${candidate.name}`}>Hire</button>
   </li>;
 }
@@ -111,6 +150,6 @@ export function StaffPeople() {
       {Object.entries(FRONT_DESK_STAFF.shifts).map(([key, s]) => <option key={key} value={key}>{s.label}</option>)}
     </select></label>}
     <ul class="staff-candidates">{hiringCandidates(c.state, role, shift).map(candidate => <CandidateCard key={candidate.id} candidate={candidate} />)}</ul>
-    <div class="dim tiny">Candidates refresh each day and after a hire. The + button hires the best value; − lets the lowest value employee go. Experience grows through work; promotions raise speed and wages automatically. Absent days are unpaid.</div>
+    <div class="dim tiny">Candidates refresh each day and after a hire. The + button hires the best value; − lets the lowest value employee go. Reassign specialties for the work you need; hospitality is fixed at hire. Experience grows through work; promotions raise speed and wages automatically. Absent days are unpaid.</div>
   </section>;
 }

@@ -17,6 +17,7 @@ import { roomMoveTrip, isGuestAway } from './GuestMovement.js';
 import { isCheckoutDue } from './GuestManager.js';
 import { hourEnd, hourStart, legsEnd } from './Movement.js';
 import { spotlightOn, heldFrom } from './Spotlight.js';
+import { recordNoiseHospitality } from './StaffHospitality.js';
 
 // ============================================================================
 // Story log: append + chain-aware cap/eviction (design-review D11).
@@ -392,12 +393,13 @@ export function selectNewIncident(state: HotelState, prng: PRNG): { state: Hotel
 
   if (picked.kind === 'noise_complaint') {
     const { guest, room, culpritGuestId } = picked;
+    const welcome = recordNoiseHospitality(current, guest, hourEnd(current) - 1e-6);
     const roomLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
     const appended = appendStoryLogEntry(current, {
       type: 'noise_complaint',
       guestName: partyLabel(guest),
       roomId: room.id,
-      message: `${PartyLabel(guest)} filed a noise complaint about Room ${roomLabel}.`,
+      message: `${PartyLabel(guest)} filed a noise complaint about Room ${roomLabel}.${welcome.clerk ? ` ${welcome.clerk.name} reassured them: ${welcome.grace} more hours to put it right.` : ''}`,
     });
     current = appended.state;
 
@@ -408,7 +410,7 @@ export function selectNewIncident(state: HotelState, prng: PRNG): { state: Hotel
       culpritGuestId,
       roomId: room.id,
       stage: 'active',
-      hoursRemaining: STORY.noiseComplaintGraceHours,
+      hoursRemaining: STORY.noiseComplaintGraceHours + welcome.grace,
       chainId: appended.entry.chainId!,
     };
     current = {
@@ -597,6 +599,20 @@ export function recordRoomDislikes(state: HotelState, departures: DepartedGuestR
   }).state;
 }
 
+/** One named service write-up a day, from the same component used by the actual review. */
+export function recordStaffReviews(state: HotelState, departures: DepartedGuestReview[]): HotelState {
+  const chainId = `staff-review-${state.day}`;
+  if (state.storyLog.some(e => e.chainId === chainId)) return state;
+  const review = departures.filter(d => d.breakdown.hospitality)
+    .sort((a, b) => Math.abs(b.breakdown.hospitality!) - Math.abs(a.breakdown.hospitality!))[0];
+  if (!review) return state;
+  const service = review.breakdown.hospitalityPraise ?? review.breakdown.hospitalityCriticism;
+  if (!service) return state;
+  const score = review.breakdown.hospitality!;
+  return appendStoryLogEntry(state, { type: 'staff_review', guestName: review.guestName, roomId: review.roomId,
+    message: `${review.guestName}'s review: ${service} (${score > 0 ? '+' : ''}${score.toFixed(2)}/10 for hospitality).`, chainId }).state;
+}
+
 // ============================================================================
 // Review Goes Semi-Viral: attribution rule + temporary arrival penalty.
 // ============================================================================
@@ -613,6 +629,7 @@ export function attributeReviewCause(b: GuestReviewBreakdown): string {
     { label: 'pricing', magnitude: (1 - b.priceFairness) * REVIEW.basePriceFairnessWeight },
     { label: b.roomDislikes?.[0] ? FEATURE_LABELS[b.roomDislikes[0]] : 'the room', magnitude: Math.max(0, -b.roomFit) },
     { label: b.favoriteMissLabel ?? 'the facilities', magnitude: b.favoriteMiss ?? 0 },
+    { label: 'curt staff', magnitude: Math.max(0, -(b.hospitality ?? 0)) },
   ];
   let winner = candidates[0];
   for (const c of candidates.slice(1)) {

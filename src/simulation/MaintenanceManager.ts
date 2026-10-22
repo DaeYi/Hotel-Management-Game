@@ -5,6 +5,8 @@ import { hourStart } from './Movement.js';
 import { STAFF } from '../config/balance.js';
 import { getUpkeepMultiplier } from './StarRatingManager.js';
 import { getStaffPlan, plannedWork, isOnShift } from './StaffManager.js';
+import { partyOutOfRoom, housekeepingPrefOf } from './CleaningPreference.js';
+import { formatRoomLabel } from './HotelState.js';
 
 /**
  * One hour of maintenance: each room gets STAFF.maintenance.repairPerHour for
@@ -15,24 +17,41 @@ import { getStaffPlan, plannedWork, isOnShift } from './StaffManager.js';
 export function processMaintenanceTick(state: HotelState): { state: HotelState; events: GameEvent[] } {
   const events: GameEvent[] = [];
   if (!isOnShift('maintenance', state.hour)) return { state, events };
-  const work = plannedWork(getStaffPlan(state), 'repair');
+  const plan = getStaffPlan(state);
+  const work = plannedWork(plan, 'repair');
   if (work.size === 0) return { state, events };
 
   const repairAmount = STAFF.maintenance.repairPerHour;
   let repaired = 0;
   const updatedRooms = state.rooms.map(room => {
     const hours = work.get(room.id);
-    if (hours === undefined || room.status !== 'vacant') return room;
-    repaired++;
-    let finisher: string | undefined;
-    let end = -Infinity;
-    for (const it of getStaffPlan(state).itineraries) for (const leg of it.legs) {
-      if (leg.kind === 'stay' && leg.job === 'repair' && leg.placeId === room.id && leg.end > end) { end = leg.end; finisher = it.staffId; }
+    if (hours === undefined || room.status !== 'vacant' && room.status !== 'occupied') return room;
+    const guest = state.guests.find(g => g.id === room.guestId);
+    const contributions = plan.itineraries.flatMap(it => it.legs.flatMap(leg =>
+      leg.kind === 'stay' && leg.job === 'repair' && leg.placeId === room.id ? [{ leg, staffId: it.staffId }] : []))
+      .sort((a, b) => a.leg.start - b.leg.start);
+    let condition = room.condition;
+    let finishedTarget = STAFF.maintenance.conditionThreshold;
+    for (const { leg, staffId } of contributions) {
+      const start = Math.max(leg.start, plan.start), end = Math.min(leg.end, plan.start + 1);
+      if (end <= start) continue;
+      if (room.status === 'occupied' && (!leg.preventive || !guest || housekeepingPrefOf(guest) === 'dnd'
+        || !partyOutOfRoom(guest, room, start, end))) continue;
+      const member = state.staffRoster?.find(m => m.id === staffId);
+      // Every leg keeps the goal it was planned for: reassignment or a
+      // promotion cannot lower the room's condition or rewrite past work.
+      const target = leg.repairTarget ?? repairTarget(member) ?? 100;
+      condition = Math.max(condition, Math.min(target, condition + repairAmount * (end - start) * (leg.workRate ?? 1)));
+      finishedTarget = leg.repairTarget ?? repairTarget(member) ?? STAFF.maintenance.conditionThreshold;
+      if (leg.preventive && room.condition < target && condition >= target - 1e-9) events.push({
+        type: 'staff_notice',
+        message: `${member?.name ?? 'Maintenance'} serviced Room ${formatRoomLabel(room.gridX, room.gridY, room.floor)} while the guests were out (${Math.round(target)}% condition).`,
+        data: { staffId, roomId: room.id },
+      });
     }
-    const member = state.staffRoster?.find(m => m.id === finisher);
-    const target = repairTarget(member);
-    const condition = Math.min(target ?? 100, room.condition + repairAmount * hours);
-    return { ...room, condition, ...(condition >= (target ?? STAFF.maintenance.conditionThreshold) ? { damageReportedBy: undefined } : {}) };
+    if (condition === room.condition) return room;
+    repaired++;
+    return { ...room, condition, ...(condition >= finishedTarget ? { damageReportedBy: undefined } : {}) };
   });
 
   if (repaired > 0) {
