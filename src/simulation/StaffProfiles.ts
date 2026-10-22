@@ -1,17 +1,42 @@
 import type { StaffMember, StaffRole, FrontDeskShift, HotelState } from './types.js';
 import { STAFF, GUEST_NAMES, SURNAMES, HOUSEKEEPING } from '../config/balance.js';
-import { STAFF_PERSONALITIES as RULES, FRONT_DESK_STAFF } from '../config/staff.js';
+import { STAFF_PERSONALITIES as RULES, FRONT_DESK_STAFF, STAFF_SPECIALTIES, STAFF_HOSPITALITY } from '../config/staff.js';
 import { hash01 } from './Movement.js';
 import { pick } from './Party.js';
 
 export type Experience = 'rookie' | 'skilled' | 'veteran';
 export type WorkStyle = 'speedy' | 'standard' | 'meticulous';
 export type Reliability = 'dependable' | 'normal' | 'flaky';
+export type Hospitality = 'warm' | 'polite' | 'curt';
+export type StaffSpecialty = 'turnover_runner' | 'room_attendant' | 'responder' | 'preventive' | 'greeter' | 'upseller' | 'concierge';
+
+const SPECIALTIES: Record<StaffRole, StaffSpecialty[]> = {
+  housekeeper: ['turnover_runner', 'room_attendant'],
+  maintenance: ['responder', 'preventive'],
+  front_desk: ['greeter', 'upseller', 'concierge'],
+};
+const SPECIALTY_LABELS: Record<StaffSpecialty, string> = {
+  turnover_runner: 'Turnover runner', room_attendant: 'Room attendant', responder: 'Responder',
+  preventive: 'Preventive', greeter: 'Greeter', upseller: 'Upseller', concierge: 'Concierge',
+};
+export const specialtiesFor = (role: StaffRole): StaffSpecialty[] => SPECIALTIES[role];
+export const specialtyLabel = (specialty: StaffSpecialty): string => SPECIALTY_LABELS[specialty];
+export function specialtyOf(member: StaffMember): StaffSpecialty {
+  const options = specialtiesFor(member.role);
+  return RULES.enabled && STAFF_SPECIALTIES.enabled && options.includes(member.profile?.specialty as StaffSpecialty)
+    ? member.profile!.specialty! : options[0];
+}
+export function hospitalityOf(member: StaffIdentity): Hospitality {
+  const value = member.profile?.hospitality;
+  return RULES.enabled && STAFF_HOSPITALITY.enabled && (value === 'warm' || value === 'curt') ? value : 'polite';
+}
 
 export interface StaffProfile {
   experience: Experience; // the grade at hire; current grade follows workHours
   style: WorkStyle;
   reliability: Reliability;
+  specialty?: StaffSpecialty; // absent on older saves: the role's original priority
+  hospitality?: Hospitality; // absent on older saves: polite (neutral)
   legacy?: boolean; // existing staff keep their original performance and wage
 }
 
@@ -67,7 +92,8 @@ export function staffRate(member: StaffIdentity): number {
 }
 
 export function checkInHours(member: StaffIdentity): number {
-  return !frontDeskOn() || member.profile?.legacy ? 1 / STAFF.frontDesk.checkInsPerHour : FRONT_DESK_STAFF.checkInMinutes[experienceOf(member)] / 60;
+  const hours = !frontDeskOn() || member.profile?.legacy ? 1 / STAFF.frontDesk.checkInsPerHour : FRONT_DESK_STAFF.checkInMinutes[experienceOf(member)] / 60;
+  return hours * STAFF_HOSPITALITY.checkInTime[hospitalityOf(member)];
 }
 
 /** A shift is keyed by its starting day; the night shift keeps that day's attendance after midnight. */
@@ -136,8 +162,14 @@ export function candidatesFor(day: number, role: StaffRole, used: readonly strin
     const experience = pick<Experience>([['rookie', 0.6], ['skilled', 0.3], ['veteran', 0.1]], hash01(`${id}|experience`));
     const style = role === 'front_desk' ? 'standard' : pick<WorkStyle>([['speedy', 0.25], ['standard', 0.5], ['meticulous', 0.25]], hash01(`${id}|style`));
     const reliability = pick<Reliability>([['dependable', 0.25], ['normal', 0.5], ['flaky', 0.25]], hash01(`${id}|reliability`));
-    const profile = { experience, style, reliability };
-    const dailyWage = money(baseWage(role) * RULES.experienceWage[experience] * RULES.reliabilityWage[reliability] * (role === 'front_desk' && shift === 'night' ? FRONT_DESK_STAFF.nightPremium : 1));
+    const options = specialtiesFor(role);
+    const specialty = options[Math.floor(hash01(`${id}|specialty`) * options.length)];
+    const hospitality = role === 'maintenance' ? 'polite' : pick<Hospitality>([['warm', 0.25], ['polite', 0.5], ['curt', 0.25]], hash01(`${id}|hospitality`));
+    const profile: StaffProfile = { experience, style, reliability,
+      ...(STAFF_SPECIALTIES.enabled ? { specialty } : {}), ...(STAFF_HOSPITALITY.enabled ? { hospitality } : {}) };
+    const dailyWage = money(baseWage(role) * RULES.experienceWage[experience] * RULES.reliabilityWage[reliability]
+      * (STAFF_HOSPITALITY.enabled ? STAFF_HOSPITALITY.wage[hospitality] : 1)
+      * (role === 'front_desk' && shift === 'night' ? FRONT_DESK_STAFF.nightPremium : 1));
     const workHours = experience === 'rookie' ? 0 : RULES.experienceHours[experience];
     result.push({ id, role, name: staffName(id), profile, dailyWage, workHours, ...(role === 'front_desk' ? { shift } : {}) });
   }

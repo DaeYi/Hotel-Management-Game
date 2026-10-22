@@ -35,6 +35,10 @@ Front desk clerks now join the named roster. Hire for early (06:00–14:00), lat
 
 Save version 22 replaces each old 24-hour front desk position with three named shifts, retaining its total wage budget and existing coverage. Names, shifts, candidates, attendance, pay and partial movement plans survive reloads.
 
-Next: staff specialties, hospitality, fatigue and breaks, cross-training, then morale and quitting. The detailed roadmap is in [guest and staff personalities](docs/designs/guest-staff-personalities.md). Larger rooms and 3D are later milestones described in [rethinking rooms](docs/designs/rooms-rethink.md).
+Staff specialties can now be reassigned per person: turnover runners or daily room attendants; maintenance responders or preventive workers; desk greeters, upsellers or concierges. Preventive workers service occupied rooms below 40% condition to 85% only when the whole job and exit fit while the party is out, respecting do-not-disturb. Upsellers offer splurgers a suitable higher room class within their budget; concierges reveal a stoic guest's mood after meeting them at the counter.
+
+New housekeeping and desk candidates can be warm, polite or curt. Hospitality changes actual check-ins and in-room daily cleans; warm clerks handle desk complaints better and give phone noise complaints three extra hours of grace. Service encounters appear on guest cards and contribute at most ±0.6/10 to their checkout review, with named attribution. Existing saves retain neutral hospitality, original priorities and wages; new fields use the existing save format.
+
+Next: fatigue and breaks, cross-training, then morale and quitting. The detailed roadmap is in [guest and staff personalities](docs/designs/guest-staff-personalities.md). Larger rooms and 3D are later milestones described in [rethinking rooms](docs/designs/rooms-rethink.md).
 
 The simulation is in `src/simulation`, player actions and the clock in `src/game`, the Preact interface in `src/ui`, and Phaser drawing in `src/render`.

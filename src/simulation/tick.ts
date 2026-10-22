@@ -7,7 +7,8 @@ import { processObjectives, recordDailyStat } from './ObjectivesManager.js';
 import { decayDecor, processRenovationTick } from './DecorManager.js';
 import { tickCampaign } from './MarketingManager.js';
 import { formatRoomLabel, startPendingRefits } from './HotelState.js';
-import { getStaffPlan, getRoster, rosterAfter, syncStaff, planStaff } from './StaffManager.js';
+import { getStaffPlan, getRoster, rosterAfter, syncStaff, planStaff, replanStaff } from './StaffManager.js';
+import { STAFF_SPECIALTIES } from '../config/staff.js';
 import { getMannedDeskStaff } from './Layout.js';
 import { planArrivalTrips, departureWalker, tidyMovement } from './GuestMovement.js';
 import { planFacilityVisits, creditFacilityVisits } from './FacilityManager.js';
@@ -28,7 +29,7 @@ import { ECONOMY, REVIEW, HOUSEKEEPING, STAFF, ROOM_CONFIG, FACILITY_CONFIG, LOY
 import {
   driftSatisfaction, advanceIncidents, dropIncidentsForGuests, selectNewIncident,
   appendStoryLogEntry,
-  recordReturnGuestEntries, recordPartyTurnAways, checkReviewSemiViral, tickReputationPenalties, recordRoomDislikes, recordBigTabs, recordLostRegulars,
+  recordReturnGuestEntries, recordPartyTurnAways, checkReviewSemiViral, tickReputationPenalties, recordRoomDislikes, recordBigTabs, recordLostRegulars, recordStaffReviews,
 } from './StoryGenerator.js';
 import type { DepartedGuestReview } from './StoryGenerator.js';
 import { bookingWeightFor, staysOf, ordinal, personIdOf } from './Loyalty.js';
@@ -291,6 +292,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   events.push(...semiViral.events);
   // Something in the room a guest didn't like (separate beds for a couple): a story, once a day
   current = recordRoomDislikes(current, departureReviews);
+  current = recordStaffReviews(current, departureReviews);
   current = recordBigTabs(current, departureReviews); // a big restaurant tab: a story, once a day
   // A regular who won't be back (unhappier than last time, or walked out)
   events.push(...walkoutLost);
@@ -431,7 +433,8 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   current = planOutings(current);
   current = planVisitors(current); // a rowdy guest's friends round, at 22:00
   current = { ...current, staffPlan: planStaff(current) };
-  current = reseatLanes(current, T);
+  const seated = reseatLanes(current, T);
+  current = seated !== current && STAFF_SPECIALTIES.enabled ? replanStaff(seated, T) : seated;
 
   return { state: current, events };
 }

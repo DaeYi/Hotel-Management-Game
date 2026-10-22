@@ -299,5 +299,5 @@ describe('Balance: reinvesting beats hoarding', () => {
     expect(avg(balanced.map(r => r.finalStarRating))).toBeGreaterThan(avg(hoarder.map(r => r.finalStarRating)));
     // The cash pile no longer runs away: balanced keeps spending
     expect(avg(balanced.map(r => r.finalCash))).toBeLessThan(avg(hoarder.map(r => r.finalCash)));
-  }, 300000); // Twelve 400-day runs need headroom on shared CI runners.
+  }, 600000); // The same twelve 400-day runs exceeded five minutes on a slow release runner.
 });

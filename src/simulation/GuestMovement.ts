@@ -9,6 +9,7 @@ import { guestPace } from './Profile.js';
 import { guestMood } from './Mood.js';
 import { physicalDeskLanes } from './FrontDesk.js';
 import { namedFrontDesk } from './StaffProfiles.js';
+import { serviceSnapshot } from './StaffHospitality.js';
 
 // Guests' comings and goings as trips the simulation plans when it decides
 // them: walking in from the street and checking in at a staffed desk, heading
@@ -143,7 +144,7 @@ export function planArrivalTrips(
     const start = Math.max(at, desk!.start);
     if (start > at + 1e-12) legs.push(makeStay(lane.front, at, start, 'wait', { placeId: lane.desk.id, lane: desk!.lane }));
     const hours = desk!.hours ?? CHECK_IN_HOURS;
-    legs.push(makeStay(lane.front, start, start + hours, 'check_in', { placeId: lane.desk.id, lane: desk!.lane, serviceStaffId: desk!.staffId }));
+    legs.push(makeStay(lane.front, start, start + hours, 'check_in', { placeId: lane.desk.id, lane: desk!.lane, ...serviceSnapshot(state.staffRoster?.find(m => m.id === desk!.staffId)) }));
     const toRoom = routeVia(state, lane.front, roomTile(room), pace);
     if (toRoom) legs.push(...walkLegs(toRoom, start + hours, pace));
     trips.set(guest.id, legs);

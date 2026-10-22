@@ -10,6 +10,7 @@ import { visitorsOf, visitorsAt, inRoomStay, hostingDay, isAsleepAt, visitorPoli
 import { calculateRoomNoise, getLoudestNeighborGuestId } from './NoiseManager.js';
 import { appendStoryLogEntry } from './StoryGenerator.js';
 import { formatRoomLabel } from './HotelState.js';
+import { recordNoiseHospitality } from './StaffHospitality.js';
 
 // Hosted nights (docs/designs/guest-staff-personalities.md, Rowdiness): on one
 // night of their stay, picked from their booking, half of rowdy guests -- if
@@ -198,11 +199,12 @@ export function fileVisitorComplaints(state: HotelState, T: number, leaving: Rea
       message: `Room ${hostLabel} has ${count === 1 ? 'a visitor' : `${count} visitors`}${Number.isFinite(since) ? ` (since ${clockTime(since)})` : ''}.`,
       chainId,
     }).state;
+    const welcome = recordNoiseHospitality(current, complainer, T - 1e-6);
     const filed = appendStoryLogEntry(current, {
       type: 'noise_complaint_visitors',
       guestName: partyLabel(complainer),
       roomId: room.id,
-      message: `${PartyLabel(complainer)} in Room ${label} complained about the noise.`,
+      message: `${PartyLabel(complainer)} in Room ${label} complained about the noise.${welcome.clerk ? ` ${welcome.clerk.name} reassured them: ${welcome.grace} more hours to put it right.` : ''}`,
       chainId,
     });
     current = filed.state;
@@ -213,7 +215,7 @@ export function fileVisitorComplaints(state: HotelState, T: number, leaving: Rea
       culpritGuestId: host.id,
       roomId: room.id,
       stage: 'active',
-      hoursRemaining: HOSTED_NIGHTS.complaintGraceHours,
+      hoursRemaining: HOSTED_NIGHTS.complaintGraceHours + welcome.grace,
       chainId,
       about: 'visitors',
     };

@@ -7,6 +7,9 @@ import { isCheckoutDay } from './GuestManager.js';
 import { occupantFactor, guestsById } from './Party.js';
 import { housekeepingPrefOf } from './CleaningPreference.js';
 import { cleanlinessDelta, staffRate, attendanceShare, attendance } from './StaffProfiles.js';
+import { recordHospitality } from './StaffHospitality.js';
+import { guestTileAt } from './GuestMovement.js';
+import { sameTile } from './Movement.js';
 
 /**
  * Start turnover cleaning on a room after guest checkout. The housekeepers'
@@ -70,6 +73,7 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
   const prefs = GUEST_HOUSEKEEPING.enabled;
   const guests = prefs ? guestsById(state) : new Map<string, Guest>();
   const tally = new Map<string, 'done' | 'missed'>();
+  const hospitality = new Map<string, { member: NonNullable<ReturnType<typeof finisher>>; at: number }>();
 
   const updatedRooms = state.rooms.map(room => {
     const turnover = turnoverWork.get(room.id);
@@ -91,6 +95,12 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
       const remaining = room.dailyCleanHoursRemaining - (dailyWork.get(room.id) ?? 0);
       if (remaining <= 1e-9) {
         const by = cleanRecord(room, 'daily');
+        const member = finisher(room.id, 'daily');
+        const guest = state.guests.find(g => g.id === room.guestId);
+        const at = Math.max(...plan.itineraries.flatMap(it => it.legs.flatMap(leg =>
+          leg.kind === 'stay' && leg.job === 'daily' && leg.placeId === room.id ? [leg.end] : [])));
+        const tile = guest && guestTileAt(state, guest, at);
+        if (member && guest && housekeepingPrefOf(guest) !== 'dnd' && tile && sameTile(tile, room)) hospitality.set(guest.id, { member, at });
         dailyDone++;
         dailyCost += HOUSEKEEPING.dailyCleaningCost;
         if (prefs && room.guestId) tally.set(room.guestId, 'done');
@@ -135,11 +145,15 @@ export function processCleaningTick(state: HotelState): { state: HotelState; eve
       data: { roomsLeft: dndLeft },
     });
   }
-  const guestsAfter = tally.size === 0 ? state.guests : state.guests.map(g => {
+  const guestsAfter = tally.size === 0 && hospitality.size === 0 ? state.guests : state.guests.map(g => {
     const how = tally.get(g.id);
-    if (!how) return g;
-    const cleans = g.cleans ?? { done: 0, missed: 0 };
-    return { ...g, cleans: { ...cleans, [how]: cleans[how] + 1 } };
+    const contact = hospitality.get(g.id);
+    let guest = g;
+    if (how) {
+      const cleans = g.cleans ?? { done: 0, missed: 0 };
+      guest = { ...g, cleans: { ...cleans, [how]: cleans[how] + 1 } };
+    }
+    return contact ? recordHospitality(guest, contact.member, 'daily_clean', contact.at) : guest;
   });
 
   return {

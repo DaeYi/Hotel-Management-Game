@@ -6,6 +6,8 @@ import { routeFromStreet } from './Layout.js';
 import { hash01, makeStay, sameTile } from './Movement.js';
 import { scheduledDeskLanes, type DeskDuty } from './FrontDesk.js';
 import { namedFrontDesk } from './StaffProfiles.js';
+import { serviceSnapshot, serviceMember, recordHospitality } from './StaffHospitality.js';
+import { offerUpsell } from './StaffSpecialties.js';
 
 // The front desk queue (docs/designs/guest-staff-personalities.md, Patience):
 // each seated clerk is a lane, and what a lane is doing is read from people's
@@ -200,6 +202,7 @@ export function creditCheckIns(state: HotelState, T: number): HotelState {
   if (!queueOn(state)) return state;
   let today = deskToday(state);
   let changed = false;
+  const encounters: Array<{ guestId: string; stay: StayLeg }> = [];
   const guests = state.guests.map(g => {
     if (g.tripKind !== 'arrival' || !g.trip || g.checkInWait !== undefined) return g; // (one check-in a stay)
     const i = g.trip.findIndex(l => l.kind === 'stay' && l.activity === 'check_in' && l.lane !== undefined && !l.credited && l.start < T);
@@ -213,9 +216,17 @@ export function creditCheckIns(state: HotelState, T: number): HotelState {
     today = { ...today, checkedIn: today.checkedIn + 1, waitHours: today.waitHours + waited, longestWait: Math.max(today.longestWait, waited) };
     changed = true;
     const trip = g.trip.map((l, k) => (k === i ? { ...l, credited: true } : l));
-    return { ...g, trip, checkInWait: waited, satisfaction: Math.max(0, g.satisfaction - loss) };
+    const next = { ...g, trip, checkInWait: waited, satisfaction: Math.max(0, g.satisfaction - loss) };
+    const member = serviceMember(state, stay);
+    encounters.push({ guestId: g.id, stay });
+    return member ? recordHospitality(next, member, 'check_in', stay.start) : next;
   });
-  return changed ? { ...state, guests, deskToday: today } : state;
+  let current = changed ? { ...state, guests, deskToday: today } : state;
+  for (const { guestId, stay } of encounters) {
+    const member = serviceMember(current, stay);
+    if (member) current = offerUpsell(current, guestId, member, stay, T);
+  }
+  return current;
 }
 
 /** Legs moved later (or earlier) by `delta` hours: walks keep their paths. */
@@ -259,7 +270,7 @@ export function reseatLanes(state: HotelState, t: number): HotelState {
         book(busy, stay.lane, stay.start, stay.end); // being served: carries on
         if (!stay.serviceStaffId && duty) {
           changed = true;
-          return { ...g, trip: trip.map((l, i) => i === index ? { ...stay, serviceStaffId: duty.staffId } : l) };
+          return { ...g, trip: trip.map((l, i) => i === index ? { ...stay, ...serviceSnapshot(state.staffRoster?.find(m => m.id === duty.staffId)) } : l) };
         }
         return g;
       }
@@ -297,15 +308,17 @@ export function reseatLanes(state: HotelState, t: number): HotelState {
       if (namedFrontDesk(state)) {
         const start = Math.max(from + 24, stay.start);
         const wait = [makeStay(stay.at, m.ready, start, 'wait', { placeId: stay.placeId, lane: stay.lane })];
-        byId.set(g.id, { ...g, trip: [...head, ...wait, { ...stay, start, end: start + hours, serviceStaffId: undefined }, ...shiftLegs(tail, start + hours - stay.end)] });
+        byId.set(g.id, { ...g, trip: [...head, ...wait, { ...stay, start, end: start + hours, ...serviceSnapshot(undefined) }, ...shiftLegs(tail, start + hours - stay.end)] });
         changed = true;
       }
       continue;
     }
     book(busy, slot.lane.key, slot.start, slot.start + slot.hours);
     const wait = slot.start > m.ready + 1e-12 ? [makeStay(stay.at, m.ready, slot.start, 'wait', { placeId: stay.placeId, lane: slot.lane.key })] : [];
-    const next: Leg[] = [...head, ...wait, { ...stay, start: slot.start, end: slot.start + slot.hours, lane: slot.lane.key, serviceStaffId: slot.staffId }, ...shiftLegs(tail, slot.start + slot.hours - stay.end)];
-    const same = next.length === trip.length && next.every((l, k) => l.start === trip[k].start && l.end === trip[k].end && (l.kind !== 'stay' || l.lane === (trip[k] as StayLeg).lane && l.serviceStaffId === (trip[k] as StayLeg).serviceStaffId));
+    const next: Leg[] = [...head, ...wait, { ...stay, start: slot.start, end: slot.start + slot.hours, lane: slot.lane.key, serviceStaffId: slot.staffId,
+      ...serviceSnapshot(state.staffRoster?.find(m => m.id === slot.staffId)) }, ...shiftLegs(tail, slot.start + slot.hours - stay.end)];
+    const same = next.length === trip.length && next.every((l, k) => l.start === trip[k].start && l.end === trip[k].end && (l.kind !== 'stay' || l.lane === (trip[k] as StayLeg).lane && l.serviceStaffId === (trip[k] as StayLeg).serviceStaffId
+      && l.serviceHospitality === (trip[k] as StayLeg).serviceHospitality && l.serviceSpecialty === (trip[k] as StayLeg).serviceSpecialty && l.serviceName === (trip[k] as StayLeg).serviceName));
     if (!same) {
       byId.set(g.id, { ...g, trip: next });
       changed = true;

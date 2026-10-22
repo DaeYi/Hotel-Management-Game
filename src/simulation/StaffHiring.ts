@@ -1,11 +1,18 @@
 import type { HotelState, StaffMember, StaffRole, FrontDeskShift } from './types.js';
-import { STAFF_PERSONALITIES, FRONT_DESK_STAFF } from '../config/staff.js';
+import { STAFF_PERSONALITIES, FRONT_DESK_STAFF, STAFF_SPECIALTIES } from '../config/staff.js';
 import { HOUSEKEEPING, STAFF } from '../config/balance.js';
-import { candidatesFor, staffName, staffValue, baseWage, frontDeskOn, namedFrontDesk, staffDutyAt, deskPaidHours, type StaffCandidate } from './StaffProfiles.js';
+import { candidatesFor, staffName, staffValue, baseWage, frontDeskOn, namedFrontDesk, staffDutyAt, deskPaidHours, specialtiesFor, type StaffCandidate, type StaffSpecialty } from './StaffProfiles.js';
 import { hourStart } from './Movement.js';
 import { physicalDeskLanes } from './FrontDesk.js';
 
 export const staffKey = (role: StaffRole) => role === 'housekeeper' ? 'housekeepers' : role === 'front_desk' ? 'frontDesk' : 'maintenanceWorkers';
+
+export function assignStaffSpecialty(state: HotelState, id: string, specialty: StaffSpecialty): HotelState | null {
+  const member = state.staffRoster?.find(m => m.id === id && !m.leaving);
+  if (!STAFF_PERSONALITIES.enabled || !STAFF_SPECIALTIES.enabled || !member?.profile
+    || !specialtiesFor(member.role).includes(specialty) || member.profile.specialty === specialty) return null;
+  return { ...state, staffRoster: state.staffRoster!.map(m => m.id === id ? { ...m, profile: { ...m.profile!, specialty } } : m) };
+}
 
 /** Older 24-hour positions become three named shifts, preserving coverage and the agreed total wage. */
 export function initializeFrontDesk(state: HotelState, legacy = false): HotelState {

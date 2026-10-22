@@ -11,7 +11,8 @@ import {
 } from '../simulation/HotelState';
 import { rotateDirection, doorTile, isReachableHallway } from '../simulation/Layout';
 import { getStaffPlan, syncStaff } from '../simulation/StaffManager';
-import { hireCandidate, dismissStaff, assignDeskShift } from '../simulation/StaffHiring';
+import { hireCandidate, dismissStaff, assignDeskShift, assignStaffSpecialty } from '../simulation/StaffHiring';
+import type { StaffSpecialty } from '../simulation/StaffProfiles';
 import type { StaffRole, FrontDeskShift } from '../simulation/types';
 import { settleChanges } from '../simulation/Settle';
 import { furnishingOf } from '../simulation/RoomProfile';
@@ -547,6 +548,10 @@ export class GameController {
 
   setDeskShift(staffId: string, shift: FrontDeskShift) {
     return this.apply(assignDeskShift(this.state, staffId, shift, this.gameTime));
+  }
+
+  setStaffSpecialty(staffId: string, specialty: StaffSpecialty) {
+    return this.apply(assignStaffSpecialty(this.state, staffId, specialty));
   }
 
   setHousekeeping(turnoverQuality: CleaningQuality, dailyCadence: DailyCleaningCadence) {

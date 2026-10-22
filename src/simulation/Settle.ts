@@ -5,11 +5,11 @@ import { STAFF_PERSONALITIES } from '../config/staff.js';
 import { rerouteTrips, checkInLanes } from './GuestMovement.js';
 import { GUEST_HOUSEKEEPING } from '../config/balance.js';
 import { reseatLanes } from './DeskQueue.js';
-import { namedFrontDesk } from './StaffProfiles.js';
+import { namedFrontDesk, specialtyOf, hospitalityOf } from './StaffProfiles.js';
 
 /** Who's checking guests in, and where. */
 function lanesKey(state: HotelState): string {
-  return checkInLanes(state).map(l => `${l.desk.id}:${l.seat}`).join(',') + (namedFrontDesk(state) ? (state.staffRoster ?? []).filter(m => m.role === 'front_desk').map(m => `${m.id}:${m.leaving}:${m.shift}:${m.restUntil}`).join(',') : '');
+  return checkInLanes(state).map(l => `${l.desk.id}:${l.seat}`).join(',') + (namedFrontDesk(state) ? (state.staffRoster ?? []).filter(m => m.role === 'front_desk').map(m => `${m.id}:${m.leaving}:${m.shift}:${m.restUntil}:${specialtyOf(m)}:${hospitalityOf(m)}`).join(',') : '');
 }
 
 /**
@@ -29,7 +29,11 @@ export function settleChanges(before: HotelState, after: HotelState, t: number):
   let state = after;
   if (namedFrontDesk(state)) {
     if (workChanged) state = replanStaff(state, t);
-    if (lanesChanged) state = reseatLanes(rerouteTrips(state, t), t);
+    if (lanesChanged) {
+      state = reseatLanes(rerouteTrips(state, t), t);
+      // Room workers must use the guests' final routes and return times.
+      if (workChanged) state = replanStaff(state, t);
+    }
     return state;
   }
   // Guests first, so the staff plan around where they'll really be (a do-not-disturb room is

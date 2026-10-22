@@ -5,11 +5,11 @@ import { isRoomReachable } from './HotelState.js';
 import { isGuestAway } from './GuestMovement.js';
 import { hourStart, makeWalk, makeStay, truncateLegs, sameTile, finalTile, positionAt, walkProgress, stepStillOpen, legsEnd } from './Movement.js';
 import { guestsById } from './Party.js';
-import { housekeepingPrefOf, dndOpening, dndCleanStart, dndSetOff } from './CleaningPreference.js';
+import { housekeepingPrefOf, dndOpening, dndCleanStart, dndSetOff, partyOutOfRoom } from './CleaningPreference.js';
 import { isSleepHour } from './Profile.js';
-import { STAFF_PERSONALITIES } from '../config/staff.js';
+import { STAFF_PERSONALITIES, STAFF_SPECIALTIES } from '../config/staff.js';
 import { reconcileStaff, initializeFrontDesk } from './StaffHiring.js';
-import { staffRate, attendance, afterWork, repairTarget, nextStaffWork, staffDutyAt, shiftFor } from './StaffProfiles.js';
+import { staffRate, attendance, afterWork, repairTarget, nextStaffWork, staffDutyAt, shiftFor, specialtyOf, hospitalityOf } from './StaffProfiles.js';
 import { planDeskClerk } from './FrontDesk.js';
 
 // Housekeepers and maintenance workers are people with a place in the
@@ -113,6 +113,7 @@ interface Job {
   room: Room;
   kind: 'turnover' | 'daily' | 'repair';
   hours: number; // work it still needs (Infinity: as long as there's time)
+  preventive?: boolean;
 }
 
 /**
@@ -196,10 +197,16 @@ function roomClearAt(state: HotelState, room: Room): number {
   const T = hourStart(state);
   let clear = T;
   const tile = roomTile(room);
+  const movingRooms = STAFF_PERSONALITIES.enabled && STAFF_SPECIALTIES.enabled;
   for (const legs of [...state.guests.map(g => g.trip ?? []), ...(state.walkers ?? []).map(w => w.trip)]) {
-    const first = legs[0];
-    if (!first || first.kind !== 'walk' || first.path.length < 2 || first.start < T - 1e-9 || !sameTile(first.path[0], tile)) continue;
-    clear = Math.max(clear, first.start + stepHours(first.path[0], first.path[1], first.hoursPerTile));
+    for (const leg of movingRooms ? legs : legs.slice(0, 1)) {
+      if (leg.kind !== 'walk' || leg.path.length < 2 || !sameTile(leg.path[0], tile)) continue;
+      const left = leg.start + stepHours(leg.path[0], leg.path[1], leg.hoursPerTile);
+      // A preserved arrival history may precede a room move. Only a
+      // departure crossing this hour matters, including a step begun before
+      // its boundary; an old completed walk cannot hold the room up.
+      if (movingRooms ? leg.start < T + 1 && left > T : leg.start >= T - 1e-9) clear = Math.max(clear, left);
+    }
   }
   return clear;
 }
@@ -220,13 +227,35 @@ export function planStaff(
   const end = T + 1;
   const pace = TRAVEL.hoursPerTile;
   const queues = jobQueues(state, done);
+  const personalQueues = new Map(roster.map(m => {
+    let queue = queues[m.role];
+    const specialty = specialtyOf(m);
+    if (specialty === 'room_attendant') {
+      const out = (j: Job) => {
+        const guest = state.guests.find(g => g.id === j.room.guestId);
+        return !!guest && partyOutOfRoom(guest, j.room, T + 0.5, T + 0.5);
+      };
+      queue = [...queue.filter(j => j.kind === 'daily').sort((a, b) => Number(out(b)) - Number(out(a))), ...queue.filter(j => j.kind !== 'daily')];
+    } else if (specialty === 'preventive') {
+      const previous = state.staffPlan?.itineraries.find(it => it.staffId === m.id);
+      const preventive = state.rooms.filter(room => room.status === 'occupied' && isRoomReachable(state, room)
+        && (room.condition < STAFF_SPECIALTIES.preventiveBelow || room.id === m.roomId && room.condition < STAFF_SPECIALTIES.preventiveTarget
+          && previous?.legs.some(l => l.kind === 'stay' && l.placeId === room.id && l.preventive))
+        && housekeepingPrefOf(state.guests.find(g => g.id === room.guestId)) !== 'dnd')
+        .sort((a, b) => a.condition - b.condition)
+        .map(room => ({ room, kind: 'repair' as const, hours: Infinity, preventive: true }));
+      // Vacant rooms retain priority; preventive work uses otherwise spare time.
+      queue = [...queue, ...preventive];
+    }
+    return [m.id, queue] as const;
+  }));
   const claimed = new Set<string>();
 
   // Each worker's own room comes first: reserve those before anyone picks
   const sticky = new Map<string, Job>();
   for (const m of roster) {
     if (!m.roomId || m.leaving || !isOnShift(m.role, state.hour) || nextStaffWork(m, from) >= end) continue;
-    const job = queues[m.role].find(j => j.room.id === m.roomId && !claimed.has(j.room.id));
+    const job = personalQueues.get(m.id)!.find(j => j.room.id === m.roomId && !claimed.has(j.room.id));
     if (job) {
       sticky.set(m.id, job);
       claimed.add(job.room.id);
@@ -237,8 +266,9 @@ export function planStaff(
     if (m.role === 'front_desk') return planDeskClerk(roster === state.staffRoster ? state : { ...state, staffRoster: roster, staffPlan: undefined }, m, from);
     const rate = staffRate(m);
     const targetCondition = repairTarget(m);
-    const needed = (j: Job) => j.kind === 'repair' && targetCondition !== null
-      ? Math.max(0, (targetCondition - j.room.condition) / STAFF.maintenance.repairPerHour - (done?.repair?.get(j.room.id) ?? 0)) : j.hours;
+    const goal = (j: Job) => j.preventive ? STAFF_SPECIALTIES.preventiveTarget : targetCondition;
+    const needed = (j: Job) => j.kind === 'repair' && goal(j) !== null
+      ? Math.max(0, (goal(j)! - j.room.condition) / STAFF.maintenance.repairPerHour - (done?.repair?.get(j.room.id) ?? 0)) : j.hours;
     const a = attendance(m, state.day);
     const dutyFrom = (state.day - 1) * 24 + shiftOf(m.role).workStartHour + a.lateHours;
     const onDuty = !a.absent && isOnShift(m.role, state.hour) && dutyFrom < end;
@@ -309,7 +339,7 @@ export function planStaff(
 
     // Work through jobs until the hour is up. A job is only taken once there's
     // a way to it from here, so a worker who's cut off doesn't hog the queue.
-    const queue = queues[m.role];
+    const queue = personalQueues.get(m.id)!;
     const unreachable = new Set<string>();
     // Do-not-disturb rooms turned down at a moment (their guests not out yet, or back too soon): tried again once time moves on
     const notNow = new Map<string, number>();
@@ -390,6 +420,31 @@ export function planStaff(
         job = undefined;
         continue;
       }
+      if (job.preventive) {
+        const guest = state.guests.find(g => g.id === job!.room.guestId);
+        const exit = stepHours(target, doorTile(job.room, job.room.door), pace);
+        const work = needed(job) / rate;
+        const arrive = t + way.approach;
+        const enter = guest ? dndCleanStart(guest, job.room, arrive, way.step + work + exit) : null;
+        const shiftEnd = (state.day - 1) * 24 + shiftOf(m.role).workEndHour;
+        if (enter === null || enter + way.step + work + exit > shiftEnd + 1e-9) {
+          turnDown(job.room.id);
+          job = undefined;
+          continue;
+        }
+        claimed.add(job.room.id);
+        if (way.route) walk({ path: way.route.path.slice(0, -1) });
+        if (t >= end - 1e-9) { roomId = job.room.id; break; }
+        if (enter > t + 1e-9) {
+          legs.push(makeStay(pos!, t, Math.min(enter, end), 'wait'));
+          t = Math.min(enter, end);
+          if (t >= end - 1e-9) { roomId = job.room.id; break; }
+        }
+        if (way.route) {
+          walk({ path: [pos!, target] });
+          if (t >= end - 1e-9) { roomId = job.room.id; break; }
+        }
+      } else
       if (isDnd(job)) {
         // Do not disturb: wait outside the door, step in only once the whole party is out,
         // and only if they'll stay out till it's done
@@ -429,7 +484,21 @@ export function planStaff(
           }
         }
       } else {
-        if (way.route) {
+        const clear = job.kind !== 'daily' && GUEST_PROFILE.enabled ? roomClearAt(state, job.room) : T;
+        if (way.route && STAFF_PERSONALITIES.enabled && STAFF_SPECIALTIES.enabled && clear > t + way.approach + 1e-9) {
+          claimed.add(job.room.id);
+          // Wait in the hall, before the step into the room: a party's last
+          // member must have left even when its move follows older trip legs.
+          walk({ path: way.route.path.slice(0, -1) });
+          if (t >= end - 1e-9) { roomId = job.room.id; break; }
+          if (clear > t) {
+            legs.push(makeStay(pos!, t, Math.min(clear, end), 'wait'));
+            t = Math.min(clear, end);
+            if (t >= end - 1e-9) { roomId = job.room.id; break; }
+          }
+          walk({ path: [pos!, target] });
+          if (t >= end) { roomId = job.room.id; break; }
+        } else if (way.route) {
           claimed.add(job.room.id);
           walk(way.route);
           if (t >= end) {
@@ -454,8 +523,16 @@ export function planStaff(
       }
       const required = needed(job);
       const work = Math.min(required / rate, end - t);
-      legs.push(makeStay(target, t, t + work, job.kind === 'repair' ? 'repair' : 'clean', { placeId: job.room.id, job: job.kind, ...(rate !== 1 ? { workRate: rate } : {}) }));
+      legs.push(makeStay(target, t, t + work, job.kind === 'repair' ? 'repair' : 'clean', { placeId: job.room.id, job: job.kind, ...(rate !== 1 ? { workRate: rate } : {}),
+        ...(job.kind === 'repair' && STAFF_SPECIALTIES.enabled ? { repairTarget: goal(job) ?? 100, ...(job.preventive ? { preventive: true } : {}) } : {}) }));
       t += work;
+      if (job.preventive && required - work * rate <= 1e-9) {
+        // Finishing at the hour boundary still schedules the step out: the
+        // guest's return must never find a worker left resting in their room.
+        walk({ path: [target, doorTile(job.room, job.room.door)] });
+        job = undefined;
+        continue;
+      }
       if ((job.kind === 'repair' && targetCondition === null) || t >= end - 1e-9) {
         roomId = job.room.id;
         if (required - work * rate <= 1e-9) roomId = undefined;
@@ -575,6 +652,6 @@ function legsBefore(legs: Leg[], leg: Leg): Leg[] {
 
 /** What there is for staff to do: which rooms need cleaning or repair. When it changes mid-hour, re-plan (replanStaff). */
 export function staffWorkKey(state: HotelState): string {
-  const people = STAFF_PERSONALITIES.enabled ? (state.staffRoster ?? []).map(m => `${m.id}:${!!m.leaving}:${staffRate(m)}:${m.shift}:${m.restUntil}`).join(',') : '';
+  const people = STAFF_PERSONALITIES.enabled ? (state.staffRoster ?? []).map(m => `${m.id}:${!!m.leaving}:${staffRate(m)}:${m.shift}:${m.restUntil}:${specialtyOf(m)}:${hospitalityOf(m)}`).join(',') : '';
   return state.rooms.map(r => `${r.id}:${r.status}:${r.condition < STAFF.maintenance.conditionThreshold ? 1 : 0}`).join(',') + people;
 }

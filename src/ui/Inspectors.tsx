@@ -18,7 +18,7 @@ import { guestTags, describeRhythm, describeTemperament, sleepHours, favoriteOf,
 import { housekeepingPrefOf, describeHousekeeping } from '../simulation/CleaningPreference';
 import { isAsleepAt, isHosting, theVisitors, visitorCount } from '../simulation/Visitors';
 import { describeVisitors, canAskVisitorsToLeave, clockTime } from '../simulation/HostedNights';
-import { moodHidden } from '../simulation/Voice';
+import { hospitalityReview, isMoodKnown } from '../simulation/StaffHospitality';
 import { spendingOn, spendingOf, spentHere, saleFor } from '../simulation/Spending';
 import { describeLoyalty } from '../simulation/Loyalty';
 import { spotlightOn, holdFor, holdBlocksRenovation, describeSpotlight } from '../simulation/Spotlight';
@@ -285,6 +285,25 @@ function formatClock(t: number): string {
   return `${String(Math.round(t) % 24).padStart(2, '0')}:00`;
 }
 
+function GuestServiceNotes({ guest }: { guest: Guest }) {
+  const service = guest.service;
+  if (!service) return null;
+  const review = hospitalityReview(guest);
+  const signed = (amount: number) => `${amount > 0 ? '+' : ''}${Number(amount.toFixed(2))}`;
+  const kindLabel = { check_in: 'check-in', complaint: 'complaint', daily_clean: 'daily clean' };
+  return <div class="stack" aria-label="Staff encounters">
+    {service.contacts.length > 0 && <div class="dim tiny">Recent staff encounters</div>}
+    {service.contacts.slice(-3).map((contact, i) => <div key={`${contact.staffId}|${contact.at}|${i}`} class="small">
+      {contact.name}: {kindLabel[contact.kind]} · {contact.hospitality} · day {Math.floor(contact.at / 24) + 1}, {clockTime(contact.at)}{contact.mood !== 0 ? ` · ${signed(contact.mood)} mood from hospitality` : ''}
+    </div>)}
+    {service.concierge && <div class="small">{service.concierge.name} learned their mood during a desk conversation.</div>}
+    {service.upsell && <div class="small">{service.upsell.name} arranged an upgrade: {capitalize(service.upsell.fromType)} to {service.upsell.toType} (+{formatMoney(service.upsell.extraPerNight)}/night).</div>}
+    {review.score !== 0 && <div class={`small ${review.score > 0 ? 'good-text' : 'warn-text'}`}>Hospitality: {signed(review.score)}/10 review contribution.</div>}
+    {review.praise && <div class="good-text small">{review.praise}</div>}
+    {review.criticism && <div class="warn-text small">{review.criticism}</div>}
+  </div>;
+}
+
 export function guestWhereabouts(guest: Guest, state: HotelState, t: number): string | null {
   const trip = guest.trip;
   if (!trip || trip.length === 0 || t >= legsEnd(trip)) return null;
@@ -359,7 +378,7 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
   const complained = guest.complaint?.at !== undefined
     ? `${guest.complaint.via === 'phone' ? 'Rang the front desk' : 'Complained at the front desk'} about ${guest.complaint.about} (${clockTime(guest.complaint.at)})`
     : null;
-  const hidden = moodHidden(guest);
+  const hidden = !isMoodKnown(guest);
   // Which night of the stay: before they wake, they're still in the night that began yesterday
   const night = Math.min(guest.stayLength, Math.max(1, state.day - guest.checkInDay + (state.hour < sleepHours(guest)[1] ? 0 : 1)));
   const fit = room ? roomFit(profileRoom(room), guest) : null;
@@ -391,6 +410,7 @@ function GuestInspector({ guestId, anchor, state }: { guestId: string; anchor: T
         </div>
       )}
       <pre class="stats">{hidden ? 'Mood:  ? (keeps it to themselves)' : `Mood:  ${formatBar(guest.satisfaction)} ${Math.floor(guest.satisfaction)}%${MOOD.enabled ? ` ${guestMood(guest)}` : ''}`}</pre>
+      <GuestServiceNotes guest={guest} />
       {visitors && (
         <div class="small visitors">
           {visitors}{' '}<AskVisitorsButton hostId={guest.id} state={state} />

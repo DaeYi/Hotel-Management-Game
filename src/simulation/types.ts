@@ -1,5 +1,5 @@
 import type { FurnitureKind, Tier, Rot, PresetId, ArrangementId } from '../config/furniture';
-import type { StaffIdentity } from './StaffProfiles';
+import type { StaffIdentity, Hospitality, StaffSpecialty } from './StaffProfiles';
 export type RoomType = 'standard' | 'deluxe' | 'suite';
 export type FacilityType = 'gym' | 'restaurant' | 'pool' | 'shop';
 export type TileType = RoomType | FacilityType;
@@ -178,6 +178,16 @@ export interface Guest {
   hostedNight?: { day: number; visitors: number; keptDownAt?: number; complainedBy?: string };
   // How long they stood in line to check in (hours; see DeskQueue.ts)
   checkInWait?: number;
+  checkInPriceTolerance?: number; // agreed at booking; an upseller still respects it
+  service?: {
+    contacts: Array<{ staffId: string; name: string; kind: 'check_in' | 'complaint' | 'daily_clean'; at: number; hospitality: Hospitality; mood: number }>;
+    hospitalityMood: number;
+    checkedIn?: boolean;
+    complained?: boolean;
+    lastDailyCleanDay?: number;
+    concierge?: { staffId: string; name: string; at: number };
+    upsell?: { staffId: string; name: string; fromRoomId: string; fromType: RoomType; toType: RoomType; extraPerNight: number; at: number };
+  };
   // Their complaint this stay (see Complaints.ts): what about, in person or by phone, and when it was heard (absent: on their way)
   complaint?: { about: string; cause?: string; via: 'desk' | 'phone'; at?: number };
   spent?: { shop: number; restaurant: number }; // what they've spent on site this stay (see Spending.ts)
@@ -222,6 +232,11 @@ export interface StayLeg {
   out?: 'beach' | 'breakfast' | 'lunch' | 'dinner'; // an outing instead of a facility the hotel doesn't have
   lane?: string; // the front desk clerk ("deskId:seat") a check-in or complaint takes, and whose line a wait is in (see DeskQueue.ts)
   serviceStaffId?: string; // the employee who actually supplies this service
+  serviceName?: string;
+  serviceHospitality?: Hospitality;
+  serviceSpecialty?: StaffSpecialty;
+  repairTarget?: number; // condition goal agreed when this repair was planned
+  preventive?: boolean; // occupied-room work, confined to the party's away window
 }
 
 export type Leg = WalkLeg | StayLeg;

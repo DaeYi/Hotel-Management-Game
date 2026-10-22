@@ -1,5 +1,5 @@
 import { it, expect } from 'vitest';
-import { staffRate } from '../src/simulation/StaffProfiles.js';
+import { staffRate, specialtyOf } from '../src/simulation/StaffProfiles.js';
 import { createStarterHotel, addRoom, getAvailableRooms } from '../src/simulation/HotelState.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import { PRNG } from '../src/simulation/prng.js';
@@ -10,14 +10,14 @@ import { processCleaningTick } from '../src/simulation/HousekeepingManager.js';
 import { processMaintenanceTick } from '../src/simulation/MaintenanceManager.js';
 import { positionAt, memberPositionAt, legsEnd, hourStart } from '../src/simulation/Movement.js';
 import { facilityCapacity, facilityLoad, visitChance } from '../src/simulation/FacilityManager.js';
-import { isEntranceTile } from '../src/simulation/Layout.js';
+import { isEntranceTile, stepHours } from '../src/simulation/Layout.js';
 import { partyOf, partyLoad } from '../src/simulation/Party.js';
 import { fitsParty } from '../src/simulation/RoomProfile.js';
 import { guestFigures } from '../src/render/figures.js';
 import { STAFF, TRAVEL, SPOTLIGHT } from '../src/config/balance.js';
 import type { HotelState, Leg, OnSiteTakings } from '../src/simulation/types.js';
 import { guestPace } from '../src/simulation/Profile.js';
-import { housekeepingPrefOf } from '../src/simulation/CleaningPreference.js';
+import { housekeepingPrefOf, partyOutOfRoom } from '../src/simulation/CleaningPreference.js';
 import { patienceHours, readyAt } from '../src/simulation/DeskQueue.js';
 import { isSleepHour, activityHour, activityOffset } from '../src/simulation/Profile.js';
 import { spendingOf, spentHere } from '../src/simulation/Spending.js';
@@ -59,12 +59,17 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
   let toured = 0;
   let writersLeft = 0;
   let tourSkips = 0;
+  let preventiveRepairs = 0;
+  let preventiveStarts = 0;
+  let preventiveContinuations = 0;
+  let preventiveCompleted = 0;
   // Spotlight guests every other week, whatever the stars (a 200-day bot hotel spends most of it below 5 stars, where they're rare)
   const weekly = SPOTLIGHT.weeklyChance;
   SPOTLIGHT.weeklyChance = { 3: 0.5, 4: 0.5, 5: 0.5 };
   try {
   for (const seed of [1, 2]) {
     let s: HotelState = createStarterHotel();
+    let preventiveJobs = new Set<string>();
     // Doubles, and rooms for friends and families, so parties of every size stay
     const kinds = ['standard', 'standard', 'bunk_family', 'standard', 'twin', 'standard', 'bunk_family', 'standard'] as const;
     kinds.forEach((kind, x) => { s = addRoom(s, kind, x, 2) ?? s; });
@@ -104,11 +109,64 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
       const turn = timeIn('turnover');
       const daily = timeIn('daily');
       const repair = timeIn('repair');
-      for (const [id] of repair) if (before.rooms.find(x => x.id === id)?.status !== 'vacant') bad('repair planned in a room that is not vacant', id);
+      const continuingPreventive = new Set<string>();
+      for (const it of plan.itineraries) for (const [index, l] of it.legs.entries()) {
+        if (l.kind !== 'stay' || l.job !== 'repair') continue;
+        const room = before.rooms.find(x => x.id === l.placeId);
+        if (room?.status === 'vacant') continue; // existing vacant-room checks below are unchanged
+        if (!room || room.status !== 'occupied' || !l.preventive) {
+          bad('repair planned in a room that is not vacant', l.placeId ?? it.staffId); continue;
+        }
+        preventiveRepairs++;
+        const worker = before.staffRoster?.find(m => m.id === it.staffId);
+        const guest = before.guests.find(g => g.id === room.guestId);
+        if (!worker || worker.role !== 'maintenance' || specialtyOf(worker) !== 'preventive') bad('occupied repair without preventive employee', it.staffId);
+        if (l.repairTarget !== 85) bad('preventive repair has no fixed 85 target', room.id);
+        if (!guest || housekeepingPrefOf(guest) === 'dnd') {
+          bad('preventive repair without an eligible away guest', room.id); continue;
+        }
+        const key = `${it.staffId}|${room.id}|${guest.id}`;
+        continuingPreventive.add(key);
+        if (!preventiveJobs.has(key)) {
+          preventiveStarts++;
+          if (room.condition >= 40) bad('preventive repair started at or above 40', `${room.id}: ${room.condition}`);
+        } else preventiveContinuations++;
+        if (room.condition >= 85) bad('preventive repair continued at or above its target', `${room.id}: ${room.condition}`);
+        if (!partyOutOfRoom(guest, room, l.start, l.end)) bad('party present during preventive work', room.id);
+        // The trip's whole-party away interval must cover every room step,
+        // not just the midpoint of the working stay. This includes carried
+        // walks crossing an hour boundary and the explicit final step out.
+        for (const leg of it.legs) {
+          if (leg.kind !== 'walk') continue;
+          let time = leg.start;
+          for (let k = 1; k < leg.path.length; k++) {
+            const a = leg.path[k - 1], b = leg.path[k], end = time + stepHours(a, b, leg.hoursPerTile);
+            const touchesRoom = (a.gridX === room.gridX && a.gridY === room.gridY && a.floor === room.floor)
+              || (b.gridX === room.gridX && b.gridY === room.gridY && b.floor === room.floor);
+            if (touchesRoom && !partyOutOfRoom(guest, room, time, end)) bad('party present during preventive entry or exit', `${room.id} at ${time}`);
+            time = end;
+          }
+        }
+        const rate = worker ? staffRate(worker) : 1;
+        const workBefore = it.legs.slice(0, index).reduce((sum, leg) => sum + (leg.kind === 'stay' && leg.job === 'repair' && leg.placeId === room.id
+          ? Math.max(0, Math.min(leg.end, T + 1) - Math.max(leg.start, T)) * (leg.workRate ?? 1) : 0), 0);
+        const finish = l.start + Math.max(0, 85 - room.condition - workBefore * STAFF.maintenance.repairPerHour) / (STAFF.maintenance.repairPerHour * rate);
+        const outBy = finish + TRAVEL.hoursPerTile;
+        if (!partyOutOfRoom(guest, room, l.start, outBy)) bad('preventive job cannot finish and exit before guest returns', room.id);
+        if (outBy > (before.day - 1) * 24 + STAFF.maintenance.workEndHour + 1e-9) bad('preventive job cannot finish within shift', room.id);
+      }
+      preventiveJobs = continuingPreventive;
       const maintained = processMaintenanceTick(before).state; // the repair step on its own, before guests arrive
       for (const room of before.rooms.filter(x => x.status === 'vacant')) {
         const expected = Math.min(100, room.condition + (repair.get(room.id) ?? 0) * STAFF.maintenance.repairPerHour);
         if (Math.abs(maintained.rooms.find(x => x.id === room.id)!.condition - expected) > 1e-6) bad('repair != time in room', room.id);
+      }
+      for (const room of before.rooms.filter(x => x.status === 'occupied' && repair.has(x.id))) {
+        const actual = maintained.rooms.find(x => x.id === room.id)!;
+        const expected = Math.min(85, room.condition + repair.get(room.id)! * STAFF.maintenance.repairPerHour);
+        if (Math.abs(actual.condition - expected) > 1e-6) bad('preventive repair != time in room or exceeded 85', room.id);
+        if (actual.status !== 'occupied' || actual.guestId !== room.guestId) bad('preventive repair changed room occupancy', room.id);
+        if (actual.condition >= 85 - 1e-9) preventiveCompleted++;
       }
       const cleaned = processCleaningTick(before).state;
       for (const room of before.rooms.filter(x => x.status === 'occupied' && x.dailyCleanHoursRemaining > 0)) {
@@ -438,5 +496,9 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
   expect(heldTaken).toBeGreaterThan(2); // into the suite held for them
   expect(toured / writersLeft).toBeGreaterThan(0.6); // and travel writers tried everything (most: some found a facility full every hour)
   expect(tourSkips).toBe(0); // never passing over an untried facility with room
+  expect(preventiveRepairs).toBeGreaterThan(10); // occupied-room maintenance ran across several real away windows
+  expect(preventiveStarts).toBeGreaterThan(0);
+  expect(preventiveContinuations).toBeGreaterThan(0);
+  expect(preventiveCompleted).toBeGreaterThan(0);
   expect(problems, JSON.stringify(examples)).toEqual({});
 }, 300000);

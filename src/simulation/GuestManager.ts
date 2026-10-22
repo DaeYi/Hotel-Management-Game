@@ -21,6 +21,7 @@ import { rollPurpose, withEventStay } from './Purpose.js';
 import { rollProfile, checkoutHour, wantsLateCheckout, lateCheckoutPolicy, guestPace } from './Profile.js';
 import { returnEntry, addToPool, dueIndexes, pickDue, tierOf, staysOf, ordinal, expectationMultFor, bookingWeightFor, isLostRegular, personIdOf } from './Loyalty.js';
 import { moodOf } from './Mood.js';
+import { hospitalityReview } from './StaffHospitality.js';
 import { roomFit, type RoomFeature } from './Preferences.js';
 import { getTotalDemandMultiplier } from './SeasonManager.js';
 import { getReputationPenaltyMultiplier } from './StoryGenerator.js';
@@ -483,6 +484,7 @@ export function processArrivals(
       }
       book(busy, slot.lane.key, slot.start, slot.start + slot.hours);
       booked.add(room.id);
+      guest = { ...guest, checkInPriceTolerance: priceTolerance };
       result.checkedIn.push({ guest, roomId: room.id, desk: { lane: slot.lane.key, arriveAt: at, start: slot.start, hours: slot.hours, staffId: slot.staffId } });
       announceArrival(result, guest, room, match.wanted, match.inOldRoom);
     });
@@ -590,6 +592,9 @@ export interface GuestReviewBreakdown {
   favoriteMiss?: number; // their favourite facility let them down (missing, or full)
   favoriteMissLabel?: string; // "the pool"
   expectation?: number; // a travel writer's: how hard they minded what was wrong (x the room's penalties; see Spotlight.nameReview)
+  hospitality?: number;
+  hospitalityPraise?: string;
+  hospitalityCriticism?: string;
   finalScore: number;
 }
 
@@ -664,6 +669,7 @@ export function calculateGuestReviewBreakdown(
 
   // Random variance (a spotlight guest's from their id: no draw)
   const guestVariance = spotlightOn() && guest.spotlight ? (hash01(`${guest.id}#variance`) * 2 - 1) * REVIEW.varianceRange : prng.range(-REVIEW.varianceRange, REVIEW.varianceRange);
+  const service = hospitalityReview(guest);
 
   // Raw score before expectation adjustment
   const rawScore = REVIEW.baseScore
@@ -678,7 +684,8 @@ export function calculateGuestReviewBreakdown(
     - amenityPenalty
     + fit.score
     - favoriteMiss
-    + guestVariance;
+    + guestVariance
+    + service.score;
 
   // Apply star expectation multiplier to penalties
   // Higher star = penalties are amplified, bonuses stay the same
@@ -702,6 +709,7 @@ export function calculateGuestReviewBreakdown(
     facilityBonus,
     amenityBonus,
     roomFit: fit.score,
+    ...(service.score !== 0 ? { hospitality: service.score, hospitalityPraise: service.praise, hospitalityCriticism: service.criticism } : {}),
     ...(favoriteMiss > 0 && favorite && favorite !== 'none' ? { favoriteMiss, favoriteMissLabel: `the ${FACILITY_CONFIG[favorite].label.toLowerCase()}` } : {}),
     ...(fit.likes.length > 0 ? { roomLikes: fit.likes } : {}),
     ...(fit.dislikes.length > 0 ? { roomDislikes: fit.dislikes } : {}),
