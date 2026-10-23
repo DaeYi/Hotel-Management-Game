@@ -14,7 +14,7 @@ import { isCheckoutDay } from './GuestManager.js';
 import { baseWalkHours } from './HousekeepingManager.js';
 import { surnameOf } from './Party.js';
 import { FEATURE_LABELS } from './Preferences.js';
-import { getOpenFacilities, findRoute, getAccessibleBreakRooms } from './Layout.js';
+import { getOpenFacilities, findRoute, getAccessibleBreakRooms, isHallway } from './Layout.js';
 import { housekeepingPrefOf } from './CleaningPreference.js';
 import type { GuestReviewBreakdown } from './GuestManager.js';
 
@@ -125,8 +125,9 @@ function finishTurnover(state: HotelState, member: StaffMember | undefined, room
   const pending = member.fatigueBreak;
   if (pending && pending.end > at) {
     let restedAt = pending.at;
-    const validRoom = !pending.placeId || getAccessibleBreakRooms(state).some(r => r.id === pending.placeId && sameTile(r, pending.at));
-    if (validRoom) {
+    const validBreak = pending.placeId ? getAccessibleBreakRooms(state).some(r => r.id === pending.placeId && sameTile(r, pending.at))
+      : isHallway(state, pending.at.gridX, pending.at.gridY, pending.at.floor);
+    if (validBreak) {
       active(Math.max(0, pending.start - at));
       energy = projectFatigue(member, [makeStay(pending.at, at, pending.end, 'rest', {
         restRate: pending.placeId ? STAFF_FATIGUE.roomRecovery : STAFF_FATIGUE.fallbackRecovery,

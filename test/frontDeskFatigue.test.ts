@@ -7,7 +7,7 @@ import { lanesOf, quoteLane, reseatLanes } from '../src/simulation/DeskQueue.js'
 import { fatigueOf, projectFatigue, restReservations } from '../src/simulation/StaffFatigue.js';
 import { rosterAfter, replanStaff, getStaffPlan } from '../src/simulation/StaffManager.js';
 import { settleChanges } from '../src/simulation/Settle.js';
-import { routeFromStreet, findRoute } from '../src/simulation/Layout.js';
+import { routeFromStreet, findRoute, doorTile } from '../src/simulation/Layout.js';
 import { hourStart, makeStay, makeWalk } from '../src/simulation/Movement.js';
 import type { Guest, HotelState, StaffMember, StayLeg } from '../src/simulation/types.js';
 
@@ -200,6 +200,32 @@ describe('The front desk uses the fatigue of the clerk actually serving', () => 
     expect(rests.some(l => l.end <= at + 1e-9 && l.restRate === 25)).toBe(true);
     expect(rests.filter(l => l.end > at + 1e-9).every(l => l.restRate === 10 && !l.placeId)).toBe(true);
     expect(scheduledDeskBreaks(next).every(r => r.placeId !== rest.placeId)).toBe(true);
+  });
+
+  it('leaves a room built over its fallback rest through the actual door without extending the break', () => {
+    let s = hotel(85), T = hourStart(s);
+    const original = planDeskClerk(s, s.staffRoster![0], T);
+    const rest = original.legs.find((l): l is StayLeg => l.kind === 'stay' && l.activity === 'rest')!;
+    expect(rest.placeId).toBeUndefined();
+    s = { ...s, staffPlan: { start: T, itineraries: [original] } };
+    const at = rest.start + 0.1;
+    const built = addRoom(s, 'standard', rest.at.gridX, rest.at.gridY, rest.at.floor, 'down')!;
+    const room = built.rooms.find(r => r.gridX === rest.at.gridX && r.gridY === rest.at.gridY && r.floor === rest.at.floor)!;
+    const next = settleChanges(s, built, at), legs = next.staffPlan!.itineraries[0].legs;
+    const exit = legs.find(l => l.kind === 'walk' && l.start >= at - 1e-9)!;
+    expect(exit.kind).toBe('walk');
+    if (exit.kind === 'walk') {
+      expect(exit.start).toBeCloseTo(at, 10);
+      expect(exit.path[0]).toMatchObject(rest.at);
+      expect(exit.path[1]).toMatchObject(doorTile(room, room.door));
+    }
+    const rests = legs.filter((l): l is StayLeg => l.kind === 'stay' && l.activity === 'rest');
+    expect(rests.filter(l => l.end <= at + 1e-9).reduce((sum, l) => sum + l.end - l.start, 0)).toBeCloseTo(0.1, 10);
+    const remaining = rests.find(l => l.end > at + 1e-9)!;
+    expect(remaining.at).toMatchObject(doorTile(room, room.door));
+    expect(remaining.restRate).toBe(STAFF_FATIGUE.fallbackRecovery);
+    expect(remaining.end).toBeCloseTo(rest.end, 10);
+    expect(deskCoverage(next, (remaining.start + remaining.end) / 2)).toHaveLength(0);
   });
 
   it('counts idle counter duty as fatigue without giving service experience or resetting at midnight', () => {

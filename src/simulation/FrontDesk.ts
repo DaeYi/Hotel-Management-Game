@@ -1,7 +1,7 @@
 import type { Fixture, HotelState, StaffMember, StaffItinerary, TilePos, Leg, WalkLeg, FatigueBreak } from './types.js';
 import { DESK, TRAVEL } from '../config/balance.js';
 import { STAFF_FATIGUE } from '../config/staff.js';
-import { getAccessibleDesks, getAccessibleBreakRooms, getFixtureFront, findRoute, routeFromStreet, routeToStreet, isEntranceTile } from './Layout.js';
+import { getAccessibleDesks, getAccessibleBreakRooms, getFixtureFront, findRoute, routeFromStreet, routeToStreet, isEntranceTile, isHallway } from './Layout.js';
 import { hourStart, makeStay, makeWalk, finalTile, sameTile } from './Movement.js';
 import { checkInHours, namedFrontDesk, staffDuty, staffDutyAt } from './StaffProfiles.js';
 import { fatigueOn, fatigueAt, fatigueGain, projectFatigue, planStaffRest, restReservations, type RestReservation } from './StaffFatigue.js';
@@ -99,7 +99,8 @@ function fatigueSchedules(state: HotelState): { schedules: ClerkSchedule[]; rese
     const pending = current && candidateBreak && candidateBreak.end > t ? candidateBreak : undefined;
     if (pending && pos) {
       const room = pending.placeId ? breakRooms.get(pending.placeId) : undefined;
-      const valid = !pending.placeId || !!room && sameTile(room, pending.at);
+      const valid = pending.placeId ? !!room && sameTile(room, pending.at)
+        : isHallway(state, pending.at.gridX, pending.at.gridY, pending.at.floor);
       const route = valid ? findRoute(state, pos, pending.at, TRAVEL.hoursPerTile) : null;
       if (!route) {
         // Preserve recovery already earned, but a removed/cut-off room can

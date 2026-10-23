@@ -375,6 +375,35 @@ describe('Held suites allow for the cleaning crew’s fatigue', () => {
       { kind: 'writer', arrivalDay: 2, arrivalHour: 17 }, true)).toBe(false);
   });
 
+  it('forecasts the real door exit and remaining recovery when a saved fallback break is built over', () => {
+    let state = addRoom({ ...createStarterHotel(), day: 2, hour: 12, cash: 1_000_000, peakStarRating: 5 }, 'suite', 6, 2, 0, 'down')!;
+    const suite = state.rooms[0], T = hourStart(state), fallback = { gridX: 6, gridY: 1, floor: 0 };
+    const member = worker({ at: fallback, roomId: suite.id,
+      stats: { workHours: 80, lateDays: 0, absentDays: 0, fatigue: 40, fatigueAt: T },
+      fatigueBreak: { at: fallback, start: T - 0.1, end: T + 0.5 } });
+    state = { ...state, staff: { frontDesk: 0, housekeepers: 1, maintenanceWorkers: 0 }, frontDeskRosterReady: true,
+      staffRoster: [member], rooms: [{ ...suite, status: 'cleaning', cleaningHoursRemaining: 0.5 }], staffPlan: null };
+    state = addRoom(state, 'standard', fallback.gridX, fallback.gridY, 0, 'up')!;
+    state = { ...state, staffPlan: getStaffPlan(state) };
+    const legs = state.staffPlan!.itineraries[0].legs;
+    const exit = legs[0];
+    if (exit.kind !== 'walk') throw new Error('expected a real exit from the newly built room');
+    expect(exit.path.at(-1)).toMatchObject({ gridX: 6, gridY: 0, floor: 0 });
+    const rest = legs.find(leg => leg.kind === 'stay' && leg.activity === 'rest')!;
+    if (rest.kind !== 'stay') throw new Error('expected the remaining fallback break');
+    expect(rest.at).toMatchObject({ gridX: 6, gridY: 0, floor: 0 });
+    expect(rest.start).toBeCloseTo(exit.end, 10);
+    expect(rest.end).toBeCloseTo(member.fatigueBreak!.end, 10);
+    expect(rest.restRate).toBe(STAFF_FATIGUE.fallbackRecovery);
+    expect(fatigueAt(state, member, rest.end)).toBeCloseTo(40 + (exit.end - T) * STAFF_FATIGUE.gain.normal
+      - (rest.end - rest.start) * STAFF_FATIGUE.fallbackRecovery, 10);
+    const clean = legs.find(leg => leg.kind === 'stay' && leg.job === 'turnover')!;
+    if (clean.kind !== 'stay') throw new Error('expected the suite turnover after the break');
+    const doneHour = clean.start + 0.5 / (clean.workRate ?? 1) - (state.day - 1) * 24;
+    expect(freeBy(state, state.rooms[0], { kind: 'writer', arrivalDay: 2, arrivalHour: doneHour }, true)).toBe(true);
+    expect(freeBy(state, state.rooms[0], { kind: 'writer', arrivalDay: 2, arrivalHour: doneHour - 0.001 }, true)).toBe(false);
+  });
+
   it('carries growing fatigue from queued turnovers into the suite’s estimate', () => {
     const { state, suite } = suiteHotel(55);
     const first = state.rooms.find(room => room.id !== suite.id)!;
