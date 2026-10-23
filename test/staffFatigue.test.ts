@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { STAFF_FATIGUE, STAFF_PERSONALITIES } from '../src/config/staff.js';
 import { BREAK_ROOM, TRAVEL } from '../src/config/balance.js';
-import { addElevator, addFixture, addRoom, buildFloor, createStarterHotel } from '../src/simulation/HotelState.js';
+import { addElevator, addFixture, addRoom, buildFloor, createStarterHotel, demolishFixture } from '../src/simulation/HotelState.js';
 import { fatigueAt, fatigueGain, fatigueOf, fatigueOn, fatigueRate, planStaffRest, projectFatigue, restReservations, staminaOf, type RestReservation } from '../src/simulation/StaffFatigue.js';
 import { afterWork, candidatesFor, checkInHours, staffRate } from '../src/simulation/StaffProfiles.js';
-import { getStaffPlan, replanStaff, rosterAfter } from '../src/simulation/StaffManager.js';
+import { getStaffPlan, plannedWork, replanStaff, rosterAfter } from '../src/simulation/StaffManager.js';
 import { hourStart, makeStay, makeWalk } from '../src/simulation/Movement.js';
 import { roomTile } from '../src/simulation/GuestMovement.js';
 import { doorTile, findRoute } from '../src/simulation/Layout.js';
@@ -12,6 +12,7 @@ import { saveGame, loadGame } from '../src/simulation/SaveManager.js';
 import { freeBy } from '../src/simulation/Spotlight.js';
 import { baseWalkHours } from '../src/simulation/HousekeepingManager.js';
 import { PRNG } from '../src/simulation/prng.js';
+import { settleChanges } from '../src/simulation/Settle.js';
 import type { HotelState, Leg, StaffMember, StaffPlan } from '../src/simulation/types.js';
 
 function worker(extra: Partial<StaffMember> = {}): StaffMember {
@@ -345,6 +346,33 @@ describe('Held suites allow for the cleaning crew’s fatigue', () => {
     const overnight: HotelState = { ...state, hour: 23, staffRoster: [tired],
       rooms: state.rooms.map(room => room.id === suite.id ? { ...room, cleaningHoursRemaining: 2 } : room) };
     expect(freeBy(overnight, overnight.rooms.find(room => room.id === suite.id)!, { kind: 'writer', arrivalDay: 3, arrivalHour: 9.1 }, true)).toBe(true);
+  });
+
+  it('does not promise a suite using fast recovery or the old destination after its cleaner’s break room is demolished', () => {
+    const initial = STAFF_FATIGUE.breakAt - STAFF_FATIGUE.gain.normal * 0.95;
+    const fixture = suiteHotel(initial);
+    let state: HotelState = { ...fixture.state, rooms: fixture.state.rooms.map(room => room.id === fixture.suite.id
+      ? { ...room, cleaningHoursRemaining: 3 } : room) };
+    state = { ...state, staffPlan: getStaffPlan(state) };
+    const rest = state.staffPlan!.itineraries[0].legs.find(leg => leg.kind === 'stay' && leg.activity === 'rest')!;
+    if (rest.kind !== 'stay') throw new Error('expected the compulsory break');
+    expect(rest.start).toBeGreaterThan(hourStart(state) + 1);
+    const worked = plannedWork(state.staffPlan!, 'turnover').get(fixture.suite.id)!;
+    state = { ...state, hour: state.hour + 1, staffRoster: rosterAfter(state, state.staffPlan!), staffPlan: null,
+      rooms: state.rooms.map(room => room.id === fixture.suite.id ? { ...room, cleaningHoursRemaining: room.cleaningHoursRemaining - worked } : room) };
+    state = { ...state, staffPlan: getStaffPlan(state) };
+    const editedAt = rest.start + 0.1;
+    state = settleChanges(state, demolishFixture(state, rest.placeId!)!, editedAt);
+    expect(state.staffRoster![0].fatigueBreak!.placeId).toBe(rest.placeId);
+    const revised = state.staffPlan!.itineraries[0].legs;
+    expect(revised.some(leg => leg.kind === 'stay' && leg.activity === 'rest' && leg.end <= editedAt
+      && leg.restRate === STAFF_FATIGUE.roomRecovery)).toBe(true);
+    expect(revised.some(leg => leg.kind === 'stay' && leg.activity === 'rest' && leg.start > editedAt
+      && leg.restRate === STAFF_FATIGUE.fallbackRecovery)).toBe(true);
+    expect(freeBy(state, state.rooms.find(room => room.id === fixture.suite.id)!,
+      { kind: 'writer', arrivalDay: 2, arrivalHour: 17 }, true)).toBe(false);
+    expect(freeBy({ ...state, staffPlan: null }, state.rooms.find(room => room.id === fixture.suite.id)!,
+      { kind: 'writer', arrivalDay: 2, arrivalHour: 17 }, true)).toBe(false);
   });
 
   it('carries growing fatigue from queued turnovers into the suite’s estimate', () => {

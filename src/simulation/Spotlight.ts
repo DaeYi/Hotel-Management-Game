@@ -3,7 +3,7 @@ import { staffRate, attendance, nextStaffWork, staffDutyAt } from './StaffProfil
 import { SPOTLIGHT, GUEST_PROFILE, GUEST_PURPOSES, GUEST_NAMES, ECONOMY, SATISFACTION, FACILITY_CONFIG, STAR_RATING, AMENITIES, REVIEW, STORY, STAFF, HOUSEKEEPING, TRAVEL } from '../config/balance.js';
 import { STAFF_FATIGUE, STAFF_PERSONALITIES } from '../config/staff.js';
 import { fatigueOn, fatigueAt, fatigueGain, projectFatigue, planStaffRest, restReservations, type RestReservation } from './StaffFatigue.js';
-import { hash01, hourEnd, makeStay } from './Movement.js';
+import { hash01, hourEnd, makeStay, finalTile, sameTile } from './Movement.js';
 import { roomTile } from './GuestMovement.js';
 import { getDayOfWeek } from './SeasonManager.js';
 import { appendStoryLogEntry } from './StoryGenerator.js';
@@ -14,7 +14,7 @@ import { isCheckoutDay } from './GuestManager.js';
 import { baseWalkHours } from './HousekeepingManager.js';
 import { surnameOf } from './Party.js';
 import { FEATURE_LABELS } from './Preferences.js';
-import { getOpenFacilities, findRoute } from './Layout.js';
+import { getOpenFacilities, findRoute, getAccessibleBreakRooms } from './Layout.js';
 import { housekeepingPrefOf } from './CleaningPreference.js';
 import type { GuestReviewBreakdown } from './GuestManager.js';
 
@@ -124,12 +124,34 @@ function finishTurnover(state: HotelState, member: StaffMember | undefined, room
   // remaining rest cannot disappear from a readiness quote after reloading.
   const pending = member.fatigueBreak;
   if (pending && pending.end > at) {
-    active(Math.max(0, pending.start - at));
-    energy = projectFatigue(member, [makeStay(pending.at, at, pending.end, 'rest', {
-      restRate: pending.placeId ? STAFF_FATIGUE.roomRecovery : STAFF_FATIGUE.fallbackRecovery,
-    })], at, pending.end, energy);
-    at = pending.end;
-    const back = findRoute(state, pending.at, pos, TRAVEL.hoursPerTile);
+    let restedAt = pending.at;
+    const validRoom = !pending.placeId || getAccessibleBreakRooms(state).some(r => r.id === pending.placeId && sameTile(r, pending.at));
+    if (validRoom) {
+      active(Math.max(0, pending.start - at));
+      energy = projectFatigue(member, [makeStay(pending.at, at, pending.end, 'rest', {
+        restRate: pending.placeId ? STAFF_FATIGUE.roomRecovery : STAFF_FATIGUE.fallbackRecovery,
+      })], at, pending.end, energy);
+      at = pending.end;
+    } else {
+      // A paused demolition can leave the boundary member pointing at the old
+      // room while its physical itinerary already holds the revised break.
+      // Preserve past recovery and use the new walk, seat and recovery rate.
+      const physical = state.staffPlan?.itineraries.find(it => it.staffId === member.id)?.legs
+        .filter(leg => leg.end > at && leg.start < pending.end) ?? [];
+      if (physical.some(leg => leg.kind === 'stay' && leg.activity === 'rest' && leg.restRate !== undefined)) {
+        const until = Math.max(pending.end, physical.at(-1)!.end);
+        energy = projectFatigue(member, physical, at, until, energy);
+        at = until;
+        restedAt = finalTile(physical) ?? pending.at;
+      } else {
+        const rest = planStaffRest(state, member, member.at ?? pos, at, reservations,
+          Math.max(0, pending.end - Math.max(at, pending.start)), pending.end);
+        energy = projectFatigue(member, rest.legs, at, rest.until, energy);
+        at = rest.until;
+        restedAt = rest.at;
+      }
+    }
+    const back = findRoute(state, restedAt, pos, TRAVEL.hoursPerTile);
     if (!back) return { done: Infinity, member };
     walk = Math.max(walk, back.hours);
   }
