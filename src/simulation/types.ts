@@ -228,6 +228,7 @@ export interface StayLeg {
   placeId?: string; // the room, facility, desk, or break room being stayed in
   job?: 'turnover' | 'daily' | 'repair'; // what the stay works on, for staff
   workRate?: number; // work units per hour, fixed when this leg was planned
+  restRate?: number; // fatigue points recovered per hour at this reserved resting place
   credited?: boolean; // a facility visit whose bonus and sale have been counted (once the guest got there)
   out?: 'beach' | 'breakfast' | 'lunch' | 'dinner'; // an outing instead of a facility the hotel doesn't have
   lane?: string; // the front desk clerk ("deskId:seat") a check-in or complaint takes, and whose line a wait is in (see DeskQueue.ts)
@@ -265,6 +266,13 @@ export interface Walker {
 export type FrontDeskShift = 'early' | 'late' | 'night';
 export type StaffRole = 'housekeeper' | 'maintenance' | 'front_desk';
 
+export interface FatigueBreak {
+  at: TilePos;
+  placeId?: string;
+  start: number;
+  end: number;
+}
+
 /** A housekeeper or maintenance worker, as of the last hour boundary. */
 export interface StaffMember extends StaffIdentity {
   id: string;
@@ -278,6 +286,7 @@ export interface StaffMember extends StaffIdentity {
   hiredAt?: number;
   dismissedAt?: number;
   restUntil?: number;
+  fatigueBreak?: FatigueBreak; // fixed destination and end, including travel across hour boundaries
 }
 
 /** Every housekeeper's and maintenance worker's hour, planned at its start; the tick credits exactly the work in it. */
@@ -289,7 +298,7 @@ export interface StaffPlan {
 export interface StaffItinerary {
   staffId: string;
   legs: Leg[];
-  end: Pick<StaffMember, 'at' | 'roomId' | 'carry' | 'deskLane'>;
+  end: Pick<StaffMember, 'at' | 'roomId' | 'carry' | 'deskLane' | 'fatigueBreak'>;
 }
 
 export interface Booking {

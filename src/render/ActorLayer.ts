@@ -7,6 +7,7 @@ import { guestFigures, type Figure } from './figures';
 import { BREAK_ROOM } from '../config/balance';
 import { STAFF_PERSONALITIES } from '../config/staff';
 import { experienceOf, namedFrontDesk } from '../simulation/StaffProfiles';
+import { fatigueOn } from '../simulation/StaffFatigue';
 import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE } from './GridRenderer';
 import { drawClock, drawComplaint, drawQuirk, drawMoodFace, RING_COLORS, SELECTED_COLOR } from './quirks';
 
@@ -104,8 +105,9 @@ export class ActorLayer {
       if (t >= legsEnd(it.legs) && !it.end.at) continue; // gone home
       const figure = this.place(it.legs, t, it.staffId, 'staff', color);
       const leg = positionAt(it.legs, t)?.leg;
+      const resting = fatigueOn() && leg?.kind === 'stay' && leg.activity === 'rest' && leg.restRate !== undefined && leg.start <= t && t < leg.end;
       const counter = leg?.kind === 'stay' && leg.activity === 'desk' && leg.placeId && leg.lane ? { deskId: leg.placeId, seat: Number(leg.lane.slice(leg.lane.lastIndexOf(':') + 1)) } : undefined;
-      if (figure) figures.push({ ...figure, ...marks, counter });
+      if (figure) figures.push({ ...figure, ...marks, counter, ...(resting ? { resting: true } : {}) });
     }
 
     // Front desk staff without a seat at a desk wait in a break room (or the lobby)
@@ -349,6 +351,11 @@ export class ActorLayer {
           const y = cy - 8 - i * 4;
           g.lineStyle(1, 0xffffff, 0.9);
           g.beginPath(); g.moveTo(cx - 3, y + 2); g.lineTo(cx, y); g.lineTo(cx + 3, y + 2); g.strokePath();
+        }
+        if (f.resting) {
+          // A small z beside the experience marks: only real recovery, never idle waiting.
+          g.lineStyle(1.5, 0xb7d5f9, 1);
+          g.beginPath(); g.moveTo(cx + 6, cy - 11); g.lineTo(cx + 11, cy - 11); g.lineTo(cx + 6, cy - 6); g.lineTo(cx + 11, cy - 6); g.strokePath();
         }
         if (f.staffId === this.selectedStaffId) { g.lineStyle(2, SELECTED_COLOR, 1); g.strokeRect(cx - 8, cy - 8, 16, 16); }
       }

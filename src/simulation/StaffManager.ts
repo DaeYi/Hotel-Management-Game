@@ -1,16 +1,17 @@
 import type { HotelState, Room, StaffMember, StaffPlan, StaffItinerary, StaffRole, FrontDeskShift, Leg, WalkLeg, TilePos } from './types.js';
 import { STAFF, TRAVEL, GUEST_PROFILE, GUEST_HOUSEKEEPING } from '../config/balance.js';
-import { findRoute, routeFromStreet, routeToStreet, getStaffBases, getAccessibleBreakRooms, isEntranceTile, stepHours, doorTile } from './Layout.js';
+import { findRoute, routeFromStreet, routeToStreet, getStaffBases, getAccessibleBreakRooms, isEntranceTile, stepHours, doorTile, isHallway } from './Layout.js';
 import { isRoomReachable } from './HotelState.js';
 import { isGuestAway } from './GuestMovement.js';
 import { hourStart, makeWalk, makeStay, truncateLegs, sameTile, finalTile, positionAt, walkProgress, stepStillOpen, legsEnd } from './Movement.js';
 import { guestsById } from './Party.js';
 import { housekeepingPrefOf, dndOpening, dndCleanStart, dndSetOff, partyOutOfRoom } from './CleaningPreference.js';
 import { isSleepHour } from './Profile.js';
-import { STAFF_PERSONALITIES, STAFF_SPECIALTIES } from '../config/staff.js';
+import { STAFF_PERSONALITIES, STAFF_SPECIALTIES, STAFF_FATIGUE } from '../config/staff.js';
 import { reconcileStaff, initializeFrontDesk } from './StaffHiring.js';
 import { staffRate, attendance, afterWork, repairTarget, nextStaffWork, staffDutyAt, shiftFor, specialtyOf, hospitalityOf } from './StaffProfiles.js';
 import { planDeskClerk } from './FrontDesk.js';
+import { fatigueOn, fatigueAt, projectFatigue, planStaffRest, restReservations } from './StaffFatigue.js';
 
 // Housekeepers and maintenance workers are people with a place in the
 // building. Each hour boundary, every one of them gets an itinerary for the
@@ -44,7 +45,13 @@ function headcount(state: HotelState, role: StaffRole): number {
  */
 export function restingPlace(state: HotelState, floor: number): { at: TilePos; breakRoomId?: string } | null {
   const breakRooms = getAccessibleBreakRooms(state);
-  const bases = getStaffBases(state);
+  // With real seats, entry and pre-shift waiting use a base. Only the rest
+  // planner may claim a seat inside a break room.
+  const bases = getStaffBases(state).filter(b => !fatigueOn() || !breakRooms.some(r => sameTile(r, b)));
+  if (fatigueOn()) {
+    const base = bases.find(b => b.floor === floor) ?? bases[0];
+    return base ? { at: base } : null;
+  }
   const room = breakRooms.find(b => b.floor === floor);
   if (room) return { at: { gridX: room.gridX, gridY: room.gridY, floor: room.floor }, breakRoomId: room.id };
   const base = bases.find(b => b.floor === floor);
@@ -250,11 +257,17 @@ export function planStaff(
     return [m.id, queue] as const;
   }));
   const claimed = new Set<string>();
+  const reservations = restReservations(state, roster, from);
+  const deskState = roster === state.staffRoster ? state : { ...state, staffRoster: roster };
+  // Plan reception first so the same six seats serve both counter and room staff.
+  const deskPlans = new Map(roster.filter(m => m.role === 'front_desk').map(m => [m.id,
+    planDeskClerk(deskState, m, from, reservations)]));
 
   // Each worker's own room comes first: reserve those before anyone picks
   const sticky = new Map<string, Job>();
   for (const m of roster) {
-    if (!m.roomId || m.leaving || !isOnShift(m.role, state.hour) || nextStaffWork(m, from) >= end) continue;
+    if (!m.roomId || m.leaving || !isOnShift(m.role, state.hour) || nextStaffWork(m, from) >= end
+      || fatigueOn() && (fatigueAt(state, m, from) >= STAFF_FATIGUE.breakAt || (m.fatigueBreak?.end ?? 0) > from)) continue;
     const job = personalQueues.get(m.id)!.find(j => j.room.id === m.roomId && !claimed.has(j.room.id));
     if (job) {
       sticky.set(m.id, job);
@@ -263,12 +276,14 @@ export function planStaff(
   }
 
   const itineraries: StaffItinerary[] = roster.map(m => {
-    if (m.role === 'front_desk') return planDeskClerk(roster === state.staffRoster ? state : { ...state, staffRoster: roster, staffPlan: undefined }, m, from);
-    const rate = staffRate(m);
+    if (m.role === 'front_desk') return deskPlans.get(m.id)!;
+    let rate = staffRate(m);
+    const worked = new Map<string, number>();
     const targetCondition = repairTarget(m);
     const goal = (j: Job) => j.preventive ? STAFF_SPECIALTIES.preventiveTarget : targetCondition;
     const needed = (j: Job) => j.kind === 'repair' && goal(j) !== null
-      ? Math.max(0, (goal(j)! - j.room.condition) / STAFF.maintenance.repairPerHour - (done?.repair?.get(j.room.id) ?? 0)) : j.hours;
+      ? Math.max(0, (goal(j)! - j.room.condition) / STAFF.maintenance.repairPerHour - (done?.repair?.get(j.room.id) ?? 0) - (worked.get(j.room.id) ?? 0))
+      : Math.max(0, j.hours - (worked.get(j.room.id) ?? 0));
     const a = attendance(m, state.day);
     const dutyFrom = (state.day - 1) * 24 + shiftOf(m.role).workStartHour + a.lateHours;
     const onDuty = !a.absent && isOnShift(m.role, state.hour) && dutyFrom < end;
@@ -276,6 +291,10 @@ export function planStaff(
     let t = from;
     let pos: TilePos | null = m.at;
     let roomId: string | undefined;
+    let fatigueBreak = fatigueOn() ? m.fatigueBreak : undefined;
+    const initialFatigue = fatigueAt(state, m, from);
+    const energy = () => projectFatigue(m, legs, from, t, initialFatigue);
+    const updateRate = () => { rate = staffRate({ ...m, stats: { ...m.stats!, fatigue: energy() } }); };
 
     // A walk under way at the boundary carries on
     if (m.carry && m.carry.end > from) {
@@ -293,14 +312,14 @@ export function planStaff(
       return leg;
     };
     const result = (): StaffItinerary => {
-      const last = legs[legs.length - 1];
+      const last = [...legs].reverse().find(l => l.start < end);
       const carry = last && last.kind === 'walk' && last.end > end ? last : undefined;
       let at = pos;
       if (at && isEntranceTile(state, at) && (m.leaving || !onDuty) && !carry && t <= end) {
         const commutingIn = !m.leaving && !a.absent && a.lateHours === 0 && state.hour === shiftOf(m.role).workStartHour - 1;
         if (!commutingIn) at = null; // walked out the door
       }
-      return { staffId: m.id, legs, end: { at, roomId, carry } };
+      return { staffId: m.id, legs, end: { at, roomId, carry, ...(fatigueBreak && fatigueBreak.end > end ? { fatigueBreak } : {}) } };
     };
 
     // Let go, or off shift: head out (or, the hour before the shift, come in)
@@ -336,6 +355,28 @@ export function planStaff(
       if (m.at) legs.push(makeStay(pos!, t, dutyFrom, 'wait'));
       t = dutyFrom;
     }
+
+    // A fixed break can include a walk from the previous hour. Never restart
+    // its half hour at every boundary or after a paused edit.
+    if (fatigueBreak && fatigueBreak.end > t) {
+      const valid = fatigueBreak.placeId ? getAccessibleBreakRooms(state).some(r => r.id === fatigueBreak!.placeId && sameTile(r, fatigueBreak!.at))
+        : isHallway(state, fatigueBreak.at.gridX, fatigueBreak.at.gridY, fatigueBreak.at.floor);
+      const route = valid ? findRoute(state, pos!, fatigueBreak.at, pace) : null;
+      if (!route) {
+        const rest = planStaffRest(state, m, pos!, t, reservations, Math.max(0, fatigueBreak.end - Math.max(t, fatigueBreak.start)), fatigueBreak.end);
+        legs.push(...rest.legs); t = rest.until; pos = rest.at; fatigueBreak = rest.reservation;
+      } else if (!sameTile(pos!, fatigueBreak.at)) walk(route);
+      if (sameTile(pos!, fatigueBreak.at) && t < fatigueBreak.end) {
+        if (t < fatigueBreak.start) {
+          legs.push(makeStay(pos!, t, fatigueBreak.start, 'wait'));
+          t = fatigueBreak.start;
+        }
+        legs.push(makeStay(pos!, t, fatigueBreak.end, 'rest', { restRate: fatigueBreak.placeId ? STAFF_FATIGUE.roomRecovery : STAFF_FATIGUE.fallbackRecovery, placeId: fatigueBreak.placeId }));
+        t = fatigueBreak.end;
+      }
+    }
+    if (t >= end - 1e-9) { roomId = sticky.get(m.id)?.room.id; return result(); }
+    fatigueBreak = undefined;
 
     // Work through jobs until the hour is up. A job is only taken once there's
     // a way to it from here, so a worker who's cut off doesn't hog the queue.
@@ -396,6 +437,18 @@ export function planStaff(
     // Still walking to it all hour (a long way up): it stays theirs into the next hour
     if (job && t >= end - 1e-9) roomId = job.room.id;
     while (t < end - 1e-9) {
+      if (fatigueOn() && energy() >= STAFF_FATIGUE.breakAt
+        && !(job && worked.has(job.room.id) && (job.preventive || isDnd(job)))) {
+        const resume = job && worked.has(job.room.id) ? job : undefined;
+        if (job && !worked.has(job.room.id)) claimed.delete(job.room.id);
+        job = undefined;
+        const rest = planStaffRest(state, m, pos!, t, reservations);
+        legs.push(...rest.legs); t = rest.until; pos = rest.at; fatigueBreak = rest.reservation;
+        if (t >= end - 1e-9) break;
+        fatigueBreak = undefined;
+        job = resume;
+      }
+      updateRate();
       if (!job) {
         job = queue.find(j => !claimed.has(j.room.id) && !unreachable.has(j.room.id) && notNow.get(j.room.id) !== t);
         if (!job) {
@@ -404,7 +457,7 @@ export function planStaff(
           if (later === null) break;
           // (resting, if they can get to the resting place in time; else waiting where they are)
           if (later.rest) walk(later.rest);
-          legs.push(later.home ? makeStay(pos!, t, later.at, 'rest', later.restPlaceId ? { placeId: later.restPlaceId } : {}) : makeStay(pos!, t, later.at, 'wait'));
+          legs.push(later.home ? makeStay(pos!, t, later.at, 'rest', { ...(later.restPlaceId ? { placeId: later.restPlaceId } : {}), ...(fatigueOn() ? { restRate: STAFF_FATIGUE.fallbackRecovery } : {}) }) : makeStay(pos!, t, later.at, 'wait'));
           t = later.at;
           continue;
         }
@@ -423,7 +476,9 @@ export function planStaff(
       if (job.preventive) {
         const guest = state.guests.find(g => g.id === job!.room.guestId);
         const exit = stepHours(target, doorTile(job.room, job.room.door), pace);
-        const work = needed(job) / rate;
+        const reachesTired = energy() < STAFF_FATIGUE.tiredAt && energy() + STAFF_FATIGUE.gain[m.profile?.stamina ?? 'normal'] * (way.approach + way.step + needed(job) / rate) >= STAFF_FATIGUE.tiredAt;
+        const safeRate = fatigueOn() && reachesTired ? rate * STAFF_FATIGUE.tiredRate : rate;
+        const work = needed(job) / safeRate;
         const arrive = t + way.approach;
         const enter = guest ? dndCleanStart(guest, job.room, arrive, way.step + work + exit) : null;
         const shiftEnd = (state.day - 1) * 24 + shiftOf(m.role).workEndHour;
@@ -449,7 +504,9 @@ export function planStaff(
         // Do not disturb: wait outside the door, step in only once the whole party is out,
         // and only if they'll stay out till it's done
         const guest = dndGuestOf(job)!;
-        if (!guest || dndCleanStart(guest, job.room, t + way.approach, needed(job) / rate + way.step + pace) === null) {
+        const reachesTired = energy() < STAFF_FATIGUE.tiredAt && energy() + STAFF_FATIGUE.gain[m.profile?.stamina ?? 'normal'] * (way.approach + way.step + needed(job) / rate) >= STAFF_FATIGUE.tiredAt;
+        const safeRate = fatigueOn() && reachesTired ? rate * STAFF_FATIGUE.tiredRate : rate;
+        if (!guest || dndCleanStart(guest, job.room, t + way.approach, needed(job) / safeRate + way.step + pace) === null) {
           turnDown(job.room.id);
           job = undefined;
           continue;
@@ -461,7 +518,7 @@ export function planStaff(
           break;
         }
         // (timed from when they're actually at the door)
-        const enter = dndCleanStart(guest, job.room, t, needed(job) / rate + way.step + pace);
+        const enter = dndCleanStart(guest, job.room, t, needed(job) / safeRate + way.step + pace);
         if (enter === null) {
           turnDown(job.room.id);
           job = undefined;
@@ -521,11 +578,20 @@ export function planStaff(
           }
         }
       }
+      if (fatigueOn() && energy() >= STAFF_FATIGUE.breakAt && !job.preventive && !isDnd(job)) continue;
+      updateRate(); // travel can cross the tired threshold; this leg keeps its chosen rate
       const required = needed(job);
-      const work = Math.min(required / rate, end - t);
+      const nextThreshold = energy() < STAFF_FATIGUE.tiredAt - 1e-8 ? STAFF_FATIGUE.tiredAt : STAFF_FATIGUE.breakAt;
+      // A protected occupied-room visit must finish and exit in its agreed
+      // away window. Ordinary jobs may pause safely at an energy threshold.
+      const toThreshold = fatigueOn() && (nextThreshold === STAFF_FATIGUE.tiredAt || !job.preventive && !isDnd(job))
+        ? Math.max(1e-8, (nextThreshold - energy()) / STAFF_FATIGUE.gain[m.profile?.stamina ?? 'normal']) : Infinity;
+      const work = Math.min(required / rate, end - t, toThreshold);
       legs.push(makeStay(target, t, t + work, job.kind === 'repair' ? 'repair' : 'clean', { placeId: job.room.id, job: job.kind, ...(rate !== 1 ? { workRate: rate } : {}),
         ...(job.kind === 'repair' && STAFF_SPECIALTIES.enabled ? { repairTarget: goal(job) ?? 100, ...(job.preventive ? { preventive: true } : {}) } : {}) }));
       t += work;
+      worked.set(job.room.id, (worked.get(job.room.id) ?? 0) + work * rate);
+      if (work >= toThreshold - 1e-9 && required - work * rate > 1e-9 && t < end - 1e-9) continue;
       if (job.preventive && required - work * rate <= 1e-9) {
         // Finishing at the hour boundary still schedules the step out: the
         // guest's return must never find a worker left resting in their room.
@@ -543,11 +609,18 @@ export function planStaff(
 
     // Done for now: rest -- in the break room if they can get there, else where they are
     if (t < end - 1e-9 && pos) {
-      const rest = restingPlace(state, pos.floor);
-      if (rest && !sameTile(pos, rest.at)) walk(findRoute(state, pos, rest.at, pace));
-      if (t < end) {
-        const there = !!rest && sameTile(pos, rest.at);
-        legs.push(makeStay(pos, t, end, 'rest', there ? { placeId: rest!.breakRoomId } : {}));
+      if (fatigueOn()) {
+        // Idle recovery can be interrupted by work arriving next hour; only
+        // a compulsory break retains a fixed end beyond this plan.
+        const rest = planStaffRest(state, { ...m, stats: { ...m.stats!, fatigue: energy(), fatigueAt: t } }, pos, t, reservations, end - t, end, true);
+        legs.push(...rest.legs); t = rest.until; pos = rest.at;
+      } else {
+        const rest = restingPlace(state, pos.floor);
+        if (rest && !sameTile(pos, rest.at)) walk(findRoute(state, pos, rest.at, pace));
+        if (t < end) {
+          const there = !!rest && sameTile(pos, rest.at);
+          legs.push(makeStay(pos, t, end, 'rest', there ? { placeId: rest!.breakRoomId } : {}));
+        }
       }
     }
     return result();
@@ -598,7 +671,9 @@ export function rosterAfter(state: HotelState, plan: StaffPlan): StaffMember[] {
       .reduce((hours, leg) => hours + (leg.kind === 'stay' && leg.job ? Math.max(0, Math.min(leg.end, plan.start + 1) - Math.max(leg.start, plan.start)) : 0), 0);
     const duty = m.role === 'front_desk' ? staffDutyAt(m, plan.start) : undefined;
     const recordAttendance = !duty || (m.hiredAt ?? -Infinity) < duty.end && (m.dismissedAt ?? Infinity) > duty.start;
-    return afterWork(e ? { ...m, at: e.at, roomId: e.roomId, carry: e.carry, deskLane: e.deskLane } : m, workHours, duty?.day ?? state.day, recordAttendance);
+    const after = afterWork(e ? { ...m, at: e.at, roomId: e.roomId, carry: e.carry, deskLane: e.deskLane, fatigueBreak: e.fatigueBreak } : m, workHours, duty?.day ?? state.day, recordAttendance);
+    return fatigueOn() && after.stats ? { ...after, stats: { ...after.stats,
+      fatigue: fatigueAt({ ...state, staffPlan: plan }, m, plan.start + 1), fatigueAt: plan.start + 1 } } : after;
   });
 }
 
@@ -614,9 +689,19 @@ export function replanStaff(state: HotelState, t: number): HotelState {
   const plan = getStaffPlan(state);
   const done = new Map<string, Leg[]>();
   const now = getRoster(state).map(m => {
+    // These are planning-only snapshots. The returned state retains its
+    // boundary stats and the merged plan commits fatigue exactly once.
+    if (fatigueOn() && m.stats) m = { ...m, stats: { ...m.stats, fatigue: fatigueAt(state, m, t), fatigueAt: t } };
     const it = plan.itineraries.find(i => i.staffId === m.id);
     if (!it || it.legs.length === 0 || it.legs[0].start >= t) return m;
     const current = positionAt(it.legs, t)?.leg;
+    const resting = current?.kind === 'stay' && current.activity === 'rest' ? current
+      : current?.kind === 'walk' ? it.legs.slice(it.legs.indexOf(current) + 1).find(l => l.kind === 'stay') : undefined;
+    if (fatigueOn() && resting?.kind === 'stay' && resting.activity === 'rest' && resting.restRate !== undefined && resting.end > t) {
+      m = { ...m, fatigueBreak: { at: resting.at, placeId: resting.placeId, start: resting.start, end: resting.end } };
+    } else if (fatigueOn() && current?.kind === 'walk' && it.end.fatigueBreak) {
+      m = { ...m, fatigueBreak: it.end.fatigueBreak };
+    }
     const next = it.legs.find(l => l.kind === 'stay' && l.end > t && l.job);
     const roomId = (current?.kind === 'stay' && current.job ? current.placeId : undefined)
       ?? (next?.kind === 'stay' ? next.placeId : undefined);

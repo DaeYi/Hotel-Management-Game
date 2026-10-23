@@ -45,3 +45,18 @@ export const STAFF_HOSPITALITY = {
   maxReview: 0.6,
   maxContacts: 12,
 };
+
+/** Energy is accounted from the same walks, work and rest that are drawn. */
+export const STAFF_FATIGUE = {
+  enabled: true,
+  gain: { low: 7, normal: 5, high: 3 },
+  tiredAt: 60,
+  tiredRate: 0.85,
+  breakAt: 85,
+  breakHours: 0.5,
+  roomRecovery: 25,
+  fallbackRecovery: 10,
+  offDutyRecovery: 25,
+  planningShare: { room: 0.96, elsewhere: 0.95 },
+  busyFloorRooms: 12,
+};

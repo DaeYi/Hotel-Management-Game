@@ -2,7 +2,15 @@
 
 Date: 2026-10-11
 Status: IN PROGRESS. Purpose of stay (three values) and room preferences shipped first, as a slice: see guest-preferences.md. The remainder is being built in six phases (see "Build plan (2026-10-12)" at the end).
-Current implementation: phase 3c (event visitors), phase 4 (named housekeeping and maintenance staff), and phase 5's named front desk, shifts, specialties and hospitality are implemented. See the implementation notes below. Fatigue, cross-training and morale remain in phases 5-6.
+Current implementation: phase 3c (event visitors), phase 4 (named housekeeping and maintenance staff), and phase 5's named front desk, shifts, specialties, hospitality, stamina and fatigue are implemented. See the implementation notes below. Cross-training and morale remain in phases 5-6.
+
+### Stamina, fatigue and break rooms implementation (2026-10-23)
+
+- New candidates independently roll low/normal/high stamina at 25/50/25 without consuming the shared PRNG or changing wage agreements. Actual work, counter duty, walks and lift rides add 7/5/3 fatigue per hour. At 60 fatigue work rate is 0.85; at 85 staff take a half-hour break. Room work splits at energy thresholds; a committed occupied-room visit exits safely before a compulsory break, and desk service already underway keeps its agreed duration.
+- Breaks are actual walking and rest legs. The nearest reachable break room must have a seat free for the entire stay; all roles share its six seats. A full or disconnected room has a slower rest fallback at a staff base or outside a guest room. Rest restores 25 energy/hour in a reserved room and 10 elsewhere. Ordinary idle recovery can be interrupted by new work; a compulsory break keeps its fixed end across hour boundaries, paused edits and reloads.
+- Fatigue is committed once per hour from clipped actual itinerary time. Temporary mid-hour replans project energy without crediting the preserved past twice. Off-duty time restores 25/hour rather than resetting at midnight, so overnight shifts continue honestly. Existing staff default to normal stamina and zero fatigue; additive optional fields use save v22 and preserve identities, wages, experience and current plans.
+- The team and inspector show stamina, live energy, tired status and actual recovery. Staff resting on the floor show a small z. The staff panel lists reachable break rooms, seat occupancy and the recovery advantage. Staffing advice budgets recovery time; simulation strategies reserve space and build break rooms once a floor has twelve rooms. Idle recovery compares the energy restored by the next planning point with a nearby base, avoiding long walks that would recover no extra energy. Held-suite readiness accounts for projected fatigue, breaks and return walks.
+- Morale, raises, quitting and cross-training remain separate milestones.
 
 ### Specialties and hospitality implementation (2026-10-21)
 
@@ -477,7 +485,7 @@ Which work this person picks first. The player can reassign it.
 
 Energy across a shift. This gives break rooms a real job; today they are only waiting spots.
 
-- **Values:** stamina low / normal / high, rolled at hire. Fatigue (0-100) rises 9 / 7 / 5 per work-hour; walks and elevator rides count. Fatigue recovers 25/h in a break room and 10/h resting elsewhere, and resets overnight.
+- **Values:** stamina low / normal / high, rolled at hire. Fatigue (0-100) rises 7 / 5 / 3 per work-hour; walks and elevator rides count. Fatigue recovers 25/h in a break room, 10/h resting elsewhere and 25/h off duty; midnight itself does not reset it.
 - **Simulation:**
   - **Tired:** at fatigue 60 or more, work rate ×0.85.
   - **Break:** at 85 or more, `planStaff` inserts a real 0.5h rest stay at the nearest break room (limited by `BREAK_ROOM` seats) before the next job.
@@ -734,7 +742,7 @@ Each phase ships on its own (tests, an adversarial review, a 12-seed 400-day bal
 2. **Guests and service.** Housekeeping preference, hosted nights and "keep it down", Patience and the desk queue, Voice and complaint trips.
 3. **Money and spotlight.** Spending style, the restaurant tab, Spotlight guests and the glowing write-up, event-goers.
 4. **Staff identity.** Serial ids, names, the 3-candidate hiring card and choosing who goes; Experience, Work style, Reliability.
-5. **Staff load and shifts.** Named front desk staff and eight-hour desk shifts implemented first (2026-10-18); specialties and hospitality followed (2026-10-21). Stamina and fatigue and Cross-trained remain.
+5. **Staff load and shifts.** Named front desk staff and eight-hour desk shifts implemented first (2026-10-18); specialties and hospitality followed (2026-10-21), then stamina, fatigue and functional break rooms (2026-10-23). Cross-trained remains.
 6. **Morale and quitting,** with a rehiring rule for the bots.
 
 ### Phase 1a as shipped (2026-10-12)

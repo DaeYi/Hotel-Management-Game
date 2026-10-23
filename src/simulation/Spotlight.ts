@@ -1,7 +1,10 @@
 import type { FacilityType, GameEvent, Guest, GuestProfile, GuestTrait, HotelState, Party, Purpose, Room, SpotlightHold, SpotlightKind, SpotlightPlan, StaffMember } from './types.js';
-import { staffRate, attendance, nextStaffWork } from './StaffProfiles.js';
-import { SPOTLIGHT, GUEST_PROFILE, GUEST_PURPOSES, GUEST_NAMES, ECONOMY, SATISFACTION, FACILITY_CONFIG, STAR_RATING, AMENITIES, REVIEW, STORY, STAFF, HOUSEKEEPING } from '../config/balance.js';
-import { hash01, hourEnd } from './Movement.js';
+import { staffRate, attendance, nextStaffWork, staffDutyAt } from './StaffProfiles.js';
+import { SPOTLIGHT, GUEST_PROFILE, GUEST_PURPOSES, GUEST_NAMES, ECONOMY, SATISFACTION, FACILITY_CONFIG, STAR_RATING, AMENITIES, REVIEW, STORY, STAFF, HOUSEKEEPING, TRAVEL } from '../config/balance.js';
+import { STAFF_FATIGUE, STAFF_PERSONALITIES } from '../config/staff.js';
+import { fatigueOn, fatigueAt, fatigueGain, projectFatigue, planStaffRest, restReservations, type RestReservation } from './StaffFatigue.js';
+import { hash01, hourEnd, makeStay } from './Movement.js';
+import { roomTile } from './GuestMovement.js';
 import { getDayOfWeek } from './SeasonManager.js';
 import { appendStoryLogEntry } from './StoryGenerator.js';
 import { profileRoom, fitsParty, isBookable } from './RoomProfile.js';
@@ -11,7 +14,7 @@ import { isCheckoutDay } from './GuestManager.js';
 import { baseWalkHours } from './HousekeepingManager.js';
 import { surnameOf } from './Party.js';
 import { FEATURE_LABELS } from './Preferences.js';
-import { getOpenFacilities } from './Layout.js';
+import { getOpenFacilities, findRoute } from './Layout.js';
 import { housekeepingPrefOf } from './CleaningPreference.js';
 import type { GuestReviewBreakdown } from './GuestManager.js';
 
@@ -107,6 +110,61 @@ function inShift(t: number, hours: number, member?: StaffMember): number {
   return work > 1e-9 ? Infinity : at;
 }
 
+/** A held suite must allow for the same tired rates, recovery and real breaks as its cleaning crew. */
+function finishTurnover(state: HotelState, member: StaffMember | undefined, room: Room, from: number, units: number, walk: number, reservations: RestReservation[]): { done: number; member?: StaffMember } {
+  if (!Number.isFinite(from)) return { done: Infinity, member };
+  if (!member || !fatigueOn()) return { done: inShift(from, units / (member ? staffRate(member) : 1) + walk, member), member };
+  let at = from, energy = fatigueAt(state, member, from), pos = roomTile(room);
+  const advance = (until: number) => { energy = projectFatigue(member, [], at, until, energy); at = until; };
+  const active = (hours: number) => {
+    energy = projectFatigue(member, [makeStay(pos, at, at + hours, 'clean')], at, at + hours, energy);
+    at += hours;
+  };
+  // A saved break is a commitment, including the walk already underway. Its
+  // remaining rest cannot disappear from a readiness quote after reloading.
+  const pending = member.fatigueBreak;
+  if (pending && pending.end > at) {
+    active(Math.max(0, pending.start - at));
+    energy = projectFatigue(member, [makeStay(pending.at, at, pending.end, 'rest', {
+      restRate: pending.placeId ? STAFF_FATIGUE.roomRecovery : STAFF_FATIGUE.fallbackRecovery,
+    })], at, pending.end, energy);
+    at = pending.end;
+    const back = findRoute(state, pending.at, pos, TRAVEL.hoursPerTile);
+    if (!back) return { done: Infinity, member };
+    walk = Math.max(walk, back.hours);
+  }
+  // Keep the existing conservative base-to-room transfer estimate. Fatigue
+  // follows its elapsed walking time, while overnight gaps recover normally.
+  for (let guard = 0; walk > 1e-9 && guard < 120; guard++) {
+    advance(atWork(at, member));
+    const step = Math.min(walk, staffDutyAt(member, at).end - at);
+    active(step); walk -= step;
+  }
+  if (walk > 1e-9) return { done: Infinity, member };
+  const baseRate = staffRate({ ...member, stats: { ...member.stats!, fatigue: 0 } });
+  for (let guard = 0; units > 1e-9 && guard < 2000; guard++) {
+    if (at - from > 60 * 24) return { done: Infinity, member };
+    advance(atWork(at, member));
+    if (energy >= STAFF_FATIGUE.breakAt - 1e-9) {
+      const rest = planStaffRest(state, member, pos, at, reservations);
+      energy = projectFatigue(member, rest.legs, at, rest.until, energy);
+      at = rest.until;
+      const back = findRoute(state, rest.at, pos, TRAVEL.hoursPerTile);
+      if (!back) return { done: Infinity, member };
+      active(back.hours);
+      continue;
+    }
+    const rate = baseRate * (energy >= STAFF_FATIGUE.tiredAt - 1e-9 ? STAFF_FATIGUE.tiredRate : 1);
+    const threshold = energy < STAFF_FATIGUE.tiredAt - 1e-9 ? STAFF_FATIGUE.tiredAt : STAFF_FATIGUE.breakAt;
+    const step = Math.min(units / rate, staffDutyAt(member, at).end - at, (threshold - energy) / fatigueGain(member));
+    active(step); units -= step * rate;
+  }
+  if (units > 1e-9) return { done: Infinity, member };
+  const hours = member.profile?.experience === 'rookie' ? 0 : STAFF_PERSONALITIES.experienceHours[member.profile?.experience ?? 'skilled'];
+  return { done: at, member: { ...member, at: pos, fatigueBreak: undefined,
+    stats: { workHours: member.stats?.workHours ?? hours, lateDays: 0, absentDays: 0, ...member.stats, fatigue: energy, fatigueAt: at } } };
+}
+
 /**
  * When a room being cleaned (or its guest's leaving, then cleaned) will be
  * done (absolute hours), as the housekeepers work it out hour by hour
@@ -146,15 +204,16 @@ function cleanedAt(state: HotelState, room: Room, between: boolean): number {
   const taken = new Set<string>();
   const free: number[] = [];
   const workers: Array<StaffMember | undefined> = [];
+  const reservations = fatigueOn() ? restReservations(state) : [];
   // Each keeps at the room they're in (no walk to it)
   for (const m of (state.staffRoster ?? []).filter(x => x.role === 'housekeeper' && !x.leaving).slice(0, staff)) {
     const job = m.roomId ? jobs.find(j => j.id === m.roomId && !taken.has(j.id) && j.from <= t + 1e-9) : undefined; // (a turnover under way: not a daily clean)
     if (!job || attendance(m, Math.floor(t / 24) + 1).absent) { free.push(t); workers.push(m); continue; }
     taken.add(job.id);
-    const done = inShift(t, job.hours / staffRate(m), m);
-    if (job.id === room.id) return done;
-    free.push(done);
-    workers.push(m);
+    const result = finishTurnover(state, m, state.rooms.find(r => r.id === job.id) ?? room, t, job.hours, 0, reservations);
+    if (job.id === room.id) return result.done;
+    free.push(result.done);
+    workers.push(result.member);
   }
   while (free.length < staff) { free.push(t); workers.push(undefined); }
   for (let guard = 0; guard < 2000; guard++) {
@@ -168,9 +227,10 @@ function cleanedAt(state: HotelState, room: Room, between: boolean): number {
     }
     const job = waiting.reduce((best, j) => (j.hours < best.hours || (j.hours === best.hours && j.order < best.order) ? j : best));
     taken.add(job.id);
-    const done = inShift(free[i], job.hours / (workers[i] ? staffRate(workers[i]!) : 1) + walk, workers[i]);
-    if (job.id === room.id) return done;
-    free[i] = done;
+    const result = finishTurnover(state, workers[i], state.rooms.find(r => r.id === job.id) ?? room, free[i], job.hours, walk, reservations);
+    if (job.id === room.id) return result.done;
+    free[i] = result.done;
+    workers[i] = result.member;
   }
   return Infinity;
 }

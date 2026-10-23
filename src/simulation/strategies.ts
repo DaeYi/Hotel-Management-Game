@@ -1,5 +1,7 @@
 import type { HotelState, RoomType, FacilityType, AmenityTier, Direction } from './types.js';
-import { ROOM_CONFIG, FACILITY_CONFIG, GRID, LOAN, ELEVATOR, STARTER_LAYOUT, DESK, CLOSET } from '../config/balance.js';
+import { ROOM_CONFIG, FACILITY_CONFIG, GRID, LOAN, ELEVATOR, STARTER_LAYOUT, DESK, CLOSET, BREAK_ROOM } from '../config/balance.js';
+import { fatigueOn } from './StaffFatigue.js';
+import { STAFF_FATIGUE } from '../config/staff.js';
 import {
   addRoom, addFacility, demolishRoom, isTileOccupied, isUnlocked, setRoomPrice, renovateRoom, renovateFacility,
   upgradeFacility, getFacilityUpgradeCost, addElevator, buildFloor, getNextFloorCost, getElevatorLoad, addFixture, getRoomBuildCost,
@@ -68,11 +70,13 @@ const MAX_RENOVATIONS_PER_DAY = 3; // don't take half the hotel offline at once
 // The managed bots follow STARTER_LAYOUT: hallway rows on every floor, with
 // elevator shafts and extra desks on reserved tiles.
 const ELEVATOR_TILES = STARTER_LAYOUT.elevatorTiles;
+const BREAK_TILE = [4, 0] as const;
 const isReservedTile = (x: number, y: number, floor: number) =>
   STARTER_LAYOUT.hallwayTiles.some(([hx, hy]) => hx === x && hy === y)
   || ELEVATOR_TILES.some(([ex, ey]) => ex === x && ey === y)
   || (floor === 0 && STARTER_LAYOUT.deskTiles.some(([dx, dy]) => dx === x && dy === y))
-  || (floor > 0 && STARTER_LAYOUT.closetTile[0] === x && STARTER_LAYOUT.closetTile[1] === y);
+  || (floor > 0 && STARTER_LAYOUT.closetTile[0] === x && STARTER_LAYOUT.closetTile[1] === y)
+  || (fatigueOn() && BREAK_TILE[0] === x && BREAK_TILE[1] === y);
 
 const CLOSET_MIN_ROOMS = 6;
 
@@ -114,6 +118,18 @@ function addClosetsIfNeeded(state: HotelState, afford: Afford): HotelState {
     if (rooms >= CLOSET_MIN_ROOMS && !hasCloset && afford(s, CLOSET.buildCost)) {
       s = addFixture(s, 'closet', x, y, floor) ?? s;
     }
+  }
+  return s;
+}
+
+/** Recovery belongs near busy floors, just as supply closets do. */
+function addBreakRoomsIfNeeded(state: HotelState, afford: Afford): HotelState {
+  if (!fatigueOn()) return state;
+  let s = state;
+  for (let floor = 0; floor < s.floorCount; floor++) {
+    if (s.rooms.filter(r => r.floor === floor).length < STAFF_FATIGUE.busyFloorRooms
+      || s.fixtures.some(f => f.type === 'breakroom' && f.floor === floor) || !afford(s, BREAK_ROOM.buildCost)) continue;
+    s = addFixture(s, 'breakroom', BREAK_TILE[0], BREAK_TILE[1], floor) ?? s;
   }
   return s;
 }
@@ -245,6 +261,7 @@ function managedStrategy(opts: ManagedOptions): Strategy {
 
     s = addDeskIfNeeded(s, afford);
     s = addClosetsIfNeeded(s, afford);
+    s = addBreakRoomsIfNeeded(s, afford);
 
     // Keep elevator waits comfortable as the upper floors fill
     if (s.elevators.length > 0 && getElevatorLoad(s) > 0.9) {

@@ -10,6 +10,7 @@ import { cleanlinessDelta, staffRate, attendanceShare, attendance } from './Staf
 import { recordHospitality } from './StaffHospitality.js';
 import { guestTileAt } from './GuestMovement.js';
 import { sameTile } from './Movement.js';
+import { fatigueCapacityShare } from './StaffFatigue.js';
 
 /**
  * Start turnover cleaning on a room after guest checkout. The housekeepers'
@@ -259,7 +260,7 @@ export function housekeepingHoursAvailable(housekeepers: number): number {
 export function housekeepersNeeded(state: HotelState, occupancy: number): number {
   const crew = (state.staffRoster ?? []).filter(m => m.role === 'housekeeper' && !m.leaving);
   const available = crew.length ? crew.reduce((sum, m) => sum + attendanceShare(m), 0) / crew.length : 1;
-  return Math.ceil(estimateHousekeepingHours(state, occupancy) / (housekeepingHoursAvailable(1) * available));
+  return Math.ceil(estimateHousekeepingHours(state, occupancy) / (housekeepingHoursAvailable(1) * available * fatigueCapacityShare(state)));
 }
 
 /**
@@ -326,7 +327,7 @@ export function getHousekeepingStatus(state: HotelState): {
   const hoursAvailable = crew.reduce((hours, m) => {
     const a = attendance(m, state.day);
     return hours + (a.absent ? 0 : Math.max(0, STAFF.housekeeping.workEndHour - Math.max(HOUSEKEEPING.dailyCleaningHour, STAFF.housekeeping.workStartHour + a.lateHours)));
-  }, housekeepingHoursAvailable(Math.max(0, housekeepers - crew.length)));
+  }, housekeepingHoursAvailable(Math.max(0, housekeepers - crew.length))) * fatigueCapacityShare(state);
 
   let recommendation: string | null = null;
   if (housekeepers === 0 && state.rooms.length > 0) {

@@ -128,7 +128,7 @@ describe('Balance: there is a right amount of housekeeping', () => {
     // with spotlight guests, so a change that fails here needs the 96-seed check before it's blamed.
     expect(right).toBeGreaterThan(median('understaffed') * 1.5);
     expect(right).toBeGreaterThan(median('overstaffed') * 1.15);
-  }, 1800000);
+  }, 3600000); // Same 72 seeded runs; fatigue now projects physical work, recovery and future desk coverage.
 });
 
 describe('The staff on screen do exactly the work the simulation credits', () => {

@@ -1,10 +1,11 @@
 import { useState } from 'preact/hooks';
-import type { StaffRole, StaffMember, HotelState, FrontDeskShift } from '../simulation/types';
+import type { StaffRole, StaffMember, HotelState, FrontDeskShift, Leg } from '../simulation/types';
 import { hiringCandidates } from '../simulation/StaffHiring';
 import { attendance, experienceOf, roleLabel, shiftFor, staffRate, staffWage, repairTarget, staffDutyAt, checkInHours, frontDeskOn, hospitalityOf, specialtyOf, specialtiesFor, specialtyLabel, type StaffCandidate } from '../simulation/StaffProfiles';
 import { getStaffPlan } from '../simulation/StaffManager';
 import { positionAt } from '../simulation/Movement';
-import { STAFF_PERSONALITIES, FRONT_DESK_STAFF, STAFF_HOSPITALITY, STAFF_SPECIALTIES } from '../config/staff';
+import { STAFF_PERSONALITIES, FRONT_DESK_STAFF, STAFF_HOSPITALITY, STAFF_SPECIALTIES, STAFF_FATIGUE } from '../config/staff';
+import { fatigueOn, fatigueAt, staminaOf } from '../simulation/StaffFatigue';
 import { getUpkeepMultiplier } from '../simulation/StarRatingManager';
 import { useController, useLiveClock } from './context';
 import { capitalize } from './format';
@@ -47,9 +48,52 @@ function SpecialtyPicker({ member }: { member: StaffMember }) {
   </div>;
 }
 
+function activeStaffLeg(member: StaffMember, state: HotelState, t: number): Leg | undefined {
+  const itinerary = getStaffPlan(state).itineraries.find(i => i.staffId === member.id);
+  const leg = itinerary ? positionAt(itinerary.legs, t)?.leg : undefined;
+  return leg && leg.start <= t && t < leg.end ? leg : undefined;
+}
+
+function restLabel(member: StaffMember, state: HotelState, t: number): string | null {
+  const leg = activeStaffLeg(member, state, t);
+  if (leg?.kind !== 'stay' || leg.activity !== 'rest') return null;
+  const room = state.fixtures.find(f => f.type === 'breakroom' && f.id === leg.placeId);
+  const takingBreak = member.fatigueBreak && member.fatigueBreak.start <= t && t < member.fatigueBreak.end;
+  return room ? takingBreak ? 'Taking a break in the break room' : 'Resting in the break room'
+    : takingBreak ? 'Taking a break nearby' : 'Resting nearby';
+}
+
+function StaminaDetails({ member }: { member: StaffMember }) {
+  if (!fatigueOn()) return null;
+  const stamina = staminaOf(member);
+  return <div class="dim tiny" title={`Stamina is fixed at hire. ${capitalize(stamina)} stamina adds ${STAFF_FATIGUE.gain[stamina]} fatigue per active hour, including walks and lift rides. Stamina does not change wages.`}>
+    Stamina: {capitalize(stamina)} · {STAFF_FATIGUE.gain[stamina]} fatigue/active hour
+  </div>;
+}
+
+export function StaffEnergy({ member }: { member: StaffMember }) {
+  const c = useController();
+  if (!fatigueOn()) return null;
+  const fatigue = fatigueAt(c.state, member, c.gameTime);
+  const energy = Math.round(100 - fatigue);
+  const resting = restLabel(member, c.state, c.gameTime);
+  const leg = activeStaffLeg(member, c.state, c.gameTime);
+  const recovery = leg?.kind === 'stay' && leg.activity === 'rest' ? leg.restRate ?? STAFF_FATIGUE.fallbackRecovery : null;
+  const status = resting ?? (fatigue >= STAFF_FATIGUE.breakAt ? 'Needs a break' : fatigue >= STAFF_FATIGUE.tiredAt ? 'Tired' : 'Ready');
+  const level = resting ? 'recovering' : fatigue >= STAFF_FATIGUE.breakAt ? 'exhausted' : fatigue >= STAFF_FATIGUE.tiredAt ? 'tired' : 'ready';
+  return <div class={`staff-energy ${level}`}>
+    <div class="tiny">Energy: {energy}% · {status}</div>
+    <progress class="staff-energy-meter" value={energy} max={100} aria-label={`Energy for ${member.name ?? 'staff member'}`} aria-valuetext={`${energy}% energy; ${status}`} />
+    {resting && recovery !== null && <div class="dim tiny">Recovering {recovery} energy/hour.</div>}
+    {!resting && fatigue >= STAFF_FATIGUE.tiredAt && <div class="dim tiny">{member.role === 'front_desk' ? 'New service' : 'Work'} is {Math.round((1 - STAFF_FATIGUE.tiredRate) * 100)}% slower while tired.</div>}
+  </div>;
+}
+
 /** Current work, from the very same itinerary the world draws. */
 export function staffActivity(member: StaffMember, state: HotelState, t: number): string {
   if (member.leaving) return 'Leaving the hotel';
+  const resting = fatigueOn() ? restLabel(member, state, t) : null;
+  if (resting) return resting;
   if (member.role === 'front_desk') {
     const duty = staffDutyAt(member, t);
     if (t >= duty.end) return 'Off duty';
@@ -81,14 +125,17 @@ export function StaffDetails({ member }: { member: StaffMember }) {
   const wage = staffWage(member), upkeep = getUpkeepMultiplier(c.state.starRating);
   const target = repairTarget(member);
   const desk = member.role === 'front_desk';
+  const live = fatigueOn() ? { ...member, stats: { ...member.stats!, fatigue: fatigueAt(c.state, member, c.gameTime) } } : member;
   return <>
     <div class="body small">{capitalize(experienceOf(member))} · {!desk && `${profile?.style ?? 'standard'} · `}{profile?.reliability ?? 'dependable'}</div>
-    <div class="dim tiny">{desk ? `Check-in: ${Math.round(checkInHours(member) * 60)} min` : `${member.role === 'housekeeper' ? 'Cleaning' : 'Repairs'} ${rateLabel(member)}`} · {wageLabel(wage * upkeep)}/{desk ? '8h shift' : 'day'}{upkeep !== 1 ? ` (${wageLabel(wage)} base)` : ''}</div>
+    <div class="dim tiny">{desk ? `Base check-in: ${Math.round(checkInHours(member) * 60)} min` : `${member.role === 'housekeeper' ? 'Cleaning' : 'Repairs'} ${rateLabel(live)}`} · {wageLabel(wage * upkeep)}/{desk ? '8h shift' : 'day'}{upkeep !== 1 ? ` (${wageLabel(wage)} base)` : ''}</div>
     <div class="dim tiny">{Math.floor(member.stats?.workHours ?? 80)} work hours · hired day {member.hiredDay ?? 1}</div>
     {profile && !profile.legacy && !desk && <div class="dim tiny">{member.role === 'housekeeper'
       ? profile.style === 'speedy' ? 'Finishes 10 cleanliness points below the target' : profile.style === 'meticulous' ? 'Adds 10 cleanliness points; reports damage' : 'Cleans to the hotel’s target'
       : `${specialtyOf(member) === 'preventive' ? 'Vacant-room repairs' : 'Repairs'} to ${target}% condition`}</div>}
     <div class="dim tiny">Attendance: {member.stats?.lateDays ?? 0} late days · {member.stats?.absentDays ?? 0} absent days</div>
+    <StaminaDetails member={member} />
+    <StaffEnergy member={member} />
     {STAFF_HOSPITALITY.enabled && <HospitalityDetails member={member} />}
     {STAFF_SPECIALTIES.enabled && <SpecialtyPicker member={member} />}
     {desk && <DeskShiftPicker member={member} />}
@@ -123,6 +170,7 @@ function CandidateCard({ candidate }: { candidate: StaffCandidate }) {
       : `${specialtyOf(member) === 'preventive' ? 'Vacant-room repairs' : 'Repairs'} to ${repairTarget(member)}% condition`}</div>}
     {STAFF_SPECIALTIES.enabled && <div class="dim tiny">Specialty: {specialtyLabel(specialtyOf(member))} · {specialtyDescription(member)}</div>}
     {STAFF_HOSPITALITY.enabled && <HospitalityDetails member={member} />}
+    <StaminaDetails member={member} />
     <button class="good" onClick={() => c.hireStaff(candidate.role, candidate.id, candidate.shift)} aria-label={`Hire ${candidate.name}`}>Hire</button>
   </li>;
 }

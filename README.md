@@ -39,6 +39,8 @@ Staff specialties can now be reassigned per person: turnover runners or daily ro
 
 New housekeeping and desk candidates can be warm, polite or curt. Hospitality changes actual check-ins and in-room daily cleans; warm clerks handle desk complaints better and give phone noise complaints three extra hours of grace. Service encounters appear on guest cards and contribute at most ±0.6/10 to their checkout review, with named attribution. Existing saves retain neutral hospitality, original priorities and wages; new fields use the existing save format.
 
-Next: fatigue and breaks, cross-training, then morale and quitting. The detailed roadmap is in [guest and staff personalities](docs/designs/guest-staff-personalities.md). Larger rooms and 3D are later milestones described in [rethinking rooms](docs/designs/rooms-rethink.md).
+Staff now have low, normal or high stamina. Work, walking and lift rides build fatigue; tired workers slow down and take physical breaks. Break rooms have six real seats and restore energy faster than resting elsewhere. Staff panels show live energy, activity and seat usage. Recovery follows time off duty, so night clerks keep their fatigue across midnight. Existing staff start fresh with normal stamina and keep their names, wages and experience.
+
+Next: cross-training, then morale and quitting. The detailed roadmap is in [guest and staff personalities](docs/designs/guest-staff-personalities.md). Larger rooms and 3D are later milestones described in [rethinking rooms](docs/designs/rooms-rethink.md).
 
 The simulation is in `src/simulation`, player actions and the clock in `src/game`, the Preact interface in `src/ui`, and Phaser drawing in `src/render`.
