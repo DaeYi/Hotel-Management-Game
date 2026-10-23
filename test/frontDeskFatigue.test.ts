@@ -41,18 +41,25 @@ describe('The front desk uses the fatigue of the clerk actually serving', () => 
   });
 
   it('keeps exact future low-stamina speed windows after off-duty recovery, including commute fatigue', () => {
-    const original = hotel(85);
-    const s = { ...original, staffRoster: original.staffRoster!.map(m => ({ ...m, profile: { ...m.profile!, stamina: 'low' as const } })) };
-    const lane = physicalDeskLanes(s)[0], commute = routeFromStreet(s, lane.front)!.hours;
-    const crosses = 62 + (60 - commute * 9) / 9;
-    const future = scheduledDeskLanes(s)[0].duties!.filter(d => d.from >= 62 && d.from < 70);
-    expect(future[0].startUntil).toBeCloseTo(crosses, 10);
-    expect(future[1].from).toBeCloseTo(crosses, 10);
-    const before = quoteLane(lanesOf(s), new Map(), () => crosses - 0.01, 1 / 3, undefined, true)!;
-    const after = quoteLane(lanesOf(s), new Map(), () => crosses + 0.01, 1 / 3, undefined, true)!;
-    expect(before.hours).toBeCloseTo(1 / 3, 10);
-    expect(before.start + before.hours).toBeGreaterThan(crosses);
-    expect(after.hours).toBeCloseTo((1 / 3) / 0.85, 10);
+    const originalGain = STAFF_FATIGUE.gain.low;
+    // Stress the future rate split: a production eight-hour shift normally stays below 60.
+    STAFF_FATIGUE.gain.low = 9;
+    try {
+      const original = hotel(85);
+      const s = { ...original, staffRoster: original.staffRoster!.map(m => ({ ...m, profile: { ...m.profile!, stamina: 'low' as const } })) };
+      const lane = physicalDeskLanes(s)[0], commute = routeFromStreet(s, lane.front)!.hours;
+      const crosses = 62 + (60 - commute * STAFF_FATIGUE.gain.low) / STAFF_FATIGUE.gain.low;
+      const future = scheduledDeskLanes(s)[0].duties!.filter(d => d.from >= 62 && d.from < 70);
+      expect(future[0].startUntil).toBeCloseTo(crosses, 10);
+      expect(future[1].from).toBeCloseTo(crosses, 10);
+      const before = quoteLane(lanesOf(s), new Map(), () => crosses - 0.01, 1 / 3, undefined, true)!;
+      const after = quoteLane(lanesOf(s), new Map(), () => crosses + 0.01, 1 / 3, undefined, true)!;
+      expect(before.hours).toBeCloseTo(1 / 3, 10);
+      expect(before.start + before.hours).toBeGreaterThan(crosses);
+      expect(after.hours).toBeCloseTo((1 / 3) / 0.85, 10);
+    } finally {
+      STAFF_FATIGUE.gain.low = originalGain;
+    }
   });
 
   it('lets a service begin before tiredness and finish at its snapshotted speed', () => {
@@ -127,7 +134,7 @@ describe('The front desk uses the fatigue of the clerk actually serving', () => 
     const at = { gridX: room.gridX, gridY: room.gridY, floor: room.floor, door: room.door };
     const cleaner: StaffMember = { ...s.staffRoster![0], id: 'cleaner-later', role: 'housekeeper', shift: undefined, deskLane: undefined, at,
       profile: { ...s.staffRoster![0].profile!, stamina: 'low' }, stats: { ...s.staffRoster![0].stats!, fatigue: 80 } };
-    const route = findRoute(s, at, breakRoom)!, setOff = T + 5 / 9;
+    const route = findRoute(s, at, breakRoom)!, setOff = T + 5 / STAFF_FATIGUE.gain.low;
     const travel = makeWalk(route.path, setOff, TRAVEL.hoursPerTile), starts = travel.end, ends = starts + 0.5;
     const plannedBreak = { at: { gridX: breakRoom.gridX, gridY: breakRoom.gridY, floor: breakRoom.floor }, placeId: breakRoom.id, start: starts, end: ends };
     s = { ...s, staffRoster: [...s.staffRoster!, cleaner], staff: { ...s.staff, housekeepers: 1 },
@@ -202,9 +209,9 @@ describe('The front desk uses the fatigue of the clerk actually serving', () => 
     member = s.staffRoster![0];
     const plan = planDeskClerk(s, member, 47), staffPlan = { start: 47, itineraries: [plan] };
     const next = rosterAfter({ ...s, staffPlan }, staffPlan)[0];
-    expect(fatigueOf(next)).toBeCloseTo(47, 10);
+    expect(fatigueOf(next)).toBeCloseTo(40 + STAFF_FATIGUE.gain.normal, 10);
     expect(next.stats!.workHours).toBe(80);
-    expect(projectFatigue(member, plan.legs, 47, 48)).toBeCloseTo(47, 10);
+    expect(projectFatigue(member, plan.legs, 47, 48)).toBeCloseTo(40 + STAFF_FATIGUE.gain.normal, 10);
   });
 
   it('restores the original service and uninterrupted lane when fatigue is disabled', () => {
