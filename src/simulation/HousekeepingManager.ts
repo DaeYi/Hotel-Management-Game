@@ -10,7 +10,7 @@ import { cleanlinessDelta, staffRate, attendanceShare, attendance } from './Staf
 import { recordHospitality } from './StaffHospitality.js';
 import { guestTileAt } from './GuestMovement.js';
 import { sameTile } from './Movement.js';
-import { fatigueCapacityShare } from './StaffFatigue.js';
+import { fatigueCapacityShare, fatigueOn } from './StaffFatigue.js';
 
 /**
  * Start turnover cleaning on a room after guest checkout. The housekeepers'
@@ -205,9 +205,12 @@ const AVERAGE_STAY_NIGHTS = (ECONOMY.guestMinStay + ECONOMY.guestMaxStay) / 2;
  */
 const WALKS_PER_JOB = 2.5;
 
-/** The walk from a staff base to a room, on average (one turnover to the next is about one such walk). */
+/**
+ * Average work transfer, calibrated from desks and supply closets. Recovery
+ * rooms help breaks, but do not reset each trip between cleaning jobs.
+ */
 export function baseWalkHours(state: HotelState): number {
-  const walks = state.rooms.map(r => getStaffTravelHours(state, r)).filter(Number.isFinite);
+  const walks = state.rooms.map(r => getStaffTravelHours(state, r, !fatigueOn())).filter(Number.isFinite);
   return walks.length > 0 ? walks.reduce((a, b) => a + b, 0) / walks.length : 0;
 }
 
@@ -217,8 +220,7 @@ export function baseWalkHours(state: HotelState): number {
  * (WALKS_PER_JOB average walks from a staff base).
  */
 export function estimateHousekeepingHours(state: HotelState, occupancy: number): number {
-  const walks = state.rooms.map(r => getStaffTravelHours(state, r)).filter(Number.isFinite);
-  const avgWalk = (walks.length > 0 ? walks.reduce((a, b) => a + b, 0) / walks.length : 0) * WALKS_PER_JOB;
+  const avgWalk = baseWalkHours(state) * WALKS_PER_JOB;
   const occupied = state.rooms.length * occupancy;
   const crew = (state.staffRoster ?? []).filter(m => m.role === 'housekeeper' && !m.leaving);
   const rate = crew.length ? crew.reduce((sum, m) => sum + staffRate(m), 0) / crew.length : 1;
