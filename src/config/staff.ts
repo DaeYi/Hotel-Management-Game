@@ -57,6 +57,6 @@ export const STAFF_FATIGUE = {
   roomRecovery: 25,
   fallbackRecovery: 10,
   offDutyRecovery: 25,
-  planningShare: { room: 0.96, elsewhere: 0.95 },
-  busyFloorRooms: 12,
+  planningShare: { room: 0.96, elsewhere: 0.9 },
+  busyFloorRooms: 6,
 };
