@@ -1,10 +1,12 @@
 import { it, expect } from 'vitest';
 import { staffRate, specialtyOf } from '../src/simulation/StaffProfiles.js';
+import { fatigueAt } from '../src/simulation/StaffFatigue.js';
 import { createStarterHotel, addRoom, getAvailableRooms } from '../src/simulation/HotelState.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import { PRNG } from '../src/simulation/prng.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
 import { getStaffPlan } from '../src/simulation/StaffManager.js';
+import { assignStaffSpecialty } from '../src/simulation/StaffHiring.js';
 import { settleChanges } from '../src/simulation/Settle.js';
 import { processCleaningTick } from '../src/simulation/HousekeepingManager.js';
 import { processMaintenanceTick } from '../src/simulation/MaintenanceManager.js';
@@ -74,11 +76,20 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
     const kinds = ['standard', 'standard', 'bunk_family', 'standard', 'twin', 'standard', 'bunk_family', 'standard'] as const;
     kinds.forEach((kind, x) => { s = addRoom(s, kind, x, 2) ?? s; });
     const prng = new PRNG(seed);
-    for (let h = 0; h < 24 * 200; h++) {
+    // Recovery rooms take space and capital before the hotel expands. Keep
+    // every coverage gate, and run long enough to exercise the same volume.
+    for (let h = 0; h < 24 * 220; h++) {
       s = settleChanges(s, STRATEGIES.balanced(s), hourStart(s));
+      // This fixture exercises occupied-room maintenance deliberately; the
+      // quick-hire shortcut's changing candidate mix must not decide coverage.
+      for (const member of s.staffRoster ?? []) {
+        if (member.role !== 'maintenance' || member.leaving || specialtyOf(member) === 'preventive') continue;
+        s = settleChanges(s, assignStaffSpecialty(s, member.id, 'preventive') ?? s, hourStart(s));
+      }
       const before = s;
       const plan = getStaffPlan(before);
       const T = hourStart(before);
+      const withCurrentPlan = { ...before, staffPlan: plan };
       // C/D: itineraries contiguous, one worker per room at a time
       const stays: Array<{ room: string; a: number; b: number; who: string }> = [];
       for (const it of plan.itineraries) {
@@ -100,8 +111,12 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
           const at = positionAt(it.legs, (l.start + l.end) / 2)!;
           if (!room || at.x !== room.gridX || at.y !== room.gridY || at.floor !== room.floor) { bad('working stay not in its room', `${it.staffId} ${l.placeId}`); continue; }
           const worker = before.staffRoster?.find(m => m.id === it.staffId);
-          const rate = worker ? staffRate(worker) : 1;
-          if (Math.abs((l.workRate ?? 1) - rate) > 1e-9) bad('planned rate differs from the worker skill', it.staffId);
+          // The work stay snapshots its rate when it begins. A worker can
+          // cross the tired threshold between two stays in this same hour.
+          const fatigue = worker ? fatigueAt(withCurrentPlan, worker, l.start) : 0;
+          const expectedRate = worker ? staffRate({ ...worker, stats: { ...worker.stats!, fatigue } }) : 1;
+          const rate = l.workRate ?? 1;
+          if (Math.abs(rate - expectedRate) > 1e-9) bad('planned rate differs from the worker skill', `${it.staffId}: ${rate} vs ${expectedRate} at ${l.start}, fatigue ${fatigue}`);
           m.set(room.id, (m.get(room.id) ?? 0) + (Math.min(l.end, T + 1) - Math.max(l.start, T)) * rate);
         }
         return m;
@@ -147,7 +162,7 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
             time = end;
           }
         }
-        const rate = worker ? staffRate(worker) : 1;
+        const rate = l.workRate ?? 1; // independently checked against the worker's live energy above
         const workBefore = it.legs.slice(0, index).reduce((sum, leg) => sum + (leg.kind === 'stay' && leg.job === 'repair' && leg.placeId === room.id
           ? Math.max(0, Math.min(leg.end, T + 1) - Math.max(leg.start, T)) * (leg.workRate ?? 1) : 0), 0);
         const finish = l.start + Math.max(0, 85 - room.condition - workBefore * STAFF.maintenance.repairPerHour) / (STAFF.maintenance.repairPerHour * rate);
@@ -482,6 +497,8 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
   } finally {
     SPOTLIGHT.weeklyChance = weekly;
   }
+  if (process.env.ALIGNMENT_COUNTS === '1') process.stdout.write(`${JSON.stringify({ problems, examples, partyTrips, dndCleans, visitorNights, queued, gaveUp, complaintTrips, charges, dinners, thriftyTrips, held, spotlights, heldTaken, toured, writersLeft, tourSkips, preventiveRepairs, preventiveStarts, preventiveContinuations, preventiveCompleted })}\n`);
+  expect(problems, JSON.stringify(examples)).toEqual({});
   expect(partyTrips).toBeGreaterThan(50); // parties of three or more came and went
   expect(dndCleans).toBeGreaterThan(20); // do-not-disturb rooms were cleaned (while their guests were out)
   expect(visitorNights).toBeGreaterThan(20); // rowdy guests had friends round
@@ -500,5 +517,4 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
   expect(preventiveStarts).toBeGreaterThan(0);
   expect(preventiveContinuations).toBeGreaterThan(0);
   expect(preventiveCompleted).toBeGreaterThan(0);
-  expect(problems, JSON.stringify(examples)).toEqual({});
 }, 300000);

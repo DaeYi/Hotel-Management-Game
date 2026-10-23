@@ -679,5 +679,5 @@ describe('Refits in a running hotel', () => {
     }
     expect(s.rooms.filter(r => standard.some(o => o.id === r.id) && r.type === 'deluxe').length).toBeGreaterThan(0);
     expect(refitsSeen).toBeGreaterThan(0); // the checks above ran
-  });
+  }, 60000); // Forty simulated days exceeded the default five seconds on the CI runner.
 });

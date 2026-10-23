@@ -56,6 +56,7 @@ interface LayoutCache {
   walkable: Set<string>;
   reachable?: Set<string>;
   travel?: Map<string, number>;
+  supplyTravel?: Map<string, number>;
   routes: Map<string, RouteTree>; // shortest-time trees, by pace and starting tile
 }
 const signatureCache = new WeakMap<object, string>();
@@ -238,10 +239,10 @@ export function getCheckInCapacity(state: HotelState): number {
  * each reachable desk (the lobby), staff closet, and staff break room. With
  * none of those, staff come in off the street.
  */
-export function getStaffBases(state: HotelState): Pos[] {
+export function getStaffBases(state: HotelState, includeBreakRooms = true): Pos[] {
   const bases: Pos[] = [];
   for (const f of state.fixtures) {
-    if (f.type === 'entrance') continue;
+    if (f.type === 'entrance' || !includeBreakRooms && f.type === 'breakroom') continue;
     const front = getFixtureFront(state, f);
     if (front) bases.push(front);
   }
@@ -269,13 +270,14 @@ export function isEntranceTile(state: HotelState, pos: Pos): boolean {
 }
 
 /** Walking time (hours) from the nearest staff base to every reachable walkable tile. */
-function getTravelMap(state: HotelState): Map<string, number> {
+function getTravelMap(state: HotelState, includeBreakRooms: boolean): Map<string, number> {
   const layout = getLayout(state);
-  if (layout.travel) return layout.travel;
+  const cached = includeBreakRooms ? layout.travel : layout.supplyTravel;
+  if (cached) return cached;
 
   const walkable = layout.walkable;
   const hours = new Map<string, number>();
-  const frontier: Array<{ pos: Pos; h: number }> = getStaffBases(state).map(pos => ({ pos, h: 0 }));
+  const frontier: Array<{ pos: Pos; h: number }> = getStaffBases(state, includeBreakRooms).map(pos => ({ pos, h: 0 }));
 
   // Dijkstra over a tiny graph: steps cost hoursPerTile, elevator rides hoursPerFloor
   while (frontier.length > 0) {
@@ -292,17 +294,19 @@ function getTravelMap(state: HotelState): Map<string, number> {
     }
   }
 
-  layout.travel = hours;
+  if (includeBreakRooms) layout.travel = hours;
+  else layout.supplyTravel = hours;
   return hours;
 }
 
 /**
  * How long staff take to walk from their nearest base to a room's door, in
  * hours (one step further than the hallway tile outside it). Infinity when no
- * route exists -- staff can't service that room.
+ * route exists -- staff can't service that room. Workload advice can exclude
+ * break rooms: recovery locations do not shorten every room-to-room job.
  */
-export function getStaffTravelHours(state: HotelState, room: Doorway): number {
-  const hours = getTravelMap(state);
+export function getStaffTravelHours(state: HotelState, room: Doorway, includeBreakRooms = true): number {
+  const hours = getTravelMap(state, includeBreakRooms);
   let best = Infinity;
   for (const p of entryTiles(room)) {
     const h = hours.get(key(p.gridX, p.gridY, p.floor));

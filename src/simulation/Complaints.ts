@@ -109,11 +109,11 @@ export function planDeskComplaints(state: HotelState): HotelState {
     const legs: Leg[] = [
       ...there,
       ...(start > arrive + 1e-12 ? [makeStay(slot.lane.front, arrive, start, 'wait', { placeId: slot.lane.desk.id, ...lane })] : []),
-      makeStay(slot.lane.front, start, start + VOICE.complainHours, 'complain', { placeId: slot.lane.desk.id, ...lane }),
-      ...walkLegs(back, start + VOICE.complainHours, pace),
+      makeStay(slot.lane.front, start, start + slot.hours, 'complain', { placeId: slot.lane.desk.id, ...lane }),
+      ...walkLegs(back, start + slot.hours, pace),
     ];
     if (sleepsBetween(g, setOff, legsEnd(legs))) return g; // they'd be walking about in their own night
-    book(busy, slot.lane.key, start, start + VOICE.complainHours);
+    book(busy, slot.lane.key, start, start + slot.hours);
     const about = complaintAbout(state, g, room);
     changed = true;
     return { ...g, trip: legs, tripKind: 'complaint' as const, complaint: { about: about.label, cause: about.cause, via: 'desk' as const } };

@@ -8,6 +8,7 @@ import { CHECK_IN_HOURS } from '../src/simulation/GuestMovement.js';
 import { makeStay, hourStart } from '../src/simulation/Movement.js';
 import type { Guest, GuestProfile, HotelState, Party, Walker, StaffMember } from '../src/simulation/types.js';
 import { syncStaff } from '../src/simulation/StaffManager.js';
+import { STAFF_FATIGUE } from '../src/config/staff.js';
 
 // The front desk as it's drawn (render/ActorLayer.ts): each clerk's line in
 // front of them, in the order they'll be served, nobody on top of anybody.
@@ -65,6 +66,28 @@ describe('Named staff on screen', () => {
     expect(actors.staffAt(-100, -100)).toBeNull();
     actors.update(s, 1, T + 0.5);
     expect(actors.staffAt(staff[0].x, staff[0].y)).toBeNull();
+  });
+  it('keeps experience chevrons and adds a z only during an actual fatigue-recovery rest stay', () => {
+    const s = { ...createStarterHotel(), day: 4, hour: 12 }, T = hourStart(s);
+    const at = { gridX: 5, gridY: 2, floor: 0 };
+    const member: StaffMember = { id: 'housekeeper-100', name: 'Resting worker', role: 'housekeeper', at,
+      profile: { experience: 'skilled', style: 'standard', reliability: 'dependable', stamina: 'normal' },
+      stats: { workHours: 80, lateDays: 0, absentDays: 0, fatigue: 85 } };
+    const { actors, strokes } = layer();
+    const draw = (activity: 'rest' | 'wait', restRate?: number, t = T + 0.5) => {
+      strokes.length = 0;
+      actors.update({ ...s, staffRoster: [member], staffPlan: { start: T, itineraries: [{ staffId: member.id,
+        legs: [makeStay(at, T, T + 1, activity, { ...(restRate !== undefined ? { restRate } : {}) })], end: { at } }] } }, 0, t);
+      return [...strokes];
+    };
+    expect(draw('rest', 25)).toHaveLength(5); // two chevron lines and the three strokes of z
+    expect(draw('wait', 25)).toHaveLength(2);
+    expect(draw('rest')).toHaveLength(2);
+    expect(draw('rest', 25, T + 1)).toHaveLength(2);
+    try {
+      STAFF_FATIGUE.enabled = false;
+      expect(draw('rest', 25)).toHaveLength(2);
+    } finally { STAFF_FATIGUE.enabled = true; }
   });
 });
 

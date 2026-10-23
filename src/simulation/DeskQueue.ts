@@ -1,6 +1,6 @@
 import type { Fixture, GameEvent, Guest, HotelState, Leg, Patience, StayLeg, TilePos, Walker } from './types.js';
 import { partyOf, PartyLabel } from './Party.js';
-import { GUEST_PROFILE, PATIENCE, TRAVEL } from '../config/balance.js';
+import { GUEST_PROFILE, PATIENCE, TRAVEL, VOICE } from '../config/balance.js';
 import { checkInLanes } from './GuestMovement.js';
 import { routeFromStreet } from './Layout.js';
 import { hash01, makeStay, sameTile } from './Movement.js';
@@ -105,8 +105,9 @@ export function quoteLane(
     if (a === null) continue;
     const duties = lane.duties ?? [{ from: -Infinity, to: Infinity, checkInHours: hours, staffId: undefined }];
     for (const duty of duties) {
-      const length = checkIn ? duty.checkInHours : hours;
+      const length = checkIn ? duty.checkInHours : hours / (('serviceRate' in duty ? duty.serviceRate : undefined) ?? 1);
       const start = firstFree(busy.get(lane.key), Math.max(a, duty.from), length);
+      if ('startUntil' in duty && duty.startUntil !== undefined && start >= duty.startUntil - 1e-9) continue;
       if (start + length > duty.to + 1e-9) continue;
       if (!best || start < best.start - 1e-9 || Math.abs(start - best.start) < 1e-9 && length < best.hours - 1e-9) best = { lane, arriveAt: a, start, hours: length, staffId: duty.staffId };
       break;
@@ -302,7 +303,7 @@ export function reseatLanes(state: HotelState, t: number): HotelState {
       changed = true;
       continue;
     }
-    const slot = quoteLane(here, busy, () => from, hours, undefined, !m.complaint);
+    const slot = quoteLane(here, busy, () => from, m.complaint ? VOICE.complainHours : hours, undefined, !m.complaint);
     if (!slot) {
       // Keep an already admitted guest at the counter until coverage returns. Revisited on every tick/hire.
       if (namedFrontDesk(state)) {

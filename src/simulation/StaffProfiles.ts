@@ -1,6 +1,7 @@
 import type { StaffMember, StaffRole, FrontDeskShift, HotelState } from './types.js';
 import { STAFF, GUEST_NAMES, SURNAMES, HOUSEKEEPING } from '../config/balance.js';
-import { STAFF_PERSONALITIES as RULES, FRONT_DESK_STAFF, STAFF_SPECIALTIES, STAFF_HOSPITALITY } from '../config/staff.js';
+import { STAFF_PERSONALITIES as RULES, FRONT_DESK_STAFF, STAFF_SPECIALTIES, STAFF_HOSPITALITY, STAFF_FATIGUE } from '../config/staff.js';
+import { fatigueRate } from './StaffFatigue.js';
 import { hash01 } from './Movement.js';
 import { pick } from './Party.js';
 
@@ -8,6 +9,7 @@ export type Experience = 'rookie' | 'skilled' | 'veteran';
 export type WorkStyle = 'speedy' | 'standard' | 'meticulous';
 export type Reliability = 'dependable' | 'normal' | 'flaky';
 export type Hospitality = 'warm' | 'polite' | 'curt';
+export type Stamina = 'low' | 'normal' | 'high';
 export type StaffSpecialty = 'turnover_runner' | 'room_attendant' | 'responder' | 'preventive' | 'greeter' | 'upseller' | 'concierge';
 
 const SPECIALTIES: Record<StaffRole, StaffSpecialty[]> = {
@@ -37,6 +39,7 @@ export interface StaffProfile {
   reliability: Reliability;
   specialty?: StaffSpecialty; // absent on older saves: the role's original priority
   hospitality?: Hospitality; // absent on older saves: polite (neutral)
+  stamina?: Stamina; // absent on older saves: normal, with fresh energy
   legacy?: boolean; // existing staff keep their original performance and wage
 }
 
@@ -45,6 +48,8 @@ export interface StaffStats {
   lateDays: number;
   absentDays: number;
   attendanceDay?: number;
+  fatigue?: number;
+  fatigueAt?: number; // absolute hour at which fatigue was last committed
 }
 
 export interface StaffIdentity {
@@ -87,8 +92,9 @@ export function experienceOf(member: StaffIdentity): Experience {
 /** Work units per real hour in the room. Walks never get this multiplier. */
 export function staffRate(member: StaffIdentity): number {
   if ((member as StaffMember).role === 'front_desk') return 1 / (3 * checkInHours(member));
-  return !RULES.enabled || !member.profile || member.profile.legacy ? 1
+  const base = !RULES.enabled || !member.profile || member.profile.legacy ? 1
     : RULES.experienceRate[experienceOf(member)] / RULES.styleTime[member.profile.style];
+  return base * fatigueRate(member);
 }
 
 export function checkInHours(member: StaffIdentity): number {
@@ -96,13 +102,59 @@ export function checkInHours(member: StaffIdentity): number {
   return hours * STAFF_HOSPITALITY.checkInTime[hospitalityOf(member)];
 }
 
+interface StaffDuty {
+  day: number;
+  start: number;
+  end: number;
+  absent: boolean;
+  lateHours: number;
+  available: number;
+}
+interface CachedDuties {
+  id: string;
+  role: StaffRole;
+  shift?: FrontDeskShift;
+  startHour: number;
+  endHour: number;
+  hiredAt?: number;
+  restUntil?: number;
+  enabled: boolean;
+  reliability?: Reliability;
+  legacy?: boolean;
+  absentChance: number;
+  lateChance: number;
+  days: Map<number, StaffDuty>;
+}
+// A person is immutable during ordinary play. Checking the scheduling inputs
+// also keeps paused edits, migrations and mutable balance settings correct.
+const dutyCache = new WeakMap<Worker, CachedDuties>();
+
 /** A shift is keyed by its starting day; the night shift keeps that day's attendance after midnight. */
-export function staffDuty(member: Worker, day: number) {
-  const shift = shiftFor(member.role, member.shift);
-  const start = (day - 1) * 24 + shift.workStartHour;
-  const end = (day - 1) * 24 + shift.workEndHour;
+export function staffDuty(member: Worker, day: number): StaffDuty {
+  const shift = member.role === 'front_desk' ? FRONT_DESK_STAFF.shifts[member.shift ?? 'late'] : undefined;
+  const roomShift = member.role === 'housekeeper' ? STAFF.housekeeping : STAFF.maintenance;
+  const startHour = shift?.start ?? roomShift.workStartHour, endHour = shift?.end ?? roomShift.workEndHour;
+  const reliability = member.profile?.reliability, legacy = member.profile?.legacy;
+  const absentChance = reliability ? RULES.absentChance[reliability] : 0;
+  const lateChance = reliability ? RULES.lateChance[reliability] : 0;
+  let cached = dutyCache.get(member);
+  if (!cached || cached.id !== member.id || cached.role !== member.role || cached.shift !== member.shift
+    || cached.startHour !== startHour || cached.endHour !== endHour || cached.hiredAt !== member.hiredAt
+    || cached.restUntil !== member.restUntil || cached.enabled !== RULES.enabled || cached.legacy !== legacy
+    || cached.reliability !== reliability || cached.absentChance !== absentChance || cached.lateChance !== lateChance) {
+    cached = { id: member.id, role: member.role, shift: member.shift, startHour, endHour, hiredAt: member.hiredAt,
+      restUntil: member.restUntil, enabled: RULES.enabled, reliability, legacy, absentChance, lateChance, days: new Map() };
+    dutyCache.set(member, cached);
+  }
+  const previous = cached.days.get(day);
+  if (previous) return previous;
+  const start = (day - 1) * 24 + startHour, end = (day - 1) * 24 + endHour;
   const a = attendance(member, day);
-  return { day, start, end, ...a, available: Math.max(start + a.lateHours, member.hiredAt ?? -Infinity, member.restUntil ?? -Infinity) };
+  const duty = Object.freeze({ day, start, end, absent: a.absent, lateHours: a.lateHours,
+    available: Math.max(start + a.lateHours, member.hiredAt ?? -Infinity, member.restUntil ?? -Infinity) });
+  if (cached.days.size >= 8) cached.days.delete(cached.days.keys().next().value!);
+  cached.days.set(day, duty);
+  return duty;
 }
 
 export function staffDutyAt(member: Worker, t: number) {
@@ -132,14 +184,26 @@ export function repairTarget(member: StaffIdentity | undefined): number | null {
   return !RULES.enabled || !member?.profile || member.profile.legacy ? null : RULES.repairTarget[member.profile.style];
 }
 
+const neutralAttendance = Object.freeze({ absent: false, lateHours: 0 });
+const attendanceCache = new Map<string, { absent: boolean; lateHours: number }>();
+const MAX_ATTENDANCE_CACHE = 4096;
+
 export function attendance(member: Worker, day: number): { absent: boolean; lateHours: number } {
   const reliability = member.profile?.reliability;
-  if (!RULES.enabled || !reliability || member.profile?.legacy) return { absent: false, lateHours: 0 };
+  if (!RULES.enabled || !reliability || member.profile?.legacy) return neutralAttendance;
+  const absentChance = RULES.absentChance[reliability], lateChance = RULES.lateChance[reliability];
+  if (absentChance <= 0 && lateChance <= 0) return neutralAttendance;
+  const cacheKey = `${member.id}|${day}|${reliability}|${absentChance}|${lateChance}`;
+  const previous = attendanceCache.get(cacheKey);
+  if (previous) return previous;
   const key = `${member.id}|${day}`;
-  const absent = hash01(`${key}|absent`) < RULES.absentChance[reliability];
-  const late = !absent && hash01(`${key}|late`) < RULES.lateChance[reliability];
+  const absent = absentChance > 0 && hash01(`${key}|absent`) < absentChance;
+  const late = !absent && lateChance > 0 && hash01(`${key}|late`) < lateChance;
   const lateHours = !late ? 0 : reliability === 'flaky' ? 0.5 + 1.5 * hash01(`${key}|minutes`) : hash01(`${key}|minutes`);
-  return { absent, lateHours };
+  const result = Object.freeze({ absent, lateHours });
+  if (attendanceCache.size >= MAX_ATTENDANCE_CACHE) attendanceCache.delete(attendanceCache.keys().next().value!);
+  attendanceCache.set(cacheKey, result);
+  return result;
 }
 
 /** One person's next on-duty moment, accounting for their daily attendance. */
@@ -166,6 +230,7 @@ export function candidatesFor(day: number, role: StaffRole, used: readonly strin
     const specialty = options[Math.floor(hash01(`${id}|specialty`) * options.length)];
     const hospitality = role === 'maintenance' ? 'polite' : pick<Hospitality>([['warm', 0.25], ['polite', 0.5], ['curt', 0.25]], hash01(`${id}|hospitality`));
     const profile: StaffProfile = { experience, style, reliability,
+      ...(STAFF_FATIGUE.enabled ? { stamina: pick<Stamina>([['low', 0.25], ['normal', 0.5], ['high', 0.25]], hash01(`${id}|stamina`)) } : {}),
       ...(STAFF_SPECIALTIES.enabled ? { specialty } : {}), ...(STAFF_HOSPITALITY.enabled ? { hospitality } : {}) };
     const dailyWage = money(baseWage(role) * RULES.experienceWage[experience] * RULES.reliabilityWage[reliability]
       * (STAFF_HOSPITALITY.enabled ? STAFF_HOSPITALITY.wage[hospitality] : 1)
@@ -208,6 +273,7 @@ export function afterWork(member: Worker, hours: number, day: number, recordAtte
   const next = {
     ...member,
     stats: {
+      ...stats,
       workHours: stats.workHours + hours,
       lateDays: stats.lateDays + (recordAttendance && stats.attendanceDay !== day && a.lateHours > 0 ? 1 : 0),
       absentDays: stats.absentDays + (recordAttendance && stats.attendanceDay !== day && a.absent ? 1 : 0),

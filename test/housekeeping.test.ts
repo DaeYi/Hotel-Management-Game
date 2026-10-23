@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { createStarterHotel, addRoom } from '../src/simulation/HotelState.js';
+import { createStarterHotel, addRoom, addFixture } from '../src/simulation/HotelState.js';
 import {
   processCleaningTick, processDailyHousekeeping, startTurnoverCleaning, estimateHousekeepingHours,
-  housekeepersNeeded, housekeepingHoursAvailable, getHousekeepingStatus, PLANNING_OCCUPANCY,
+  housekeepersNeeded, housekeepingHoursAvailable, getHousekeepingStatus, PLANNING_OCCUPANCY, baseWalkHours,
 } from '../src/simulation/HousekeepingManager.js';
 import { processMaintenanceTick } from '../src/simulation/MaintenanceManager.js';
 import { getStaffPlan, plannedWork, planStaff, getRoster, syncRoster, restingPlace, replanStaff } from '../src/simulation/StaffManager.js';
@@ -14,6 +14,7 @@ import { processDailyCosts } from '../src/simulation/EconomyManager.js';
 import { simulate } from '../src/simulation/simulate.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
 import { HOUSEKEEPING, STAFF, AMENITIES, TRAVEL } from '../src/config/balance.js';
+import { STAFF_FATIGUE } from '../src/config/staff.js';
 import type { HotelState } from '../src/simulation/types.js';
 
 /** Starter lobby with `n` standard rooms on row 2, all occupied and due a clean. */
@@ -91,6 +92,45 @@ describe('Housekeeping workload', () => {
     expect(housekeepingHoursAvailable(needed - 1)).toBeLessThan(estimateHousekeepingHours(s, PLANNING_OCCUPANCY));
   });
 
+  it('a recovery room cannot erase supply walks from the workload or halve the understaffed crew', () => {
+    const enabled = STAFF_FATIGUE.enabled;
+    STAFF_FATIGUE.enabled = true;
+    try {
+      let original = hotel(9, 1);
+      for (const x of [5, 6, 7]) original = addRoom(original, 'standard', x, 5, 0, 'up')!;
+      const s = { ...original, housekeeping: { ...original.housekeeping, turnoverQuality: 'thorough' as const } };
+      const withBreak = addFixture(s, 'breakroom', 4, 0, 0)!;
+      expect(getStaffTravelHours(withBreak, withBreak.rooms[0])).toBeLessThan(getStaffTravelHours(s, s.rooms[0]));
+      expect(baseWalkHours(withBreak)).toBeCloseTo(baseWalkHours(s), 10);
+      expect(estimateHousekeepingHours(withBreak, PLANNING_OCCUPANCY)).toBeCloseTo(estimateHousekeepingHours(s, PLANNING_OCCUPANCY), 10);
+      expect(housekeepersNeeded(s, PLANNING_OCCUPANCY)).toBe(3);
+      expect(housekeepersNeeded(withBreak, PLANNING_OCCUPANCY)).toBe(3);
+      expect(Math.round(housekeepersNeeded(withBreak, PLANNING_OCCUPANCY) * 0.6)).toBe(2);
+      const withCloset = addFixture(withBreak, 'closet', 8, 0, 0)!;
+      expect(baseWalkHours(withCloset)).toBeLessThan(baseWalkHours(withBreak));
+      expect(estimateHousekeepingHours(withCloset, PLANNING_OCCUPANCY)).toBeLessThan(estimateHousekeepingHours(withBreak, PLANNING_OCCUPANCY));
+    } finally {
+      STAFF_FATIGUE.enabled = enabled;
+    }
+  });
+
+  it('retains the original break-room workload estimate when fatigue is disabled', () => {
+    const enabled = STAFF_FATIGUE.enabled;
+    STAFF_FATIGUE.enabled = false;
+    try {
+      const s = hotel(9, 1), withBreak = addFixture(s, 'breakroom', 4, 0, 0)!;
+      expect(baseWalkHours(withBreak)).toBeLessThan(baseWalkHours(s));
+      expect(estimateHousekeepingHours(withBreak, PLANNING_OCCUPANCY)).toBeLessThan(estimateHousekeepingHours(s, PLANNING_OCCUPANCY));
+      const legacyWalk = baseWalkHours(withBreak);
+      STAFF_FATIGUE.enabled = true;
+      expect(baseWalkHours(withBreak)).toBeCloseTo(baseWalkHours(s), 10);
+      STAFF_FATIGUE.enabled = false;
+      expect(baseWalkHours(withBreak)).toBeCloseTo(legacyWalk, 10);
+    } finally {
+      STAFF_FATIGUE.enabled = enabled;
+    }
+  });
+
   it('the staff panel status warns when a busy day would outrun the team', () => {
     let s = hotel(9, 1);
     s = { ...s, housekeeping: { ...s.housekeeping, turnoverQuality: 'thorough' } }; // a heavy day: deep cleans
@@ -128,7 +168,7 @@ describe('Balance: there is a right amount of housekeeping', () => {
     // with spotlight guests, so a change that fails here needs the 96-seed check before it's blamed.
     expect(right).toBeGreaterThan(median('understaffed') * 1.5);
     expect(right).toBeGreaterThan(median('overstaffed') * 1.15);
-  }, 1800000);
+  }, 3600000); // Same 72 seeded runs; fatigue now projects physical work, recovery and future desk coverage.
 });
 
 describe('The staff on screen do exactly the work the simulation credits', () => {

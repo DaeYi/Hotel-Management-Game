@@ -10,6 +10,7 @@ import { cleanlinessDelta, staffRate, attendanceShare, attendance } from './Staf
 import { recordHospitality } from './StaffHospitality.js';
 import { guestTileAt } from './GuestMovement.js';
 import { sameTile } from './Movement.js';
+import { fatigueCapacityShare, fatigueOn } from './StaffFatigue.js';
 
 /**
  * Start turnover cleaning on a room after guest checkout. The housekeepers'
@@ -204,9 +205,12 @@ const AVERAGE_STAY_NIGHTS = (ECONOMY.guestMinStay + ECONOMY.guestMaxStay) / 2;
  */
 const WALKS_PER_JOB = 2.5;
 
-/** The walk from a staff base to a room, on average (one turnover to the next is about one such walk). */
+/**
+ * Average work transfer, calibrated from desks and supply closets. Recovery
+ * rooms help breaks, but do not reset each trip between cleaning jobs.
+ */
 export function baseWalkHours(state: HotelState): number {
-  const walks = state.rooms.map(r => getStaffTravelHours(state, r)).filter(Number.isFinite);
+  const walks = state.rooms.map(r => getStaffTravelHours(state, r, !fatigueOn())).filter(Number.isFinite);
   return walks.length > 0 ? walks.reduce((a, b) => a + b, 0) / walks.length : 0;
 }
 
@@ -216,8 +220,7 @@ export function baseWalkHours(state: HotelState): number {
  * (WALKS_PER_JOB average walks from a staff base).
  */
 export function estimateHousekeepingHours(state: HotelState, occupancy: number): number {
-  const walks = state.rooms.map(r => getStaffTravelHours(state, r)).filter(Number.isFinite);
-  const avgWalk = (walks.length > 0 ? walks.reduce((a, b) => a + b, 0) / walks.length : 0) * WALKS_PER_JOB;
+  const avgWalk = baseWalkHours(state) * WALKS_PER_JOB;
   const occupied = state.rooms.length * occupancy;
   const crew = (state.staffRoster ?? []).filter(m => m.role === 'housekeeper' && !m.leaving);
   const rate = crew.length ? crew.reduce((sum, m) => sum + staffRate(m), 0) / crew.length : 1;
@@ -259,7 +262,7 @@ export function housekeepingHoursAvailable(housekeepers: number): number {
 export function housekeepersNeeded(state: HotelState, occupancy: number): number {
   const crew = (state.staffRoster ?? []).filter(m => m.role === 'housekeeper' && !m.leaving);
   const available = crew.length ? crew.reduce((sum, m) => sum + attendanceShare(m), 0) / crew.length : 1;
-  return Math.ceil(estimateHousekeepingHours(state, occupancy) / (housekeepingHoursAvailable(1) * available));
+  return Math.ceil(estimateHousekeepingHours(state, occupancy) / (housekeepingHoursAvailable(1) * available * fatigueCapacityShare(state)));
 }
 
 /**
@@ -326,7 +329,7 @@ export function getHousekeepingStatus(state: HotelState): {
   const hoursAvailable = crew.reduce((hours, m) => {
     const a = attendance(m, state.day);
     return hours + (a.absent ? 0 : Math.max(0, STAFF.housekeeping.workEndHour - Math.max(HOUSEKEEPING.dailyCleaningHour, STAFF.housekeeping.workStartHour + a.lateHours)));
-  }, housekeepingHoursAvailable(Math.max(0, housekeepers - crew.length)));
+  }, housekeepingHoursAvailable(Math.max(0, housekeepers - crew.length))) * fatigueCapacityShare(state);
 
   let recommendation: string | null = null;
   if (housekeepers === 0 && state.rooms.length > 0) {

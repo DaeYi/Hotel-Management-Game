@@ -65,6 +65,23 @@ describe('Staff travel time', () => {
     expect(getStaffTravelHours(withBreakRoom, roomAt(withBreakRoom, 6, 2, 1))).toBeCloseTo(2 * TRAVEL.hoursPerTile, 6);
   });
 
+  it('keeps recovery routes separate from supply routes, while closets shorten both', () => {
+    let s = addRoom(twoFloors(), 'standard', 6, 2, 1)!;
+    const room = roomAt(s, 6, 2, 1), viaLobby = getStaffTravelHours(s, room);
+    s = addFixture(s, 'breakroom', 5, 0, 1)!;
+    expect(getStaffBases(s)).toContainEqual({ gridX: 5, gridY: 1, floor: 1 });
+    expect(getStaffBases(s, false)).not.toContainEqual({ gridX: 5, gridY: 1, floor: 1 });
+    // Query both maps repeatedly: warming one cache must not overwrite the other.
+    for (let i = 0; i < 2; i++) {
+      expect(getStaffTravelHours(s, room)).toBeCloseTo(2 * TRAVEL.hoursPerTile, 9);
+      expect(getStaffTravelHours(s, room, false)).toBeCloseTo(viaLobby, 9);
+    }
+    s = addFixture(s, 'closet', 7, 0, 1)!;
+    expect(getStaffBases(s, false)).toContainEqual({ gridX: 7, gridY: 1, floor: 1 });
+    expect(getStaffTravelHours(s, room, false)).toBeCloseTo(2 * TRAVEL.hoursPerTile, 9);
+    expect(getStaffTravelHours(s, room, false)).toBeLessThan(viaLobby);
+  });
+
   it('a break room off the hallways is no use to anyone', () => {
     let s = addFixture(rich(createStarterHotel()), 'breakroom', 5, 5, 0)!;
     for (const [x, y] of [[4, 5], [6, 5], [5, 4]]) s = addRoom(s, 'standard', x, y, 0, 'up')!; // hemmed in

@@ -1,11 +1,11 @@
 import type { HotelState, StaffConfig, VisitorPolicy, SpotlightHold } from '../../simulation/types';
 import { spotlightOn, holdPolicy, holdLetGo } from '../../simulation/Spotlight';
-import { STAFF, HOSTED_NIGHTS, GUEST_PROFILE, DESK } from '../../config/balance';
+import { STAFF, HOSTED_NIGHTS, GUEST_PROFILE, DESK, BREAK_ROOM } from '../../config/balance';
 import { visitorPolicy } from '../../simulation/Visitors';
 import { getMaintenanceStatus, getStaffDailyCost } from '../../simulation/MaintenanceManager';
 import { getUpkeepMultiplier } from '../../simulation/StarRatingManager';
 import { getHousekeepingStatus } from '../../simulation/HousekeepingManager';
-import { getAccessibleDesks, getMannedDeskStaff, getCheckInCapacity, getStaffTravelHours } from '../../simulation/Layout';
+import { getAccessibleDesks, getAccessibleBreakRooms, getMannedDeskStaff, getCheckInCapacity, getStaffTravelHours } from '../../simulation/Layout';
 import { useController, useLiveClock } from '../context';
 import { queueOn, deskToday, waitingInLine } from '../../simulation/DeskQueue';
 import { formatMoney, formatWalk } from '../format';
@@ -13,7 +13,8 @@ import { PanelCard } from './PanelCard';
 import { StaffPeople } from '../StaffPeople';
 import { namedFrontDesk } from '../../simulation/StaffProfiles';
 import { deskCoverage } from '../../simulation/FrontDesk';
-import { FRONT_DESK_STAFF } from '../../config/staff';
+import { FRONT_DESK_STAFF, STAFF_FATIGUE } from '../../config/staff';
+import { fatigueOn, breakRoomOccupancy } from '../../simulation/StaffFatigue';
 
 const LONG_WALK_HOURS = 0.33; // 20 minutes: worth a closet
 
@@ -81,6 +82,27 @@ function DeskToday() {
   );
 }
 
+function StaffBreaks() {
+  const c = useController();
+  if (!fatigueOn()) return null;
+  const rooms = c.state.fixtures.filter(f => f.type === 'breakroom').sort((a, b) => a.floor - b.floor || a.gridY - b.gridY || a.gridX - b.gridX);
+  const reachable = new Set(getAccessibleBreakRooms(c.state).map(room => room.id));
+  const occupied = rooms.reduce((sum, room) => sum + breakRoomOccupancy(c.state, room.id, c.gameTime), 0);
+  return <section class="staff-breaks tiny" aria-label="Staff breaks">
+    <div class="body small">Break rooms · {occupied}/{reachable.size * BREAK_ROOM.seats} seats in use</div>
+    {rooms.length === 0 ? <div class="dim">No break rooms yet. Build one near busy floors for faster recovery.</div>
+      : <ul>{rooms.map((room, index) => {
+        const used = breakRoomOccupancy(c.state, room.id, c.gameTime);
+        const accessible = reachable.has(room.id);
+        return <li key={room.id} class={!accessible || used >= BREAK_ROOM.seats ? 'warn-text' : 'dim'}>
+          <button class="link" onClick={() => c.setFloor(room.floor)} aria-label={`Show floor ${room.floor + 1} for break room ${index + 1}`}>Break room {index + 1} · floor {room.floor + 1}</button>: {accessible ? `${used}/${BREAK_ROOM.seats} seats${used >= BREAK_ROOM.seats ? ' (full)' : ''}` : 'Blocked access'}
+        </li>;
+      })}</ul>}
+    <div class="dim">Rest restores {STAFF_FATIGUE.roomRecovery} energy/hour in a break room, {STAFF_FATIGUE.fallbackRecovery} elsewhere. Walking and lift rides use energy.</div>
+    <div class="dim">At {100 - STAFF_FATIGUE.tiredAt}% energy, work slows to {Math.round(STAFF_FATIGUE.tiredRate * 100)}% speed. At {100 - STAFF_FATIGUE.breakAt}%, staff need a {Math.round(STAFF_FATIGUE.breakHours * 60)}-minute break.</div>
+  </section>;
+}
+
 export function StaffPanel() {
   const c = useController();
   useLiveClock();
@@ -132,6 +154,7 @@ export function StaffPanel() {
       </div>
       <div class="gold small">Avg walk to rooms: {formatWalk(avgWalk)}</div>
       {recommendations.length > 0 && <div class="gold tiny" style={{ marginTop: '8px' }}>{'ℹ'} {recommendations[0]}</div>}
+      <StaffBreaks />
       <StaffPeople />
       <hr class="divider" />
       {HOSTED_NIGHTS.enabled && GUEST_PROFILE.enabled && (

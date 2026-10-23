@@ -7,6 +7,8 @@ import { defaultFurnishing, profileFurnishing } from '../simulation/RoomProfile'
 import { getRoomExpectedPrice } from '../simulation/StarRatingManager';
 import { useController } from './context';
 import { formatMoney, capitalize } from './format';
+import { fatigueOn } from '../simulation/StaffFatigue';
+import { STAFF_FATIGUE } from '../config/staff';
 
 interface BuildOption {
   type: BuildType;
@@ -69,6 +71,7 @@ export function BuildPanel() {
         const wanted = option.category === 'FACILITIES' ? wantedThisWeek(state, option.type as FacilityType) : 0;
         const subtitle = option.category === 'ROOMS'
           ? `$${getRoomExpectedPrice({ type: roomTypeOf(option.type as RoomType | PresetId), furnishing: defaultFurnishing(presetFor(option.type as RoomType | PresetId)), floor: 0 }, state.starRating)}/nt`
+          : option.type === 'breakroom' && fatigueOn() ? `${BREAK_ROOM.seats} rest seats`
           : wanted > 0 ? `asked for ${wanted}\u00d7 this week` : option.subtitle;
         const cost = locked
           ? `🔒 ${getRequiredStars(gate!)}★`
@@ -88,6 +91,7 @@ export function BuildPanel() {
               style={{ '--option-color': option.color }}
               disabled={locked}
               aria-pressed={c.tool === option.type}
+              title={option.type === 'breakroom' && fatigueOn() ? `${BREAK_ROOM.seats} staff can rest here at once. Rest restores ${STAFF_FATIGUE.roomRecovery} energy/hour, versus ${STAFF_FATIGUE.fallbackRecovery} elsewhere. Shorter walks leave more time to recover.` : undefined}
               onClick={() => c.selectTool(option.type)}
             >
               <div class="name">{option.label}</div>

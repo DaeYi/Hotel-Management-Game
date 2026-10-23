@@ -1030,7 +1030,7 @@ export const CLOSET = {
 // Off shift, staff go home through the street entrance.
 export const BREAK_ROOM = {
   buildCost: 3500,
-  seats: 6, // staff drawn inside the tile; more than this still fit, just overlapping
+  seats: 6, // real reserved seats while fatigue is enabled
 };
 
 // Guests check in at a desk on the ground floor; each desk seats a limited
