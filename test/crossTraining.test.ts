@@ -23,7 +23,8 @@ import type { Guest, HotelState, StaffMember, StaffPlan, StayLeg } from '../src/
 
 const switches = [STAFF_CROSS_TRAINING, STAFF_PERSONALITIES, FRONT_DESK_STAFF, STAFF_FATIGUE, STAFF_HOSPITALITY, STAFF_SPECIALTIES];
 const originalSwitches = switches.map(setting => setting.enabled);
-afterEach(() => { switches.forEach((setting, index) => { setting.enabled = originalSwitches[index]; }); localStorage.clear(); });
+const originalPace = TRAVEL.hoursPerTile;
+afterEach(() => { switches.forEach((setting, index) => { setting.enabled = originalSwitches[index]; }); TRAVEL.hoursPerTile = originalPace; localStorage.clear(); });
 
 function keeper(id = 'keeper', extra: Partial<StaffMember> = {}): StaffMember {
   return { id, name: 'Avery Park', serial: 1, role: 'housekeeper', dailyWage: 80.5,
@@ -140,6 +141,23 @@ describe('Reception support follows the housekeeper’s actual itinerary', () =>
     const clean = legs.find((leg): leg is StayLeg => leg.kind === 'stay' && leg.job === 'turnover')!;
     expect(counter.end).toBeCloseTo(support.to, 10);
     expect(clean.start).toBeGreaterThan(counter.end);
+  });
+
+  it('keeps the first support block, intervening cleaning and a second support block through a paused replan', () => {
+    const base = hotel([], 15), T = hourStart(base), lane = physicalDeskLanes(base)[0];
+    let state = planned(cleaning(hotel([keeper('keeper', { at: lane.front,
+      stats: { ...keeper().stats!, fatigue: 20, fatigueAt: T },
+      receptionSupport: { lane: lane.key, from: T - 0.9, to: T + 0.1 } })], 15), 0.1));
+    const original = desks(state), clean = state.staffPlan!.itineraries[0].legs.find((leg): leg is StayLeg => leg.kind === 'stay' && leg.job === 'turnover')!;
+    expect(original).toHaveLength(2);
+    expect(clean).toBeDefined();
+    state = replanStaff(state, T + 0.05);
+    const revised = desks(state), repeatedClean = state.staffPlan!.itineraries[0].legs.find((leg): leg is StayLeg => leg.kind === 'stay' && leg.job === 'turnover')!;
+    expect(deskCoverage(state, T + 0.075).some(duty => duty.staffId === 'keeper')).toBe(true);
+    expect(repeatedClean.start).toBeCloseTo(clean.start, 10);
+    expect(repeatedClean.end).toBeCloseTo(clean.end, 10);
+    expect(revised.at(-1)!.start).toBeCloseTo(original[1].start, 10);
+    expect(revised.at(-1)!.end).toBeCloseTo(original[1].end, 10);
   });
 
   it('keeps real rest, duty bounds, absence and leaving ahead of optional support', () => {
@@ -268,6 +286,8 @@ describe('Support serves real guests and survives the hourly boundary', () => {
   });
 
   it('preserves an upstairs approach carried across the hour and through saving before coverage opens', () => {
+    // Stretch the same physical route so its carried part crosses a boundary.
+    TRAVEL.hoursPerTile = 0.15;
     let state = hotel([keeper('keeper', { at: { gridX: 5, gridY: 1, floor: 1 } })]);
     state = addElevator(buildFloor(state)!.state, 0, 0)!;
     state = planned(state);
@@ -290,8 +310,8 @@ describe('Support serves real guests and survives the hourly boundary', () => {
     let state = planned(hotel([keeper('a'), keeper('b')])), T = hourStart(state);
     const slot = quoteLane(lanesOf(state), new Map(), () => T + 0.4, 1 / 3, undefined, true)!;
     expect(slot.staffId).toBe('a');
-    state = { ...state, guests: [guest('waiting', [makeStay(slot.lane.front, T, slot.start, 'wait', { lane: slot.lane.key }),
-      makeStay(slot.lane.front, slot.start, slot.start + slot.hours, 'check_in', { lane: slot.lane.key, ...serviceSnapshot(state.staffRoster![0]) })])] };
+    state = { ...state, guests: [guest('waiting', [makeStay(slot.lane.front, T, slot.start, 'wait', { lane: slot.lane.key, placeId: slot.lane.desk.id }),
+      makeStay(slot.lane.front, slot.start, slot.start + slot.hours, 'check_in', { lane: slot.lane.key, placeId: slot.lane.desk.id, ...serviceSnapshot(state.staffRoster![0]) })])] };
     state = settleChanges(state, dismissStaff(state, 'a', T + 0.1)!, T + 0.1);
     const service = state.guests[0].trip!.find((leg): leg is StayLeg => leg.kind === 'stay' && leg.activity === 'check_in')!;
     expect(service.serviceStaffId).toBe('b');

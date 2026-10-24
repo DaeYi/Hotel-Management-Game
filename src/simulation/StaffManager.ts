@@ -262,7 +262,12 @@ export function planStaff(
   const deskState = roster === state.staffRoster ? state : { ...state, staffRoster: roster };
   const supporting = roster === state.staffRoster ? receptionSupports(state)
     : receptionSupports({ ...deskState, staffPlan: null });
-  const commitments = new Map(supporting.map(({ member, support }) => [member.id, support]));
+  const commitments = new Map<string, ReceptionSupport>();
+  for (const { member, support } of supporting) {
+    const itinerary = state.staffPlan?.start === T ? state.staffPlan.itineraries.find(it => it.staffId === member.id) : undefined;
+    if (support.to > from && !commitments.has(member.id)
+      && !(roster === state.staffRoster && itinerary?.legs.some(l => l.kind === 'stay' && l.job && l.end > from && l.start < support.from))) commitments.set(member.id, support);
+  }
   // Whole intervals, rather than headcounts: an imminent clerk return also
   // owns its seat. Keep new reservations local until the complete plan exists.
   const supportLanes = roster.some(receptionTrained) ? scheduledDeskLanes(deskState) : [];
@@ -783,13 +788,17 @@ export function rosterAfter(state: HotelState, plan: StaffPlan): StaffMember[] {
  */
 export function replanStaff(state: HotelState, t: number): HotelState {
   const plan = getStaffPlan(state);
+  const supports = receptionSupports({ ...state, staffPlan: plan });
   const done = new Map<string, Leg[]>();
   const now = getRoster(state).map(m => {
     // These are planning-only snapshots. The returned state retains its
     // boundary stats and the merged plan commits fatigue exactly once.
     if (fatigueOn() && m.stats) m = { ...m, stats: { ...m.stats, fatigue: fatigueAt(state, m, t), fatigueAt: t } };
     const it = plan.itineraries.find(i => i.staffId === m.id);
-    if (it) m = { ...m, receptionSupport: it.end.receptionSupport };
+    // Resume the current block or its direct approach. A later block after
+    // room work is a forecast, not permission to skip that intervening work.
+    if (it) m = { ...m, receptionSupport: supports.find(({ member, support }) => member.id === m.id && support.to > t
+      && !it.legs.some(l => l.kind === 'stay' && l.job && l.end > t && l.start < support.from))?.support };
     if (!it || it.legs.length === 0 || it.legs[0].start >= t) return m;
     const current = positionAt(it.legs, t)?.leg;
     const resting = current?.kind === 'stay' && current.activity === 'rest' ? current
