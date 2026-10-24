@@ -7,7 +7,7 @@ import { processObjectives, recordDailyStat } from './ObjectivesManager.js';
 import { decayDecor, processRenovationTick } from './DecorManager.js';
 import { tickCampaign } from './MarketingManager.js';
 import { formatRoomLabel, startPendingRefits } from './HotelState.js';
-import { getStaffPlan, getRoster, rosterAfter, syncStaff, planStaff, replanStaff } from './StaffManager.js';
+import { getStaffPlan, getRoster, rosterAfter, syncStaff, planStaff, replanStaff, prepareReceptionSupport } from './StaffManager.js';
 import { STAFF_SPECIALTIES } from '../config/staff.js';
 import { getMannedDeskStaff } from './Layout.js';
 import { planArrivalTrips, departureWalker, tidyMovement } from './GuestMovement.js';
@@ -85,6 +85,7 @@ export function tickSimulation(state: HotelState, prng: PRNG): TickResult {
   current = spotlight.state;
   events.push(...spotlight.events);
   if (spotlightOn()) current = startPendingRefits(current); // (a suite the hold just left, with a refit booked, closes for it before arrivals)
+  current = prepareReceptionSupport(current, T);
   const arrivals = processArrivals(current, current.hour, prng);
   events.push(...arrivals.events);
 

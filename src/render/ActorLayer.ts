@@ -6,7 +6,7 @@ import { positionAt, legsEnd, hash01 } from '../simulation/Movement';
 import { guestFigures, type Figure } from './figures';
 import { BREAK_ROOM } from '../config/balance';
 import { STAFF_PERSONALITIES } from '../config/staff';
-import { experienceOf, namedFrontDesk } from '../simulation/StaffProfiles';
+import { experienceOf, namedFrontDesk, receptionTrained } from '../simulation/StaffProfiles';
 import { fatigueOn } from '../simulation/StaffFatigue';
 import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE } from './GridRenderer';
 import { drawClock, drawComplaint, drawQuirk, drawMoodFace, RING_COLORS, SELECTED_COLOR } from './quirks';
@@ -94,8 +94,9 @@ export class ActorLayer {
     const roster = new Map((state.staffRoster ?? []).map(m => [m.id, m]));
     for (const it of plan.itineraries) {
       const member = roster.get(it.staffId);
-      const marks = STAFF_PERSONALITIES.enabled && member ? { staffId: it.staffId, chevrons: experienceOf(member) === 'veteran' ? 2 : experienceOf(member) === 'skilled' ? 1 : 0 } : {};
-      const color = member?.role === 'front_desk' ? ACTOR_COLORS.frontDesk : it.staffId.startsWith('housekeeper') ? ACTOR_COLORS.housekeeper : ACTOR_COLORS.maintenance;
+      const marks = STAFF_PERSONALITIES.enabled && member ? { staffId: it.staffId, chevrons: experienceOf(member) === 'veteran' ? 2 : experienceOf(member) === 'skilled' ? 1 : 0,
+        ...(receptionTrained(member) ? { uniformAccent: ACTOR_COLORS.frontDesk } : {}) } : {};
+      const color = member?.role === 'front_desk' ? ACTOR_COLORS.frontDesk : member?.role === 'housekeeper' || it.staffId.startsWith('housekeeper') ? ACTOR_COLORS.housekeeper : ACTOR_COLORS.maintenance;
       if (it.legs.length === 0) {
         const at = it.end.at ? roster.get(it.staffId)?.at : null; // staying put (null: gone home)
         if (at) figures.push({ id: it.staffId, kind: 'staff', color, x: at.gridX, y: at.gridY, floor: at.floor, settled: true, ...marks });
@@ -344,6 +345,10 @@ export class ActorLayer {
       this.drawn.push({ figure: f, x: cx, y: cy, r });
     } else {
       g.fillRect(cx - 5, cy - 5, 10, 10);
+      if (f.uniformAccent !== undefined) {
+        g.fillStyle(f.uniformAccent, 1);
+        g.fillRect(cx, cy - 5, 5, 10);
+      }
       g.strokeRect(cx - 5, cy - 5, 10, 10);
       if (f.staffId) {
         this.staffDrawn.push({ id: f.staffId, x: cx, y: cy });

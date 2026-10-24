@@ -60,3 +60,13 @@ export const STAFF_FATIGUE = {
   planningShare: { room: 0.96, elsewhere: 0.9 },
   busyFloorRooms: 6,
 };
+
+/** Some new housekeepers can cover a short afternoon reception shift. */
+export const STAFF_CROSS_TRAINING = {
+  enabled: true,
+  candidateChance: 0.25,
+  wagePremium: 1.15,
+  startHour: 14,
+  supportHours: 1,
+  minSupportHours: 0.5,
+};

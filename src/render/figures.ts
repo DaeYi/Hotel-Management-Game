@@ -41,6 +41,7 @@ export interface Figure {
   staffId?: string;
   chevrons?: number;
   resting?: boolean; // a staff member inside an actual fatigue-recovery rest stay
+  uniformAccent?: number; // the second role colour of a cross-trained worker
   id: string; // a person: the booking's id for its first member, `${id}#${n}` for the others
   kind: 'guest' | 'staff';
   color: number;

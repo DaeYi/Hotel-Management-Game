@@ -5,11 +5,17 @@ import { STAFF_PERSONALITIES } from '../config/staff.js';
 import { rerouteTrips, checkInLanes } from './GuestMovement.js';
 import { GUEST_HOUSEKEEPING } from '../config/balance.js';
 import { reseatLanes } from './DeskQueue.js';
-import { namedFrontDesk, specialtyOf, hospitalityOf } from './StaffProfiles.js';
+import { namedFrontDesk, specialtyOf, hospitalityOf, receptionTrained, checkInHours } from './StaffProfiles.js';
+import { receptionSupports } from './CrossTraining.js';
+
+function trainingKey(state: HotelState): string {
+  return (state.staffRoster ?? []).filter(m => m.role === 'housekeeper').map(m => `${m.id}:${receptionTrained(m)}`).join(',');
+}
 
 /** Who's checking guests in, and where. */
 function lanesKey(state: HotelState): string {
-  return checkInLanes(state).map(l => `${l.desk.id}:${l.seat}`).join(',') + (namedFrontDesk(state) ? (state.staffRoster ?? []).filter(m => m.role === 'front_desk').map(m => `${m.id}:${m.leaving}:${m.shift}:${m.restUntil}:${specialtyOf(m)}:${hospitalityOf(m)}`).join(',') : '');
+  const support = receptionSupports(state).map(({ member, support }) => `${member.id}:${support.lane}:${support.from}:${support.to}:${support.tiredFrom}:${hospitalityOf(member)}:${specialtyOf(member)}:${checkInHours(member)}`).join(',');
+  return checkInLanes(state).map(l => `${l.desk.id}:${l.seat}`).join(',') + (namedFrontDesk(state) ? (state.staffRoster ?? []).filter(m => m.role === 'front_desk').map(m => `${m.id}:${m.leaving}:${m.shift}:${m.restUntil}:${specialtyOf(m)}:${hospitalityOf(m)}`).join(',') + trainingKey(state) + support : '');
 }
 
 /**
@@ -24,12 +30,13 @@ function lanesKey(state: HotelState): string {
 export function settleChanges(before: HotelState, after: HotelState, t: number): HotelState {
   if (STAFF_PERSONALITIES.enabled && (before.staff.housekeepers !== after.staff.housekeepers || before.staff.maintenanceWorkers !== after.staff.maintenanceWorkers || namedFrontDesk(after) && before.staff.frontDesk !== after.staff.frontDesk)) after = syncStaff(after, t);
   const layoutChanged = layoutKey(before) !== layoutKey(after);
-  const workChanged = layoutChanged || staffWorkKey(before) !== staffWorkKey(after);
-  const lanesChanged = layoutChanged || lanesKey(before) !== lanesKey(after);
+  const workChanged = layoutChanged || staffWorkKey(before) !== staffWorkKey(after) || trainingKey(before) !== trainingKey(after);
+  const oldLanes = lanesKey(before);
+  const lanesChanged = layoutChanged || oldLanes !== lanesKey(after);
   let state = after;
   if (namedFrontDesk(state)) {
     if (workChanged) state = replanStaff(state, t);
-    if (lanesChanged) {
+    if (lanesChanged || oldLanes !== lanesKey(state)) {
       state = reseatLanes(rerouteTrips(state, t), t);
       // Room workers must use the guests' final routes and return times.
       if (workChanged) state = replanStaff(state, t);

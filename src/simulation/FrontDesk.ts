@@ -5,6 +5,7 @@ import { getAccessibleDesks, getAccessibleBreakRooms, getFixtureFront, findRoute
 import { hourStart, makeStay, makeWalk, finalTile, sameTile } from './Movement.js';
 import { checkInHours, namedFrontDesk, staffDuty, staffDutyAt } from './StaffProfiles.js';
 import { fatigueOn, fatigueAt, fatigueGain, projectFatigue, planStaffRest, restReservations, type RestReservation } from './StaffFatigue.js';
+import { receptionSupports } from './CrossTraining.js';
 
 export interface DeskDuty { staffId: string; from: number; to: number; checkInHours: number; startUntil?: number; serviceRate?: number }
 export interface DeskLane { desk: Fixture; seat: number; front: TilePos; key: string; duties?: DeskDuty[] }
@@ -75,8 +76,12 @@ function fatigueSchedules(state: HotelState): { schedules: ClerkSchedule[]; rese
     // A saved/current hourly plan is authoritative for what really happens
     // now. Future coverage is projected from where that exact plan leaves
     // the clerk, including a rest or walk carried beyond the boundary.
-    const existing = current && (member.stats?.fatigueAt ?? T) <= T && state.staffPlan?.start === T
+    const saved = current && (member.stats?.fatigueAt ?? T) <= T && state.staffPlan?.start === T
       ? state.staffPlan.itineraries.find(it => it.staffId === member.id) : undefined;
+    // A later hire may now yield to a committed helper or take another seat.
+    // Replay a saved counter stay only while it still belongs to this assignment.
+    const existing = saved?.legs.some(l => l.kind === 'stay' && l.activity === 'desk' && l.end > T
+      && (l.lane !== a.lane.key || l.start < a.from - 1e-9)) ? undefined : saved;
     if (existing) {
       for (const leg of existing.legs.filter(l => l.end > T && l.start < T + 1)) {
         const next = leg.kind === 'stay' ? { ...leg, start: Math.max(T, leg.start), end: Math.min(T + 1, leg.end) } : leg;
@@ -181,35 +186,76 @@ function assignments(state: HotelState): Assignment[] {
   const cached = assignmentCache.get(state);
   if (cached) return cached;
   const lanes = physicalDeskLanes(state), result: Assignment[] = [];
+  const supports = receptionSupports(state);
   const T = hourStart(state);
+  const nativeSeats = new Map<string, { lane: string; desk: Leg[] }>();
+  if (supports.length && state.staffPlan?.start === T) {
+    for (const member of state.staffRoster ?? []) {
+      if (member.role !== 'front_desk' || member.leaving) continue;
+      const now = Math.max(T, member.stats?.fatigueAt ?? T);
+      const desk = state.staffPlan.itineraries.find(it => it.staffId === member.id)?.legs.filter(l =>
+        l.kind === 'stay' && l.activity === 'desk' && l.end > now + 1e-9 && l.start < T + 1) ?? [];
+      const first = desk[0];
+      if (first?.kind === 'stay' && first.lane) nativeSeats.set(member.id, { lane: first.lane, desk });
+    }
+  }
   const groups = (['early', 'late', 'night'] as const).map(shift => (state.staffRoster ?? [])
     .filter(m => m.role === 'front_desk' && (m.shift ?? 'late') === shift && !m.leaving)
     .sort((a, b) => Number(!a.deskLane) - Number(!b.deskLane) || (a.serial ?? 0) - (b.serial ?? 0)));
   for (let day = state.day - 1; day <= state.day + 3; day++) {
     for (const people of groups) {
       const free = new Set(lanes.map(l => l.key));
-      for (const member of people) {
+      const groupDuty = people[0] && staffDuty(people[0], day);
+      const current = groupDuty && groupDuty.start < T + 1 && groupDuty.end > T;
+      const reserved = current ? new Map([...nativeSeats].map(([id, seat]) => [seat.lane, id])) : new Map<string, string>();
+      // Keep the native staff already in the physical plan ahead of newly
+      // hired or returning clerks, even when their boundary deskLane is empty.
+      const ordered = current && nativeSeats.size ? [...people].sort((a, b) => Number(nativeSeats.has(b.id)) - Number(nativeSeats.has(a.id))) : people;
+      for (const member of ordered) {
         const duty = staffDuty(member, day);
         if (duty.absent || duty.available >= duty.end || duty.end <= T) continue;
-        const lane = lanes.find(l => l.key === member.deskLane && free.has(l.key)) ?? lanes.find(l => free.has(l.key));
-        if (!lane) continue;
-        const street = routeFromStreet(state, lane.front);
-        if (!street) continue;
-        let ready = duty.available;
-        if (duty.start < T + 1 - 1e-9 && duty.end > T) {
-          const itinerary = state.staffPlan?.start === T ? state.staffPlan.itineraries.find(it => it.staffId === member.id) : undefined;
-          const alreadySeated = itinerary?.legs.find(l => l.kind === 'stay' && l.activity === 'desk' && l.placeId === lane.desk.id && l.end > T);
-          if (alreadySeated) ready = Math.max(ready, alreadySeated.start);
-          else if (member.at || member.carry) {
-            const at = member.carry?.path.at(-1) ?? member.at!;
-            const route = findRoute(state, at, lane.front);
-            if (!route) continue;
-            ready = Math.max(ready, member.carry?.end ?? T) + route.hours;
-          } else {
-            // On-time commuters arrive for the start; late workers and new hires walk in after they are due.
-            ready = Math.max(T, duty.available) + street.hours;
-          }
-        } else if (duty.available > duty.start + 1e-9) ready += street.hours;
+        const now = Math.max(T, member.stats?.fatigueAt ?? T);
+        const serving = supports.length && duty.start <= now && duty.end > now ? state.guests.flatMap(g => g.trip ?? []).find(l => l.kind === 'stay'
+          && (l.activity === 'check_in' || l.activity === 'complain') && l.serviceStaffId === member.id
+          && l.start < now - 1e-9 && l.end > now) : undefined;
+        const servingLane = serving?.kind === 'stay' ? serving.lane : undefined;
+        const planned = current ? nativeSeats.get(member.id) : undefined;
+        const fixedLane = servingLane ?? planned?.lane;
+        const candidates = lanes.filter(l => free.has(l.key) && (!fixedLane || l.key === fixedLane)
+          && (!reserved.has(l.key) || reserved.get(l.key) === member.id))
+          .sort((a, b) => Number(b.key === member.deskLane) - Number(a.key === member.deskLane));
+        let selected: { lane: DeskLane; ready: number; delayed: boolean } | undefined;
+        for (const lane of candidates) {
+          const street = routeFromStreet(state, lane.front);
+          if (!street) continue;
+          let ready = duty.available;
+          if (duty.start < T + 1 - 1e-9 && duty.end > T) {
+            const itinerary = state.staffPlan?.start === T ? state.staffPlan.itineraries.find(it => it.staffId === member.id) : undefined;
+            const alreadySeated = itinerary?.legs.find(l => l.kind === 'stay' && l.activity === 'desk' && l.placeId === lane.desk.id && l.end > T);
+            if (alreadySeated) ready = Math.max(ready, alreadySeated.start);
+            else if (member.at || member.carry) {
+              const at = member.carry?.path.at(-1) ?? member.at!;
+              const route = findRoute(state, at, lane.front);
+              if (!route) continue;
+              ready = Math.max(ready, member.carry?.end ?? T) + route.hours;
+            } else {
+              // On-time commuters arrive for the start; late workers and new hires walk in after they are due.
+              ready = Math.max(T, duty.available) + street.hours;
+            }
+          } else if (duty.available > duty.start + 1e-9) ready += street.hours;
+          // A helper can occupy this native clerk's actual break gap. That
+          // does not move either clerk or invalidate their authoritative plan.
+          const keepsPlan = planned?.lane === lane.key && !planned.desk.some(l => supports.some(({ support }) =>
+            support.lane === lane.key && l.start < support.to - 1e-9 && l.end > support.from + 1e-9));
+          const blockedUntil = servingLane === lane.key || keepsPlan ? ready : Math.max(ready, ...supports.filter(({ support }) =>
+            support.lane === lane.key && support.to > Math.max(T, ready) + 1e-9 && support.from < duty.end - 1e-9).map(({ support }) => support.to));
+          if (blockedUntil >= duty.end - 1e-9) continue;
+          const candidate = { lane, ready: blockedUntil, delayed: blockedUntil > ready + 1e-9 };
+          if (!selected || selected.delayed && (!candidate.delayed || candidate.ready < selected.ready - 1e-9)) selected = candidate;
+          if (!candidate.delayed) break;
+        }
+        if (!selected) continue;
+        const { lane, ready } = selected;
         free.delete(lane.key);
         result.push({ member, lane, day, from: ready, to: duty.end });
       }
@@ -224,9 +270,18 @@ export function scheduledDeskLanes(state: HotelState): DeskLane[] {
   const cached = laneCache.get(state);
   if (cached) return cached;
   const all = assignments(state);
-  const lanes = physicalDeskLanes(state).map(lane => ({ ...lane, duties: fatigueOn()
+  const supports = receptionSupports(state);
+  const lanes = physicalDeskLanes(state).map(lane => ({ ...lane, duties: [...(fatigueOn()
     ? fatigueSchedules(state).schedules.filter(s => s.assignment.lane.key === lane.key).flatMap(s => s.duties).sort((a, b) => a.from - b.from)
-    : all.filter(a => a.lane.key === lane.key).map(a => ({ staffId: a.member.id, from: a.from, to: a.to, checkInHours: checkInHours(a.member) })).sort((a, b) => a.from - b.from) }));
+    : all.filter(a => a.lane.key === lane.key).map(a => ({ staffId: a.member.id, from: a.from, to: a.to, checkInHours: checkInHours(a.member) }))),
+    ...supports.filter(({ support }) => support.lane === lane.key).flatMap(({ member, support }): DeskDuty[] => {
+      const tired = fatigueOn() ? support.tiredFrom : undefined;
+      const hours = checkInHours(member), base = { staffId: member.id, from: support.from, to: support.to };
+      if (tired === undefined || tired >= support.to - 1e-9) return [{ ...base, checkInHours: hours, serviceRate: 1 }];
+      if (tired <= support.from + 1e-9) return [{ ...base, checkInHours: hours / STAFF_FATIGUE.tiredRate, serviceRate: STAFF_FATIGUE.tiredRate }];
+      return [{ ...base, startUntil: tired, checkInHours: hours, serviceRate: 1 },
+        { ...base, from: tired, checkInHours: hours / STAFF_FATIGUE.tiredRate, serviceRate: STAFF_FATIGUE.tiredRate }];
+    })].sort((a, b) => a.from - b.from) }));
   laneCache.set(state, lanes);
   return lanes;
 }
@@ -276,7 +331,7 @@ function legacyDeskClerk(state: HotelState, member: StaffMember, from: number): 
   if (a && duty.start < end + 1e-9) {
     const route = pos ? findRoute(state, pos, a.lane.front) : routeFromStreet(state, a.lane.front);
     if (route) {
-      const setOff = pos ? Math.max(t, duty.available) : Math.max(t, a.from - route.hours);
+      const setOff = pos ? Math.max(t, duty.available, a.from - route.hours) : Math.max(t, a.from - route.hours);
       if (setOff < end) {
         if (pos && setOff > t) legs.push(makeStay(pos, t, setOff, 'wait'));
         t = setOff; walk(route); deskLane = a.lane.key;
