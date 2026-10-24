@@ -1,4 +1,4 @@
-import type { HotelState, Room, StaffMember, StaffPlan, StaffItinerary, StaffRole, FrontDeskShift, Leg, WalkLeg, TilePos } from './types.js';
+import type { HotelState, Room, StaffMember, StaffPlan, StaffItinerary, StaffRole, FrontDeskShift, Leg, WalkLeg, TilePos, ReceptionSupport } from './types.js';
 import { STAFF, TRAVEL, GUEST_PROFILE, GUEST_HOUSEKEEPING } from '../config/balance.js';
 import { findRoute, routeFromStreet, routeToStreet, getStaffBases, getAccessibleBreakRooms, isEntranceTile, stepHours, doorTile, isHallway } from './Layout.js';
 import { isRoomReachable } from './HotelState.js';
@@ -7,11 +7,12 @@ import { hourStart, makeWalk, makeStay, truncateLegs, sameTile, finalTile, posit
 import { guestsById } from './Party.js';
 import { housekeepingPrefOf, dndOpening, dndCleanStart, dndSetOff, partyOutOfRoom } from './CleaningPreference.js';
 import { isSleepHour } from './Profile.js';
-import { STAFF_PERSONALITIES, STAFF_SPECIALTIES, STAFF_FATIGUE } from '../config/staff.js';
+import { STAFF_PERSONALITIES, STAFF_SPECIALTIES, STAFF_FATIGUE, STAFF_CROSS_TRAINING } from '../config/staff.js';
 import { reconcileStaff, initializeFrontDesk } from './StaffHiring.js';
-import { staffRate, attendance, afterWork, repairTarget, nextStaffWork, staffDutyAt, shiftFor, specialtyOf, hospitalityOf } from './StaffProfiles.js';
-import { planDeskClerk } from './FrontDesk.js';
-import { fatigueOn, fatigueAt, projectFatigue, planStaffRest, restReservations } from './StaffFatigue.js';
+import { staffRate, attendance, afterWork, repairTarget, nextStaffWork, staffDutyAt, shiftFor, specialtyOf, hospitalityOf, receptionTrained, checkInHours } from './StaffProfiles.js';
+import { planDeskClerk, scheduledDeskLanes, physicalDeskLanes } from './FrontDesk.js';
+import { fatigueOn, fatigueAt, projectFatigue, planStaffRest, restReservations, fatigueGain } from './StaffFatigue.js';
+import { receptionSupports } from './CrossTraining.js';
 
 // Housekeepers and maintenance workers are people with a place in the
 // building. Each hour boundary, every one of them gets an itinerary for the
@@ -259,6 +260,17 @@ export function planStaff(
   const claimed = new Set<string>();
   const reservations = restReservations(state, roster, from);
   const deskState = roster === state.staffRoster ? state : { ...state, staffRoster: roster };
+  const supporting = roster === state.staffRoster ? receptionSupports(state)
+    : receptionSupports({ ...deskState, staffPlan: null });
+  const commitments = new Map<string, ReceptionSupport>();
+  for (const { member, support } of supporting) {
+    const itinerary = state.staffPlan?.start === T ? state.staffPlan.itineraries.find(it => it.staffId === member.id) : undefined;
+    if (support.to > from && !commitments.has(member.id)
+      && !(roster === state.staffRoster && itinerary?.legs.some(l => l.kind === 'stay' && l.job && l.end > from && l.start < support.from))) commitments.set(member.id, support);
+  }
+  // Whole intervals, rather than headcounts: an imminent clerk return also
+  // owns its seat. Keep new reservations local until the complete plan exists.
+  const supportLanes = roster.some(receptionTrained) ? scheduledDeskLanes(deskState) : [];
   // Plan reception first so the same six seats serve both counter and room staff.
   const deskPlans = new Map(roster.filter(m => m.role === 'front_desk').map(m => [m.id,
     planDeskClerk(deskState, m, from, reservations)]));
@@ -292,6 +304,7 @@ export function planStaff(
     let pos: TilePos | null = m.at;
     let roomId: string | undefined;
     let fatigueBreak = fatigueOn() ? m.fatigueBreak : undefined;
+    let receptionSupport = commitments.get(m.id);
     const initialFatigue = fatigueAt(state, m, from);
     const energy = () => projectFatigue(m, legs, from, t, initialFatigue);
     const updateRate = () => { rate = staffRate({ ...m, stats: { ...m.stats!, fatigue: energy() } }); };
@@ -319,11 +332,14 @@ export function planStaff(
         const commutingIn = !m.leaving && !a.absent && a.lateHours === 0 && state.hour === shiftOf(m.role).workStartHour - 1;
         if (!commutingIn) at = null; // walked out the door
       }
-      return { staffId: m.id, legs, end: { at, roomId, carry, ...(fatigueBreak && fatigueBreak.end > end ? { fatigueBreak } : {}) } };
+      return { staffId: m.id, legs, end: { at, roomId, carry,
+        ...(receptionSupport ? { deskLane: receptionSupport.lane, receptionSupport } : {}),
+        ...(fatigueBreak && fatigueBreak.end > end ? { fatigueBreak } : {}) } };
     };
 
     // Let go, or off shift: head out (or, the hour before the shift, come in)
     if (m.leaving || !onDuty) {
+      receptionSupport = undefined;
       const commuteHour = !m.leaving && !a.absent && a.lateHours === 0 && state.hour === shiftOf(m.role).workStartHour - 1;
       const rest = commuteHour ? restingPlace(state, 0) : null;
       if (pos && rest) {
@@ -377,6 +393,46 @@ export function planStaff(
     }
     if (t >= end - 1e-9) { roomId = sticky.get(m.id)?.room.id; return result(); }
     fatigueBreak = undefined;
+
+    const coverReception = (support: ReceptionSupport): boolean => {
+      const lane = physicalDeskLanes(state).find(l => l.key === support.lane);
+      const route = lane && pos ? findRoute(state, pos, lane.front, pace) : null;
+      if (!lane || !route) return false;
+      const arrival = t + route.hours;
+      if (arrival >= support.to - 1e-9) return false;
+      if (route.path.length > 1) walk(route);
+      const start = Math.max(t, support.from);
+      if (start > t) { legs.push(makeStay(pos!, t, start, 'wait')); t = start; }
+      const gain = fatigueGain(m);
+      const tiredFrom = !fatigueOn() ? undefined : energy() >= STAFF_FATIGUE.tiredAt - 1e-8 ? t
+        : t + (STAFF_FATIGUE.tiredAt - energy()) / gain;
+      // A started encounter keeps its quote through a paused replan. New
+      // service starts use the newly projected tired threshold.
+      let to = Math.min(support.to, staffDutyAt(m, t).end);
+      const busyUntil = state.guests.flatMap(g => g.trip ?? []).reduce((last, l) => l.kind === 'stay'
+        && (l.activity === 'check_in' || l.activity === 'complain')
+        && l.serviceStaffId === m.id && l.start < from && l.end > from ? Math.max(last, l.end) : last, to);
+      to = Math.max(to, busyUntil);
+      receptionSupport = { ...support, from: Math.max(support.from, arrival), to,
+        ...(tiredFrom !== undefined && tiredFrom < to ? { tiredFrom } : { tiredFrom: undefined }) };
+      if (tiredFrom !== undefined && tiredFrom > t + 1e-9 && tiredFrom < to - 1e-9) {
+        legs.push(makeStay(pos!, t, tiredFrom, 'desk', { lane: lane.key, placeId: lane.desk.id, workRate: 1 }));
+        t = tiredFrom;
+      }
+      if (t < to) legs.push(makeStay(pos!, t, to, 'desk', { lane: lane.key, placeId: lane.desk.id,
+        workRate: tiredFrom !== undefined && tiredFrom <= t + 1e-9 ? STAFF_FATIGUE.tiredRate : 1 }));
+      t = to;
+      commitments.set(m.id, receptionSupport);
+      roomId = undefined;
+      return true;
+    };
+    // A promise already made to arriving guests lasts to its short deadline;
+    // new cleaning work is picked up immediately afterwards.
+    if (receptionSupport && receptionSupport.to > t && coverReception(receptionSupport)) {
+      if (t >= end - 1e-9) return result();
+    }
+    receptionSupport = undefined;
+    commitments.delete(m.id);
 
     // Work through jobs until the hour is up. A job is only taken once there's
     // a way to it from here, so a worker who's cut off doesn't hog the queue.
@@ -607,6 +663,29 @@ export function planStaff(
       job = undefined;
     }
 
+    // Home work has priority. Only spare afternoon time may be committed to
+    // reception, and travel/energy/shift limits must leave a useful block.
+    if (t < end - 1e-9 && pos && receptionTrained(m) && t % 24 >= STAFF_CROSS_TRAINING.startHour
+      && (m.restUntil ?? -Infinity) <= t && (!fatigueOn() || energy() < STAFF_FATIGUE.breakAt)) {
+      const duty = staffDutyAt(m, t);
+      const options = supportLanes.flatMap(lane => {
+        const route = findRoute(state, pos!, lane.front, pace);
+        if (!route) return [];
+        const arrival = t + route.hours;
+        const fatigue = projectFatigue(m, route.path.length > 1 ? [makeWalk(route.path, t, pace)] : [], t, arrival, energy());
+        const busy = [...(lane.duties ?? []).filter(d => d.staffId !== m.id).map(d => ({ from: d.from, to: d.to })),
+          ...[...commitments].filter(([id, s]) => id !== m.id && s.lane === lane.key).map(([, s]) => s)];
+        if (busy.some(b => b.from <= arrival + 1e-9 && b.to > arrival + 1e-9)) return [];
+        const next = Math.min(Infinity, ...busy.filter(b => b.from > arrival).map(b => b.from));
+        const toBreak = fatigueOn() ? (STAFF_FATIGUE.breakAt - fatigue) / fatigueGain(m) : Infinity;
+        const to = Math.min(arrival + STAFF_CROSS_TRAINING.supportHours, duty.end, next, arrival + toBreak);
+        const service = checkInHours(m) / (fatigueOn() && fatigue >= STAFF_FATIGUE.tiredAt ? STAFF_FATIGUE.tiredRate : 1);
+        if (to - arrival < Math.max(STAFF_CROSS_TRAINING.minSupportHours, service) - 1e-9) return [];
+        return [{ lane, from: arrival, to }];
+      }).sort((a, b) => a.from - b.from || a.lane.key.localeCompare(b.lane.key));
+      if (options[0]) coverReception({ lane: options[0].lane.key, from: options[0].from, to: options[0].to });
+    }
+
     // Done for now: rest -- in the break room if they can get there, else where they are
     if (t < end - 1e-9 && pos) {
       if (fatigueOn()) {
@@ -640,6 +719,27 @@ export function getStaffPlan(state: HotelState): StaffPlan {
   return planStaff(state);
 }
 
+/** Commit the next hour's available helpers before admission quotes the line.
+ * Tick still holds the old clock here; only promote counter promises, never
+ * virtual work, travel, fatigue, or experience from this planning pass. */
+export function prepareReceptionSupport(state: HotelState, t: number): HotelState {
+  if (t % 24 < STAFF_CROSS_TRAINING.startHour || t % 24 >= STAFF.housekeeping.workEndHour
+    || !(state.staffRoster ?? []).some(receptionTrained)) return state;
+  const virtual = { ...state, day: Math.floor(t / 24) + 1, hour: t % 24, staffPlan: null };
+  const plan = planStaff(virtual);
+  const supports = new Map<string, ReceptionSupport>();
+  for (const { member, support } of receptionSupports({ ...virtual, staffPlan: plan })) {
+    const it = plan.itineraries.find(it => it.staffId === member.id)!;
+    // A virtual clean is not completed work. Only already-free employees
+    // can make an admission promise before the real next-hour plan runs.
+    if (!supports.has(member.id) && support.to > t && !it.legs.some(l => l.kind === 'stay' && l.job && l.start < support.from)) supports.set(member.id, support);
+  }
+  const staffRoster = state.staffRoster!.map(m => ({ ...m, receptionSupport: supports.get(m.id) }));
+  const staffPlan = state.staffPlan ? { ...state.staffPlan, itineraries: state.staffPlan.itineraries.map(it => ({ ...it,
+    end: { ...it.end, receptionSupport: supports.get(it.staffId) } })) } : state.staffPlan;
+  return { ...state, staffRoster, staffPlan };
+}
+
 /** Hours of each kind of work the plan does in each room. */
 export function plannedWork(plan: StaffPlan, kind: 'turnover' | 'daily' | 'repair'): Map<string, number> {
   const work = new Map<string, number>();
@@ -667,11 +767,12 @@ export function rosterAfter(state: HotelState, plan: StaffPlan): StaffMember[] {
   }
   return roster.map(m => {
     const e = ends.get(m.id);
-    const workHours = m.role === 'front_desk' ? serviceHours.get(m.id) ?? 0 : (plan.itineraries.find(it => it.staffId === m.id)?.legs ?? [])
-      .reduce((hours, leg) => hours + (leg.kind === 'stay' && leg.job ? Math.max(0, Math.min(leg.end, plan.start + 1) - Math.max(leg.start, plan.start)) : 0), 0);
+    const workHours = (serviceHours.get(m.id) ?? 0) + (m.role === 'front_desk' ? 0 : (plan.itineraries.find(it => it.staffId === m.id)?.legs ?? [])
+      .reduce((hours, leg) => hours + (leg.kind === 'stay' && leg.job ? Math.max(0, Math.min(leg.end, plan.start + 1) - Math.max(leg.start, plan.start)) : 0), 0));
     const duty = m.role === 'front_desk' ? staffDutyAt(m, plan.start) : undefined;
     const recordAttendance = !duty || (m.hiredAt ?? -Infinity) < duty.end && (m.dismissedAt ?? Infinity) > duty.start;
-    const after = afterWork(e ? { ...m, at: e.at, roomId: e.roomId, carry: e.carry, deskLane: e.deskLane, fatigueBreak: e.fatigueBreak } : m, workHours, duty?.day ?? state.day, recordAttendance);
+    const after = afterWork(e ? { ...m, at: e.at, roomId: e.roomId, carry: e.carry, deskLane: e.deskLane, fatigueBreak: e.fatigueBreak,
+      receptionSupport: e.receptionSupport && e.receptionSupport.to > plan.start + 1 ? e.receptionSupport : undefined } : m, workHours, duty?.day ?? state.day, recordAttendance);
     return fatigueOn() && after.stats ? { ...after, stats: { ...after.stats,
       fatigue: fatigueAt({ ...state, staffPlan: plan }, m, plan.start + 1), fatigueAt: plan.start + 1 } } : after;
   });
@@ -687,12 +788,17 @@ export function rosterAfter(state: HotelState, plan: StaffPlan): StaffMember[] {
  */
 export function replanStaff(state: HotelState, t: number): HotelState {
   const plan = getStaffPlan(state);
+  const supports = receptionSupports({ ...state, staffPlan: plan });
   const done = new Map<string, Leg[]>();
   const now = getRoster(state).map(m => {
     // These are planning-only snapshots. The returned state retains its
     // boundary stats and the merged plan commits fatigue exactly once.
     if (fatigueOn() && m.stats) m = { ...m, stats: { ...m.stats, fatigue: fatigueAt(state, m, t), fatigueAt: t } };
     const it = plan.itineraries.find(i => i.staffId === m.id);
+    // Resume the current block or its direct approach. A later block after
+    // room work is a forecast, not permission to skip that intervening work.
+    if (it) m = { ...m, receptionSupport: supports.find(({ member, support }) => member.id === m.id && support.to > t
+      && !it.legs.some(l => l.kind === 'stay' && l.job && l.end > t && l.start < support.from))?.support };
     if (!it || it.legs.length === 0 || it.legs[0].start >= t) return m;
     const current = positionAt(it.legs, t)?.leg;
     const resting = current?.kind === 'stay' && current.activity === 'rest' ? current
@@ -737,6 +843,6 @@ function legsBefore(legs: Leg[], leg: Leg): Leg[] {
 
 /** What there is for staff to do: which rooms need cleaning or repair. When it changes mid-hour, re-plan (replanStaff). */
 export function staffWorkKey(state: HotelState): string {
-  const people = STAFF_PERSONALITIES.enabled ? (state.staffRoster ?? []).map(m => `${m.id}:${!!m.leaving}:${staffRate(m)}:${m.shift}:${m.restUntil}:${specialtyOf(m)}:${hospitalityOf(m)}`).join(',') : '';
+  const people = STAFF_PERSONALITIES.enabled ? (state.staffRoster ?? []).map(m => `${m.id}:${!!m.leaving}:${staffRate(m)}:${m.shift}:${m.restUntil}:${specialtyOf(m)}:${hospitalityOf(m)}:${receptionTrained(m)}:${JSON.stringify(m.receptionSupport)}`).join(',') : '';
   return state.rooms.map(r => `${r.id}:${r.status}:${r.condition < STAFF.maintenance.conditionThreshold ? 1 : 0}`).join(',') + people;
 }

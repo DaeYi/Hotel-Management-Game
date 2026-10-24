@@ -10,8 +10,8 @@ import { useController, useLiveClock } from '../context';
 import { queueOn, deskToday, waitingInLine } from '../../simulation/DeskQueue';
 import { formatMoney, formatWalk } from '../format';
 import { PanelCard } from './PanelCard';
-import { StaffPeople } from '../StaffPeople';
-import { namedFrontDesk } from '../../simulation/StaffProfiles';
+import { StaffPeople, staffActivity } from '../StaffPeople';
+import { namedFrontDesk, receptionTrained } from '../../simulation/StaffProfiles';
 import { deskCoverage } from '../../simulation/FrontDesk';
 import { FRONT_DESK_STAFF, STAFF_FATIGUE } from '../../config/staff';
 import { fatigueOn, breakRoomOccupancy } from '../../simulation/StaffFatigue';
@@ -114,17 +114,20 @@ export function StaffPanel() {
   const deskWarning = desks === 0 ? ' (no desk!)'
     : namedDesk && seated === 0 ? ' (desk unattended)'
     : !namedDesk && seated < state.staff.frontDesk ? ` (${state.staff.frontDesk - seated} idle: need desks)`
-    : state.staff.frontDesk === 0 ? ' (unstaffed!)' : '';
+    : state.staff.frontDesk === 0 && seated === 0 ? ' (unstaffed!)' : '';
 
   const hk = getHousekeepingStatus(state);
   const maint = getMaintenanceStatus(state);
+  const trained = (state.staffRoster ?? []).filter(m => !m.leaving && receptionTrained(m));
+  const supporting = trained.filter(m => staffActivity(m, state, c.gameTime) === 'Supporting reception').length;
 
   const upkeep = getUpkeepMultiplier(state.starRating);
   const walks = state.rooms.map(r => getStaffTravelHours(state, r)).filter(Number.isFinite);
   const avgWalk = walks.length > 0 ? walks.reduce((a, b) => a + b, 0) / walks.length : 0;
 
   const recommendations: string[] = [];
-  if (state.staff.frontDesk === 0 && state.rooms.length > 0) recommendations.push('No front desk staff! Nobody can check in.');
+  if (state.staff.frontDesk === 0 && state.rooms.length > 0) recommendations.push(supporting > 0
+    ? 'Housekeepers are helping at reception; hire clerks for regular shift coverage.' : 'No front desk staff! Nobody can check in.');
   if (hk.recommendation) recommendations.push(hk.recommendation);
   if (maint.recommendation) recommendations.push(maint.recommendation);
   const farFloor = farthestFloorWithoutCloset(state);
@@ -145,6 +148,7 @@ export function StaffPanel() {
       <hr class="divider" />
       <StaffRow label={`Housekeepers (base ${formatMoney(STAFF.housekeeping.dailyWage)}/day)`} staffKey="housekeepers"
         status={`Cleaning: ${hk.roomsBeingCleaned}${hk.roomsWaiting > 0 ? ` (${hk.roomsWaiting} waiting!)` : ''}  |  Busy day: ${Math.round(hk.hoursNeeded)}h of ${Math.round(hk.hoursAvailable * 10) / 10}h`} />
+      {trained.length > 0 && <div class="dim tiny" aria-label="Reception support">Reception support: {trained.length} trained housekeeper{trained.length === 1 ? '' : 's'} · {supporting} supporting now.</div>}
       <hr class="divider" />
       <StaffRow label={`Maintenance (base ${formatMoney(STAFF.maintenance.dailyWage)}/day)`} staffKey="maintenanceWorkers"
         status={`Needs repair: ${maint.roomsNeedingRepair}  |  Cap: ${maint.effectiveCapacity} rooms`} />
