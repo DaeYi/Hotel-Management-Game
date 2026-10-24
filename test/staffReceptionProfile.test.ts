@@ -7,9 +7,11 @@ import { hireCandidate } from '../src/simulation/StaffHiring.js';
 import { syncStaff } from '../src/simulation/StaffManager.js';
 import type { StaffMember } from '../src/simulation/types.js';
 
+const candidateChance = STAFF_CROSS_TRAINING.candidateChance;
+
 afterEach(() => {
   STAFF_CROSS_TRAINING.enabled = true;
-  STAFF_CROSS_TRAINING.candidateChance = 0.25;
+  STAFF_CROSS_TRAINING.candidateChance = candidateChance;
   STAFF_PERSONALITIES.enabled = true;
   FRONT_DESK_STAFF.enabled = true;
 });
@@ -18,7 +20,7 @@ it('adds deterministic reception training only to housekeeper offers while prese
   const trainedOffers = Array.from({ length: 20 }, (_, day) => candidatesFor(day + 1, 'housekeeper')).flat();
   expect(trainedOffers.some(receptionTrained)).toBe(true);
   expect(trainedOffers.some(member => !receptionTrained(member))).toBe(true);
-  for (const offer of trainedOffers) expect(receptionTrained(offer)).toBe(hash01(`${offer.id}|reception-training`) < 0.25);
+  for (const offer of trainedOffers) expect(receptionTrained(offer)).toBe(hash01(`${offer.id}|reception-training`) < candidateChance);
   const otherRoles = ['maintenance', 'front_desk'] as const;
   const otherOffers = otherRoles.map(role => candidatesFor(7, role));
   STAFF_CROSS_TRAINING.enabled = false;

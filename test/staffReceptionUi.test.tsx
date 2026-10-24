@@ -11,10 +11,12 @@ import { physicalDeskLanes } from '../src/simulation/FrontDesk';
 import { hourStart, makeStay } from '../src/simulation/Movement';
 import type { StaffMember } from '../src/simulation/types';
 
+const candidateChance = STAFF_CROSS_TRAINING.candidateChance;
+
 afterEach(() => {
   cleanup(); localStorage.clear();
   STAFF_CROSS_TRAINING.enabled = true;
-  STAFF_CROSS_TRAINING.candidateChance = 0.25;
+  STAFF_CROSS_TRAINING.candidateChance = candidateChance;
 });
 
 function controller() {

@@ -64,7 +64,7 @@ export const STAFF_FATIGUE = {
 /** Some new housekeepers can cover a short afternoon reception shift. */
 export const STAFF_CROSS_TRAINING = {
   enabled: true,
-  candidateChance: 0.25,
+  candidateChance: 0.10,
   wagePremium: 1.15,
   startHour: 14,
   supportHours: 1,
