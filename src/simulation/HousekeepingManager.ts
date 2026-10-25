@@ -6,7 +6,7 @@ import { getStaffPlan, plannedWork, isOnShift } from './StaffManager.js';
 import { isCheckoutDay } from './GuestManager.js';
 import { occupantFactor, guestsById } from './Party.js';
 import { housekeepingPrefOf } from './CleaningPreference.js';
-import { cleanlinessDelta, staffRate, attendanceShare, attendance } from './StaffProfiles.js';
+import { cleanlinessDelta, staffRate, attendanceShare, attendance, cleaningTrained } from './StaffProfiles.js';
 import { recordHospitality } from './StaffHospitality.js';
 import { guestTileAt } from './GuestMovement.js';
 import { sameTile } from './Movement.js';
@@ -31,9 +31,9 @@ export function startTurnoverCleaning(room: Room, quality: string): Room {
 
 /**
  * One hour of housekeeping: credit each room exactly the cleaning the staff
- * plan has a housekeeper doing in it this hour (getStaffPlan -- the plan the
+ * plan has a worker doing in it this hour (getStaffPlan -- the plan the
  * walking staff on screen follow). Daily cleans still pending when the shift
- * ends are skipped. No housekeepers = rooms stay in 'cleaning' indefinitely.
+ * ends are skipped. Trained clerks can contribute real morning turnover work.
  */
 export function processCleaningTick(state: HotelState): { state: HotelState; events: GameEvent[] } {
   const events: GameEvent[] = [];
@@ -291,6 +291,8 @@ export function checkHousekeepingCompliance(state: HotelState): string | null {
 
   // Check if there are enough housekeepers
   if (state.staff.housekeepers <= 0 && state.rooms.length > 0) {
+    if ((state.staffRoster ?? []).some(m => !m.leaving && m.shift === 'early' && cleaningTrained(m)))
+      return 'No dedicated housekeepers. Trained clerks only help with morning turnovers; daily cleans still need housekeepers.';
     return 'No housekeepers hired! Rooms will not be cleaned';
   }
 
@@ -333,7 +335,9 @@ export function getHousekeepingStatus(state: HotelState): {
 
   let recommendation: string | null = null;
   if (housekeepers === 0 && state.rooms.length > 0) {
-    recommendation = 'Hire housekeepers or rooms will never be cleaned!';
+    recommendation = (state.staffRoster ?? []).some(m => !m.leaving && m.shift === 'early' && cleaningTrained(m))
+      ? 'Hire housekeepers for daily cleans and reliable turnover coverage. Clerk help depends on spare morning reception coverage.'
+      : 'Hire housekeepers or rooms will never be cleaned!';
   } else if (hoursNeeded > hoursAvailable * 1.05) {
     recommendation = `A busy day needs ${housekeepersNeeded(state, PLANNING_OCCUPANCY)} housekeepers.`;
   } else if (roomsWaiting > 0) {

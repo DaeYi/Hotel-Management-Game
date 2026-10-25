@@ -6,6 +6,7 @@ import { hourStart, makeStay, makeWalk, finalTile, sameTile } from './Movement.j
 import { checkInHours, namedFrontDesk, staffDuty, staffDutyAt } from './StaffProfiles.js';
 import { fatigueOn, fatigueAt, fatigueGain, projectFatigue, planStaffRest, restReservations, type RestReservation } from './StaffFatigue.js';
 import { receptionSupports } from './CrossTraining.js';
+import { cleaningSupports } from './ClerkCleaning.js';
 
 export interface DeskDuty { staffId: string; from: number; to: number; checkInHours: number; startUntil?: number; serviceRate?: number }
 export interface DeskLane { desk: Fixture; seat: number; front: TilePos; key: string; duties?: DeskDuty[] }
@@ -33,6 +34,7 @@ const fatigueCache = new WeakMap<HotelState, { schedules: ClerkSchedule[]; reser
 function fatigueSchedules(state: HotelState): { schedules: ClerkSchedule[]; reservations: RestReservation[] } {
   const cached = fatigueCache.get(state);
   if (cached) return cached;
+  const laneKeys = new Set(physicalDeskLanes(state).map(lane => lane.key));
   const breakRooms = new Map(getAccessibleBreakRooms(state).map(room => [room.id, room]));
   const T = hourStart(state), reservations = restReservations(state).filter(r => breakRooms.has(r.placeId)), schedules: ClerkSchedule[] = [];
   for (const a of [...assignments(state)].sort((x, y) => x.from - y.from || x.member.id.localeCompare(y.member.id))) {
@@ -81,6 +83,7 @@ function fatigueSchedules(state: HotelState): { schedules: ClerkSchedule[]; rese
     // A later hire may now yield to a committed helper or take another seat.
     // Replay a saved counter stay only while it still belongs to this assignment.
     const existing = saved?.legs.some(l => l.kind === 'stay' && l.activity === 'desk' && l.end > T
+      && !!l.lane && laneKeys.has(l.lane)
       && (l.lane !== a.lane.key || l.start < a.from - 1e-9)) ? undefined : saved;
     if (existing) {
       for (const leg of existing.legs.filter(l => l.end > T && l.start < T + 1)) {
@@ -187,16 +190,23 @@ function assignments(state: HotelState): Assignment[] {
   if (cached) return cached;
   const lanes = physicalDeskLanes(state), result: Assignment[] = [];
   const supports = receptionSupports(state);
+  const cleaning = cleaningSupports(state);
   const T = hourStart(state);
   const nativeSeats = new Map<string, { lane: string; desk: Leg[] }>();
-  if (supports.length && state.staffPlan?.start === T) {
+  if ((supports.length || cleaning.length) && state.staffPlan?.start === T) {
     for (const member of state.staffRoster ?? []) {
       if (member.role !== 'front_desk' || member.leaving) continue;
       const now = Math.max(T, member.stats?.fatigueAt ?? T);
       const desk = state.staffPlan.itineraries.find(it => it.staffId === member.id)?.legs.filter(l =>
-        l.kind === 'stay' && l.activity === 'desk' && l.end > now + 1e-9 && l.start < T + 1) ?? [];
+        l.kind === 'stay' && l.activity === 'desk' && l.end > now + 1e-9 && l.start < T + 1
+        && lanes.some(lane => lane.key === l.lane)) ?? [];
       const first = desk[0];
       if (first?.kind === 'stay' && first.lane) nativeSeats.set(member.id, { lane: first.lane, desk });
+      else {
+        const returning = cleaning.find(c => c.member.id === member.id && c.support.to > now);
+        if (returning && lanes.some(lane => lane.key === returning.support.lane))
+          nativeSeats.set(member.id, { lane: returning.support.lane, desk });
+      }
     }
   }
   const groups = (['early', 'late', 'night'] as const).map(shift => (state.staffRoster ?? [])
@@ -271,6 +281,7 @@ export function scheduledDeskLanes(state: HotelState): DeskLane[] {
   if (cached) return cached;
   const all = assignments(state);
   const supports = receptionSupports(state);
+  const cleaning = cleaningSupports(state);
   const lanes = physicalDeskLanes(state).map(lane => ({ ...lane, duties: [...(fatigueOn()
     ? fatigueSchedules(state).schedules.filter(s => s.assignment.lane.key === lane.key).flatMap(s => s.duties).sort((a, b) => a.from - b.from)
     : all.filter(a => a.lane.key === lane.key).map(a => ({ staffId: a.member.id, from: a.from, to: a.to, checkInHours: checkInHours(a.member) }))),
@@ -281,7 +292,23 @@ export function scheduledDeskLanes(state: HotelState): DeskLane[] {
       if (tired <= support.from + 1e-9) return [{ ...base, checkInHours: hours / STAFF_FATIGUE.tiredRate, serviceRate: STAFF_FATIGUE.tiredRate }];
       return [{ ...base, startUntil: tired, checkInHours: hours, serviceRate: 1 },
         { ...base, from: tired, checkInHours: hours / STAFF_FATIGUE.tiredRate, serviceRate: STAFF_FATIGUE.tiredRate }];
-    })].sort((a, b) => a.from - b.from) }));
+    })].flatMap((duty: DeskDuty) => {
+      // Both walks and the room stay close the lane. A service beginning
+      // before departure must also finish before the clerk leaves.
+      let pieces = [duty];
+      for (const { member, support } of cleaning) {
+        if (member.id !== duty.staffId) continue;
+        pieces = pieces.flatMap(part => {
+          if (support.to <= part.from || support.from >= part.to) return [part];
+          const kept: DeskDuty[] = [];
+          if (part.from < support.from) kept.push({ ...part, to: support.from,
+            ...(part.startUntil !== undefined ? { startUntil: Math.min(part.startUntil, support.from) } : {}) });
+          if (part.to > support.to && (part.startUntil ?? part.to) > support.to) kept.push({ ...part, from: support.to });
+          return kept;
+        });
+      }
+      return pieces;
+    }).sort((a, b) => a.from - b.from) }));
   laneCache.set(state, lanes);
   return lanes;
 }

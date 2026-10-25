@@ -1,10 +1,10 @@
 import { useState } from 'preact/hooks';
 import type { StaffRole, StaffMember, HotelState, FrontDeskShift, Leg } from '../simulation/types';
 import { hiringCandidates } from '../simulation/StaffHiring';
-import { attendance, experienceOf, roleLabel, shiftFor, staffRate, staffWage, repairTarget, staffDutyAt, checkInHours, frontDeskOn, hospitalityOf, specialtyOf, specialtiesFor, specialtyLabel, receptionTrained, type StaffCandidate } from '../simulation/StaffProfiles';
+import { attendance, experienceOf, roleLabel, shiftFor, staffRate, staffWage, repairTarget, staffDutyAt, checkInHours, frontDeskOn, hospitalityOf, specialtyOf, specialtiesFor, specialtyLabel, receptionTrained, cleaningTrained, cleaningRate, type StaffCandidate } from '../simulation/StaffProfiles';
 import { getStaffPlan } from '../simulation/StaffManager';
 import { positionAt } from '../simulation/Movement';
-import { STAFF_PERSONALITIES, FRONT_DESK_STAFF, STAFF_HOSPITALITY, STAFF_SPECIALTIES, STAFF_FATIGUE, STAFF_CROSS_TRAINING } from '../config/staff';
+import { STAFF_PERSONALITIES, FRONT_DESK_STAFF, STAFF_HOSPITALITY, STAFF_SPECIALTIES, STAFF_FATIGUE, STAFF_CROSS_TRAINING, STAFF_CLEANING_SUPPORT } from '../config/staff';
 import { fatigueOn, fatigueAt, staminaOf } from '../simulation/StaffFatigue';
 import { getUpkeepMultiplier } from '../simulation/StarRatingManager';
 import { useController, useLiveClock } from './context';
@@ -81,6 +81,18 @@ function ReceptionDetails({ member }: { member: StaffMember }) {
   </div>;
 }
 
+function CleaningDetails({ member }: { member: StaffMember }) {
+  if (!cleaningTrained(member)) return null;
+  const premium = Math.round((STAFF_CLEANING_SUPPORT.wagePremium - 1) * 100);
+  const window = `${String(STAFF_CLEANING_SUPPORT.startHour).padStart(2, '0')}:00–${String(STAFF_CLEANING_SUPPORT.endHour).padStart(2, '0')}:00`;
+  return <div class="staff-cleaning-training tiny" aria-label={`Turnover training for ${member.name}`}>
+    <div><span class="staff-training-badge">Turnover trained</span> · Cleaning {Math.round(cleaningRate(member) * 100) / 100}×</div>
+    <div class="dim">{premium}% training premium included in the agreed wage.</div>
+    <div class="dim">Can help with vacant-room turnovers {window} when reception has spare coverage. Fixed trips last up to {STAFF_CLEANING_SUPPORT.supportHours}h, including walks back to the desk.</div>
+    {member.shift !== 'early' && <div class="dim">This shift is outside the turnover support window.</div>}
+  </div>;
+}
+
 export function StaffEnergy({ member }: { member: StaffMember }) {
   const c = useController();
   if (!fatigueOn()) return null;
@@ -95,7 +107,7 @@ export function StaffEnergy({ member }: { member: StaffMember }) {
     <div class="tiny">Energy: {energy}% · {status}</div>
     <progress class="staff-energy-meter" value={energy} max={100} aria-label={`Energy for ${member.name ?? 'staff member'}`} aria-valuetext={`${energy}% energy; ${status}`} />
     {resting && recovery !== null && <div class="dim tiny">Recovering {recovery} energy/hour.</div>}
-    {!resting && fatigue >= STAFF_FATIGUE.tiredAt && <div class="dim tiny">{member.role === 'front_desk' || receptionTrained(member) && leg?.kind === 'stay' && leg.activity === 'desk' ? 'New service' : 'Work'} is {Math.round((1 - STAFF_FATIGUE.tiredRate) * 100)}% slower while tired.</div>}
+    {!resting && fatigue >= STAFF_FATIGUE.tiredAt && <div class="dim tiny">{leg?.kind === 'stay' && leg.activity === 'desk' ? 'New service' : 'Work'} is {Math.round((1 - STAFF_FATIGUE.tiredRate) * 100)}% slower while tired.</div>}
   </div>;
 }
 
@@ -109,8 +121,8 @@ export function staffActivity(member: StaffMember, state: HotelState, t: number)
     if (t >= duty.end) return 'Off duty';
     if (duty.absent) return 'Absent this shift (unpaid)';
     if (duty.available > t) return member.restUntil && member.restUntil > t ? 'Resting before the next shift' : `Late this shift: ${Math.round(duty.lateHours * 60)} minutes`;
-    const it = getStaffPlan(state).itineraries.find(i => i.staffId === member.id);
-    const leg = it ? positionAt(it.legs, t)?.leg : undefined;
+    const leg = activeStaffLeg(member, state, t);
+    if (leg?.kind === 'stay' && leg.activity === 'clean' && leg.job === 'turnover') return 'Helping with a turnover';
     return leg?.kind === 'walk' ? 'Walking' : leg?.kind === 'stay' && leg.activity === 'desk' ? 'At the front desk' : member.at ? 'Waiting for a desk seat' : 'Off site';
   }
   const a = attendance(member, state.day);
@@ -146,6 +158,7 @@ export function StaffDetails({ member }: { member: StaffMember }) {
     <div class="dim tiny">Attendance: {member.stats?.lateDays ?? 0} late days · {member.stats?.absentDays ?? 0} absent days</div>
     <StaminaDetails member={member} />
     <ReceptionDetails member={member} />
+    <CleaningDetails member={live} />
     <StaffEnergy member={member} />
     {STAFF_HOSPITALITY.enabled && <HospitalityDetails member={member} />}
     {STAFF_SPECIALTIES.enabled && <SpecialtyPicker member={member} />}
@@ -183,6 +196,7 @@ function CandidateCard({ candidate }: { candidate: StaffCandidate }) {
     {STAFF_HOSPITALITY.enabled && <HospitalityDetails member={member} />}
     <StaminaDetails member={member} />
     <ReceptionDetails member={member} />
+    <CleaningDetails member={member} />
     <button class="good" onClick={() => c.hireStaff(candidate.role, candidate.id, candidate.shift)} aria-label={`Hire ${candidate.name}`}>Hire</button>
   </li>;
 }

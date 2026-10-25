@@ -1,6 +1,6 @@
 import type { StaffMember, StaffRole, FrontDeskShift, HotelState } from './types.js';
 import { STAFF, GUEST_NAMES, SURNAMES, HOUSEKEEPING } from '../config/balance.js';
-import { STAFF_PERSONALITIES as RULES, FRONT_DESK_STAFF, STAFF_SPECIALTIES, STAFF_HOSPITALITY, STAFF_FATIGUE, STAFF_CROSS_TRAINING } from '../config/staff.js';
+import { STAFF_PERSONALITIES as RULES, FRONT_DESK_STAFF, STAFF_SPECIALTIES, STAFF_HOSPITALITY, STAFF_FATIGUE, STAFF_CROSS_TRAINING, STAFF_CLEANING_SUPPORT } from '../config/staff.js';
 import { fatigueRate } from './StaffFatigue.js';
 import { hash01 } from './Movement.js';
 import { pick } from './Party.js';
@@ -41,6 +41,7 @@ export interface StaffProfile {
   hospitality?: Hospitality; // absent on older saves: polite (neutral)
   stamina?: Stamina; // absent on older saves: normal, with fresh energy
   receptionTrained?: boolean; // a capability offered by some new housekeepers
+  cleaningTrained?: boolean; // a capability offered by some new early-shift clerks
   legacy?: boolean; // existing staff keep their original performance and wage
 }
 
@@ -78,6 +79,8 @@ export interface StaffCandidate {
 export const frontDeskOn = () => RULES.enabled && FRONT_DESK_STAFF.enabled;
 export const receptionTrained = (member: StaffIdentity & { role?: StaffRole }): boolean => frontDeskOn() && STAFF_CROSS_TRAINING.enabled
   && (member.role === undefined || member.role === 'housekeeper') && member.profile?.receptionTrained === true;
+export const cleaningTrained = (member: StaffIdentity & { role?: StaffRole }): boolean => frontDeskOn() && STAFF_CLEANING_SUPPORT.enabled
+  && member.role === 'front_desk' && member.profile?.cleaningTrained === true;
 export const namedFrontDesk = (state: HotelState) => frontDeskOn() && !!state.frontDeskRosterReady;
 export const roleLabel = (role: StaffRole) => role === 'housekeeper' ? 'Housekeeper' : role === 'front_desk' ? 'Front desk' : 'Maintenance';
 export const baseWage = (role: StaffRole) => role === 'front_desk' ? STAFF.frontDesk.dailyWage * FRONT_DESK_STAFF.shiftWage : (role === 'housekeeper' ? STAFF.housekeeping : STAFF.maintenance).dailyWage;
@@ -95,6 +98,11 @@ export function experienceOf(member: StaffIdentity): Experience {
 /** Work units per real hour in the room. Walks never get this multiplier. */
 export function staffRate(member: StaffIdentity): number {
   if ((member as StaffMember).role === 'front_desk') return 1 / (3 * checkInHours(member));
+  return cleaningRate(member);
+}
+
+/** Cleaning uses room-work skills, even when the worker's primary role is reception. */
+export function cleaningRate(member: StaffIdentity): number {
   const base = !RULES.enabled || !member.profile || member.profile.legacy ? 1
     : RULES.experienceRate[experienceOf(member)] / RULES.styleTime[member.profile.style];
   return base * fatigueRate(member);
@@ -236,11 +244,14 @@ export function candidatesFor(day: number, role: StaffRole, used: readonly strin
       ...(STAFF_FATIGUE.enabled ? { stamina: pick<Stamina>([['low', 0.25], ['normal', 0.5], ['high', 0.25]], hash01(`${id}|stamina`)) } : {}),
       ...(STAFF_SPECIALTIES.enabled ? { specialty } : {}), ...(STAFF_HOSPITALITY.enabled ? { hospitality } : {}),
       ...(role === 'housekeeper' && frontDeskOn() && STAFF_CROSS_TRAINING.enabled && hash01(`${id}|reception-training`) < STAFF_CROSS_TRAINING.candidateChance
-        ? { receptionTrained: true } : {}) };
+        ? { receptionTrained: true } : {}),
+      ...(role === 'front_desk' && shift === 'early' && frontDeskOn() && STAFF_CLEANING_SUPPORT.enabled && hash01(`${id}|cleaning-training`) < STAFF_CLEANING_SUPPORT.candidateChance
+        ? { cleaningTrained: true } : {}) };
     const originalWage = money(baseWage(role) * RULES.experienceWage[experience] * RULES.reliabilityWage[reliability]
       * (STAFF_HOSPITALITY.enabled ? STAFF_HOSPITALITY.wage[hospitality] : 1)
       * (role === 'front_desk' && shift === 'night' ? FRONT_DESK_STAFF.nightPremium : 1));
-    const dailyWage = receptionTrained({ role, profile }) ? money(originalWage * STAFF_CROSS_TRAINING.wagePremium) : originalWage;
+    const dailyWage = receptionTrained({ role, profile }) ? money(originalWage * STAFF_CROSS_TRAINING.wagePremium)
+      : cleaningTrained({ role, profile }) ? money(originalWage * STAFF_CLEANING_SUPPORT.wagePremium) : originalWage;
     const workHours = experience === 'rookie' ? 0 : RULES.experienceHours[experience];
     result.push({ id, role, name: staffName(id), profile, dailyWage, workHours, ...(role === 'front_desk' ? { shift } : {}) });
   }

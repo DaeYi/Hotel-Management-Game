@@ -5,17 +5,19 @@ import { STAFF_PERSONALITIES } from '../config/staff.js';
 import { rerouteTrips, checkInLanes } from './GuestMovement.js';
 import { GUEST_HOUSEKEEPING } from '../config/balance.js';
 import { reseatLanes } from './DeskQueue.js';
-import { namedFrontDesk, specialtyOf, hospitalityOf, receptionTrained, checkInHours } from './StaffProfiles.js';
+import { namedFrontDesk, specialtyOf, hospitalityOf, receptionTrained, cleaningTrained, checkInHours } from './StaffProfiles.js';
 import { receptionSupports } from './CrossTraining.js';
+import { cleaningSupports } from './ClerkCleaning.js';
 
 function trainingKey(state: HotelState): string {
-  return (state.staffRoster ?? []).filter(m => m.role === 'housekeeper').map(m => `${m.id}:${receptionTrained(m)}`).join(',');
+  return (state.staffRoster ?? []).map(m => `${m.id}:${receptionTrained(m)}:${cleaningTrained(m)}`).join(',');
 }
 
 /** Who's checking guests in, and where. */
 function lanesKey(state: HotelState): string {
   const support = receptionSupports(state).map(({ member, support }) => `${member.id}:${support.lane}:${support.from}:${support.to}:${support.tiredFrom}:${hospitalityOf(member)}:${specialtyOf(member)}:${checkInHours(member)}`).join(',');
-  return checkInLanes(state).map(l => `${l.desk.id}:${l.seat}`).join(',') + (namedFrontDesk(state) ? (state.staffRoster ?? []).filter(m => m.role === 'front_desk').map(m => `${m.id}:${m.leaving}:${m.shift}:${m.restUntil}:${specialtyOf(m)}:${hospitalityOf(m)}`).join(',') + trainingKey(state) + support : '');
+  const cleaning = cleaningSupports(state).map(({ member, support }) => `${member.id}:${support.lane}:${support.from}:${support.to}`).join(',');
+  return checkInLanes(state).map(l => `${l.desk.id}:${l.seat}`).join(',') + (namedFrontDesk(state) ? (state.staffRoster ?? []).filter(m => m.role === 'front_desk').map(m => `${m.id}:${m.leaving}:${m.shift}:${m.restUntil}:${specialtyOf(m)}:${hospitalityOf(m)}`).join(',') + trainingKey(state) + support + cleaning : '');
 }
 
 /**

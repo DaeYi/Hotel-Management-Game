@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { FRONT_DESK_STAFF, STAFF_CROSS_TRAINING, STAFF_FATIGUE, STAFF_HOSPITALITY, STAFF_PERSONALITIES, STAFF_SPECIALTIES } from '../src/config/staff.js';
+import { FRONT_DESK_STAFF, STAFF_CROSS_TRAINING, STAFF_CLEANING_SUPPORT, STAFF_FATIGUE, STAFF_HOSPITALITY, STAFF_PERSONALITIES, STAFF_SPECIALTIES } from '../src/config/staff.js';
 import { STAFF, TRAVEL, VOICE } from '../src/config/balance.js';
 import { addElevator, addRoom, buildFloor, createStarterHotel, demolishFixture } from '../src/simulation/HotelState.js';
 import { receptionSupports } from '../src/simulation/CrossTraining.js';
@@ -21,7 +21,7 @@ import { simulate } from '../src/simulation/simulate.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
 import type { Guest, HotelState, StaffMember, StaffPlan, StayLeg } from '../src/simulation/types.js';
 
-const switches = [STAFF_CROSS_TRAINING, STAFF_PERSONALITIES, FRONT_DESK_STAFF, STAFF_FATIGUE, STAFF_HOSPITALITY, STAFF_SPECIALTIES];
+const switches = [STAFF_CROSS_TRAINING, STAFF_CLEANING_SUPPORT, STAFF_PERSONALITIES, FRONT_DESK_STAFF, STAFF_FATIGUE, STAFF_HOSPITALITY, STAFF_SPECIALTIES];
 const originalSwitches = switches.map(setting => setting.enabled);
 const originalPace = TRAVEL.hoursPerTile;
 afterEach(() => { switches.forEach((setting, index) => { setting.enabled = originalSwitches[index]; }); TRAVEL.hoursPerTile = originalPace; localStorage.clear(); });
@@ -367,6 +367,7 @@ describe('Support serves real guests and survives the hourly boundary', () => {
 it('with cross-training disabled preserves the full pre-training game’s pinned 60-day balance', () => {
   for (const setting of switches) setting.enabled = true;
   STAFF_CROSS_TRAINING.enabled = false;
+  STAFF_CLEANING_SUPPORT.enabled = false;
   // Measured against main 3a551876, including fatigue and all other named
   // staff features. The separate paired harness also compares the full summary.
   const result = simulate(60, 9, undefined, STRATEGIES.balanced);

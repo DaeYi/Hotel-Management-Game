@@ -11,7 +11,7 @@ import { queueOn, deskToday, waitingInLine } from '../../simulation/DeskQueue';
 import { formatMoney, formatWalk } from '../format';
 import { PanelCard } from './PanelCard';
 import { StaffPeople, staffActivity } from '../StaffPeople';
-import { namedFrontDesk, receptionTrained } from '../../simulation/StaffProfiles';
+import { namedFrontDesk, receptionTrained, cleaningTrained } from '../../simulation/StaffProfiles';
 import { deskCoverage } from '../../simulation/FrontDesk';
 import { FRONT_DESK_STAFF, STAFF_FATIGUE } from '../../config/staff';
 import { fatigueOn, breakRoomOccupancy } from '../../simulation/StaffFatigue';
@@ -120,6 +120,8 @@ export function StaffPanel() {
   const maint = getMaintenanceStatus(state);
   const trained = (state.staffRoster ?? []).filter(m => !m.leaving && receptionTrained(m));
   const supporting = trained.filter(m => staffActivity(m, state, c.gameTime) === 'Supporting reception').length;
+  const turnoverTrained = (state.staffRoster ?? []).filter(m => !m.leaving && cleaningTrained(m));
+  const cleaningSupport = turnoverTrained.filter(m => staffActivity(m, state, c.gameTime) === 'Helping with a turnover').length;
 
   const upkeep = getUpkeepMultiplier(state.starRating);
   const walks = state.rooms.map(r => getStaffTravelHours(state, r)).filter(Number.isFinite);
@@ -145,6 +147,7 @@ export function StaffPanel() {
         <div class="dim">24-hour coverage needs a clerk on each shift. Night shifts pay 25% more. + fills the least-covered shift.</div>
       </div>}
       {queueOn(state) && <DeskToday />}
+      {turnoverTrained.length > 0 && <div class="dim tiny" aria-label="Turnover support">Turnover support: {turnoverTrained.length} trained clerk{turnoverTrained.length === 1 ? '' : 's'} · {cleaningSupport} cleaning now.</div>}
       <hr class="divider" />
       <StaffRow label={`Housekeepers (base ${formatMoney(STAFF.housekeeping.dailyWage)}/day)`} staffKey="housekeepers"
         status={`Cleaning: ${hk.roomsBeingCleaned}${hk.roomsWaiting > 0 ? ` (${hk.roomsWaiting} waiting!)` : ''}  |  Busy day: ${Math.round(hk.hoursNeeded)}h of ${Math.round(hk.hoursAvailable * 10) / 10}h`} />

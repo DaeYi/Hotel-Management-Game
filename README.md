@@ -19,7 +19,7 @@ npm test            # Unit, interface, movement, and long-term balance tests
 npm run simulate -- 400 24 balanced
 ```
 
-The full suite includes a 24-seed, 400-day staffing comparison and takes several minutes. A focused run accepts test paths, for example `npm test -- test/controller.test.ts test/events.test.ts`.
+The full suite includes a 24-seed, 400-day staffing comparison and can take around 30 minutes on CI. A focused run accepts test paths, for example `npm test -- test/controller.test.ts test/events.test.ts`.
 
 ## Saves
 
@@ -43,6 +43,8 @@ Staff now have low, normal or high stamina. Work, walking and lift rides build f
 
 About one in ten new housekeepers is reception trained, with a 15% premium included in their agreed wage. From 14:00, when cleaning is caught up, they can walk to a free counter and help with check-ins and complaints in blocks of up to one hour. Their own shift, hospitality, energy and breaks still apply. New room work waits only until the current support block ends. Hiring cards show the capability, and two-tone uniforms and live activity labels show who is helping. Existing employees keep their training status and wages.
 
-Next: desk clerks helping with turnovers, then morale and quitting. The detailed roadmap is in [guest and staff personalities](docs/designs/guest-staff-personalities.md). Larger rooms and 3D are later milestones described in [rethinking rooms](docs/designs/rooms-rethink.md).
+About one in ten early-shift front-desk offers includes turnover training, with a 15% premium. These clerks can help with unclaimed vacant-room turnovers from 07:00 to 14:00, only while another native clerk covers reception throughout the trip. Each trip includes both walks and lasts at most an hour, returning by the hour boundary, shift end or covering clerk's break. Partial work remains for the next cleaner. Reception hospitality does not change cleaning speed; actual work earns experience on the same person and wage agreement. Existing staff remain untrained. Hiring cards, blue/green uniforms and live activity show the capability and its use.
+
+Next: morale, raises and quitting. The detailed roadmap is in [guest and staff personalities](docs/designs/guest-staff-personalities.md). Larger rooms and 3D are later milestones described in [rethinking rooms](docs/designs/rooms-rethink.md).
 
 The simulation is in `src/simulation`, player actions and the clock in `src/game`, the Preact interface in `src/ui`, and Phaser drawing in `src/render`.
