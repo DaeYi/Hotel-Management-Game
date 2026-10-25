@@ -1,7 +1,7 @@
 import type { Guest, HotelState, StaffMember, StayLeg } from './types.js';
 import { STAFF_HOSPITALITY as RULES, STAFF_PERSONALITIES, STAFF_SPECIALTIES } from '../config/staff.js';
 import { VOICE } from '../config/balance.js';
-import { hospitalityOf, specialtyOf } from './StaffProfiles.js';
+import { hospitalityOf, specialtyOf, receptionTrained } from './StaffProfiles.js';
 import { moodHidden } from './Voice.js';
 
 type ContactKind = 'check_in' | 'complaint' | 'daily_clean';
@@ -66,6 +66,6 @@ export function recordNoiseHospitality(state: HotelState, guest: Guest, at: numb
   if (!STAFF_PERSONALITIES.enabled || !RULES.enabled) return { guest, grace: 0 };
   const ids = new Set((state.staffPlan?.itineraries ?? []).filter(it => it.legs.some(l =>
     l.kind === 'stay' && l.activity === 'desk' && l.start <= at && l.end > at)).map(it => it.staffId));
-  const clerk = state.staffRoster?.find(m => m.role === 'front_desk' && ids.has(m.id) && hospitalityOf(m) === 'warm');
+  const clerk = state.staffRoster?.find(m => (m.role === 'front_desk' || receptionTrained(m)) && ids.has(m.id) && hospitalityOf(m) === 'warm');
   return clerk ? { guest, grace: RULES.warmNoiseGrace, clerk } : { guest, grace: 0 };
 }

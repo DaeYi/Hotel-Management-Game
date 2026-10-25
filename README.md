@@ -41,6 +41,8 @@ New housekeeping and desk candidates can be warm, polite or curt. Hospitality ch
 
 Staff now have low, normal or high stamina. Work, walking and lift rides build fatigue; tired workers slow down and take physical breaks. Break rooms have six real seats and restore energy faster than resting elsewhere. Staff panels show live energy, activity and seat usage. Recovery follows time off duty, so night clerks keep their fatigue across midnight. Existing staff start fresh with normal stamina and keep their names, wages and experience.
 
-Next: cross-training, then morale and quitting. The detailed roadmap is in [guest and staff personalities](docs/designs/guest-staff-personalities.md). Larger rooms and 3D are later milestones described in [rethinking rooms](docs/designs/rooms-rethink.md).
+About one in ten new housekeepers is reception trained, with a 15% premium included in their agreed wage. From 14:00, when cleaning is caught up, they can walk to a free counter and help with check-ins and complaints in blocks of up to one hour. Their own shift, hospitality, energy and breaks still apply. New room work waits only until the current support block ends. Hiring cards show the capability, and two-tone uniforms and live activity labels show who is helping. Existing employees keep their training status and wages.
+
+Next: desk clerks helping with turnovers, then morale and quitting. The detailed roadmap is in [guest and staff personalities](docs/designs/guest-staff-personalities.md). Larger rooms and 3D are later milestones described in [rethinking rooms](docs/designs/rooms-rethink.md).
 
 The simulation is in `src/simulation`, player actions and the clock in `src/game`, the Preact interface in `src/ui`, and Phaser drawing in `src/render`.

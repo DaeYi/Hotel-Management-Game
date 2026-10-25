@@ -1,10 +1,10 @@
 import { useState } from 'preact/hooks';
 import type { StaffRole, StaffMember, HotelState, FrontDeskShift, Leg } from '../simulation/types';
 import { hiringCandidates } from '../simulation/StaffHiring';
-import { attendance, experienceOf, roleLabel, shiftFor, staffRate, staffWage, repairTarget, staffDutyAt, checkInHours, frontDeskOn, hospitalityOf, specialtyOf, specialtiesFor, specialtyLabel, type StaffCandidate } from '../simulation/StaffProfiles';
+import { attendance, experienceOf, roleLabel, shiftFor, staffRate, staffWage, repairTarget, staffDutyAt, checkInHours, frontDeskOn, hospitalityOf, specialtyOf, specialtiesFor, specialtyLabel, receptionTrained, type StaffCandidate } from '../simulation/StaffProfiles';
 import { getStaffPlan } from '../simulation/StaffManager';
 import { positionAt } from '../simulation/Movement';
-import { STAFF_PERSONALITIES, FRONT_DESK_STAFF, STAFF_HOSPITALITY, STAFF_SPECIALTIES, STAFF_FATIGUE } from '../config/staff';
+import { STAFF_PERSONALITIES, FRONT_DESK_STAFF, STAFF_HOSPITALITY, STAFF_SPECIALTIES, STAFF_FATIGUE, STAFF_CROSS_TRAINING } from '../config/staff';
 import { fatigueOn, fatigueAt, staminaOf } from '../simulation/StaffFatigue';
 import { getUpkeepMultiplier } from '../simulation/StarRatingManager';
 import { useController, useLiveClock } from './context';
@@ -31,8 +31,8 @@ function HospitalityDetails({ member }: { member: StaffMember }) {
     ? hospitality === 'warm' ? '25% shorter check-ins; +4 mood at check-in. Desk complaints: +10 mood; phone noise complaints gain 3h grace.'
       : hospitality === 'curt' ? '20% longer check-ins; −3 mood at check-in.' : 'No change to check-in time or guest mood.'
     : member.role === 'housekeeper'
-      ? hospitality === 'warm' ? 'Daily clean with the guest present: +2 mood.'
-        : hospitality === 'curt' ? 'Daily clean with the guest present: −2 mood.' : 'No extra mood change during daily cleans.'
+      ? hospitality === 'warm' ? `Daily clean with the guest present: +2 mood.${receptionTrained(member) ? ' Reception check-ins: +4 mood.' : ''}`
+        : hospitality === 'curt' ? `Daily clean with the guest present: −2 mood.${receptionTrained(member) ? ' Reception check-ins: −3 mood.' : ''}` : 'No extra mood change during daily cleans.'
       : 'No hospitality mood change during repairs.';
   return <div class="dim tiny">Hospitality: {capitalize(hospitality)} · {effect}</div>;
 }
@@ -71,6 +71,16 @@ function StaminaDetails({ member }: { member: StaffMember }) {
   </div>;
 }
 
+function ReceptionDetails({ member }: { member: StaffMember }) {
+  if (!receptionTrained(member)) return null;
+  const premium = Math.round((STAFF_CROSS_TRAINING.wagePremium - 1) * 100);
+  return <div class="staff-reception-training tiny" aria-label={`Reception training for ${member.name}`}>
+    <div><span class="staff-training-badge">Reception trained</span> · Base reception check-in: {Math.round(checkInHours(member) * 60)} min</div>
+    <div class="dim">{premium}% training premium included in the agreed wage.</div>
+    <div class="dim">Can help at reception from {String(STAFF_CROSS_TRAINING.startHour).padStart(2, '0')}:00 when cleaning is caught up, in short blocks up to {STAFF_CROSS_TRAINING.supportHours}h, subject to shift, seats and energy.</div>
+  </div>;
+}
+
 export function StaffEnergy({ member }: { member: StaffMember }) {
   const c = useController();
   if (!fatigueOn()) return null;
@@ -85,7 +95,7 @@ export function StaffEnergy({ member }: { member: StaffMember }) {
     <div class="tiny">Energy: {energy}% · {status}</div>
     <progress class="staff-energy-meter" value={energy} max={100} aria-label={`Energy for ${member.name ?? 'staff member'}`} aria-valuetext={`${energy}% energy; ${status}`} />
     {resting && recovery !== null && <div class="dim tiny">Recovering {recovery} energy/hour.</div>}
-    {!resting && fatigue >= STAFF_FATIGUE.tiredAt && <div class="dim tiny">{member.role === 'front_desk' ? 'New service' : 'Work'} is {Math.round((1 - STAFF_FATIGUE.tiredRate) * 100)}% slower while tired.</div>}
+    {!resting && fatigue >= STAFF_FATIGUE.tiredAt && <div class="dim tiny">{member.role === 'front_desk' || receptionTrained(member) && leg?.kind === 'stay' && leg.activity === 'desk' ? 'New service' : 'Work'} is {Math.round((1 - STAFF_FATIGUE.tiredRate) * 100)}% slower while tired.</div>}
   </div>;
 }
 
@@ -115,7 +125,7 @@ export function staffActivity(member: StaffMember, state: HotelState, t: number)
   if (leg?.kind === 'walk') return 'Walking';
   if (leg?.kind === 'stay' && leg.job) return leg.job === 'repair' ? leg.preventive ? 'Preventive repairs while the guest is out' : 'Repairing a room' : leg.job === 'turnover' ? 'Turning over a room' : 'Making up a room';
   if (leg?.kind === 'stay' && leg.activity === 'rest') return 'Resting';
-  if (leg?.kind === 'stay' && leg.activity === 'desk') return 'At the front desk';
+  if (leg?.kind === 'stay' && leg.activity === 'desk') return receptionTrained(member) ? 'Supporting reception' : 'At the front desk';
   return member.at ? 'Waiting for work' : 'Off site';
 }
 
@@ -135,6 +145,7 @@ export function StaffDetails({ member }: { member: StaffMember }) {
       : `${specialtyOf(member) === 'preventive' ? 'Vacant-room repairs' : 'Repairs'} to ${target}% condition`}</div>}
     <div class="dim tiny">Attendance: {member.stats?.lateDays ?? 0} late days · {member.stats?.absentDays ?? 0} absent days</div>
     <StaminaDetails member={member} />
+    <ReceptionDetails member={member} />
     <StaffEnergy member={member} />
     {STAFF_HOSPITALITY.enabled && <HospitalityDetails member={member} />}
     {STAFF_SPECIALTIES.enabled && <SpecialtyPicker member={member} />}
@@ -171,6 +182,7 @@ function CandidateCard({ candidate }: { candidate: StaffCandidate }) {
     {STAFF_SPECIALTIES.enabled && <div class="dim tiny">Specialty: {specialtyLabel(specialtyOf(member))} · {specialtyDescription(member)}</div>}
     {STAFF_HOSPITALITY.enabled && <HospitalityDetails member={member} />}
     <StaminaDetails member={member} />
+    <ReceptionDetails member={member} />
     <button class="good" onClick={() => c.hireStaff(candidate.role, candidate.id, candidate.shift)} aria-label={`Hire ${candidate.name}`}>Hire</button>
   </li>;
 }

@@ -1,16 +1,17 @@
 import { expect, it } from 'vitest';
-import { FRONT_DESK_STAFF, STAFF_FATIGUE, STAFF_HOSPITALITY, STAFF_PERSONALITIES, STAFF_SPECIALTIES } from '../src/config/staff.js';
+import { FRONT_DESK_STAFF, STAFF_FATIGUE, STAFF_HOSPITALITY, STAFF_PERSONALITIES, STAFF_SPECIALTIES, STAFF_CROSS_TRAINING } from '../src/config/staff.js';
 import { simulate } from '../src/simulation/simulate.js';
 import { STRATEGIES } from '../src/simulation/strategies.js';
 import { attendance, staffDuty } from '../src/simulation/StaffProfiles.js';
 import type { StaffMember } from '../src/simulation/types.js';
 
 it('with fatigue disabled preserves the named-staff game’s pinned 60-day balance', () => {
-  const switches = [STAFF_PERSONALITIES, FRONT_DESK_STAFF, STAFF_SPECIALTIES, STAFF_HOSPITALITY, STAFF_FATIGUE];
+  const switches = [STAFF_PERSONALITIES, FRONT_DESK_STAFF, STAFF_SPECIALTIES, STAFF_HOSPITALITY, STAFF_FATIGUE, STAFF_CROSS_TRAINING];
   const original = switches.map(setting => setting.enabled);
   try {
     for (const setting of switches) setting.enabled = true;
     STAFF_FATIGUE.enabled = false;
+    STAFF_CROSS_TRAINING.enabled = false;
     // Measured against the full pre-fatigue game at 8e1131d, with all the
     // existing named-staff features enabled, rather than its anonymous fallback.
     const result = simulate(60, 9, undefined, STRATEGIES.balanced);
