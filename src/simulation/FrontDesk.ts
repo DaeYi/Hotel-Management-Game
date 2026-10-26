@@ -232,7 +232,7 @@ function assignments(state: HotelState): Assignment[] {
         const duty = staffDuty(member, day);
         if (duty.absent || duty.available >= duty.end || duty.end <= T) continue;
         const now = Math.max(T, member.stats?.fatigueAt ?? T);
-        // Nor does a check-in cut short when its desk was demolished.
+        // A check-in cut short by demolishing its desk no longer holds the clerk there.
         const serving = supports.length && duty.start <= now && duty.end > now ? state.guests.flatMap(g => g.trip ?? []).find(l => l.kind === 'stay'
           && (l.activity === 'check_in' || l.activity === 'complain') && l.serviceStaffId === member.id
           && l.start < now - 1e-9 && l.end > now && lanes.some(lane => lane.key === l.lane)) : undefined;
