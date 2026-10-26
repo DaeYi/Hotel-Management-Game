@@ -141,10 +141,10 @@ it('shows the clerk on the way to and cleaning the room in the housekeeping pane
   const panel = () => screen.getByRole('region', { name: 'HOUSEKEEPING' }).textContent;
   const inspector = () => screen.getByRole('dialog', { name: /Standard Queen/ }).textContent;
   // The top of the hour: the clerk is walking there
-  expect(panel()).toContain('Staff on the way: 1');
   expect(panel()).toContain('Dirty, waiting: 0');
-  expect(screen.getByRole('group', { name: 'Cleaning overlay key' }).textContent).toContain('Staff on the way');
   expect(inspector()).toContain('Dirty: Avery Park from the front desk on the way');
+  expect(panel()).toContain('Staff on the way: 1');
+  expect(screen.getByRole('group', { name: 'Cleaning overlay key' }).textContent).toContain('Staff on the way');
   // Mid-visit: in the room, cleaning
   act(() => { c.update(TICK_INTERVAL_MS * ((visit[0].start + visit.at(-1)!.end) / 2 - T)); vi.advanceTimersByTime(250); });
   expect(panel()).toContain('Being cleaned: 1');

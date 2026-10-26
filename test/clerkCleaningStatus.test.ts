@@ -182,24 +182,24 @@ describe('Advice with no housekeepers hired', () => {
     const state = hotel(), helper = state.staffRoster![0];
     const alone: HotelState = { ...state, staff: { ...state.staff, frontDesk: 1 }, staffRoster: [helper] };
     expect(cleans(alone)).toHaveLength(0);
-    expect(clerksFreeToClean(alone)).toEqual([]);
     expect(getHousekeepingStatus(alone).recommendation).toMatch(/^Hire housekeepers or rooms will never be cleaned!/);
     expect(getHousekeepingStatus(alone).recommendation).toContain("can't leave the desk to clean without another early-shift clerk");
     expect(checkHousekeepingCompliance(alone)).toMatch(/^No housekeepers hired! Rooms will not be cleaned/);
     expect(checkHousekeepingCompliance(alone)).toContain('another early-shift clerk');
     // A colleague on another shift can't mind the desk during the morning visit either
     const lateCover = { ...state, staffRoster: state.staffRoster!.map(member => member.id === 'cover' ? { ...member, shift: 'late' as const } : member) };
-    expect(clerksFreeToClean(lateCover)).toEqual([]);
     expect(getHousekeepingStatus(lateCover).recommendation).toMatch(/never be cleaned/);
+    expect(clerksFreeToClean(alone)).toEqual([]);
+    expect(clerksFreeToClean(lateCover)).toEqual([]);
   });
 
   it('softens the advice once another early-shift clerk can cover the desk', () => {
     const state = hotel();
     expect(cleans(state).length).toBeGreaterThan(0);
-    expect(clerksFreeToClean(state).map(member => member.id)).toEqual(['helper']);
     expect(getHousekeepingStatus(state).recommendation).not.toMatch(/never/);
     expect(getHousekeepingStatus(state).recommendation).toContain('trained clerks only help with morning turnovers');
     expect(checkHousekeepingCompliance(state)).toMatch(/^No dedicated housekeepers/);
+    expect(clerksFreeToClean(state).map(member => member.id)).toEqual(['helper']);
   });
 
   it('says exactly what it always did with the training switched off', () => {
