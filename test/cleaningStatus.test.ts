@@ -205,7 +205,7 @@ it('the cleaning overlay matches the housekeepers, hour after hour', () => {
   }
   expect(checked).toBeGreaterThan(100);
   expect(compared).toBeGreaterThan(100);
-});
+}, 60000); // Sixty simulated days have exceeded the default five seconds on the CI runner.
 
 describe('Drawing the overlay', () => {
   /** Run GridRenderer.renderCleaning against a recorder: every graphics call, in order. */
