@@ -9,8 +9,11 @@ import { namedFrontDesk, specialtyOf, hospitalityOf, receptionTrained, cleaningT
 import { receptionSupports } from './CrossTraining.js';
 import { cleaningSupports } from './ClerkCleaning.js';
 
+/** Housekeepers (some cover reception) and cleaning-trained clerks. Hiring
+ * maintenance changes nobody at the desk, so it must not reseat the queue. */
 function trainingKey(state: HotelState): string {
-  return (state.staffRoster ?? []).map(m => `${m.id}:${receptionTrained(m)}:${cleaningTrained(m)}`).join(',');
+  return (state.staffRoster ?? []).filter(m => m.role === 'housekeeper' || cleaningTrained(m))
+    .map(m => `${m.id}:${receptionTrained(m)}:${cleaningTrained(m)}`).join(',');
 }
 
 /** Who's checking guests in, and where. */

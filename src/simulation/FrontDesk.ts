@@ -1,6 +1,6 @@
 import type { Fixture, HotelState, StaffMember, StaffItinerary, TilePos, Leg, WalkLeg, FatigueBreak } from './types.js';
 import { DESK, TRAVEL } from '../config/balance.js';
-import { STAFF_FATIGUE } from '../config/staff.js';
+import { STAFF_CLEANING_SUPPORT, STAFF_FATIGUE } from '../config/staff.js';
 import { getAccessibleDesks, getAccessibleBreakRooms, getFixtureFront, findRoute, routeFromStreet, routeToStreet, isEntranceTile, isHallway } from './Layout.js';
 import { hourStart, makeStay, makeWalk, finalTile, sameTile } from './Movement.js';
 import { checkInHours, namedFrontDesk, staffDuty, staffDutyAt } from './StaffProfiles.js';
@@ -82,8 +82,10 @@ function fatigueSchedules(state: HotelState): { schedules: ClerkSchedule[]; rese
       ? state.staffPlan.itineraries.find(it => it.staffId === member.id) : undefined;
     // A later hire may now yield to a committed helper or take another seat.
     // Replay a saved counter stay only while it still belongs to this assignment.
+    // A stay at a since-demolished desk is only history. (With clerk cleaning
+    // switched off, this keeps the earlier reception rules exactly.)
     const existing = saved?.legs.some(l => l.kind === 'stay' && l.activity === 'desk' && l.end > T
-      && !!l.lane && laneKeys.has(l.lane)
+      && (!STAFF_CLEANING_SUPPORT.enabled || !!l.lane && laneKeys.has(l.lane))
       && (l.lane !== a.lane.key || l.start < a.from - 1e-9)) ? undefined : saved;
     if (existing) {
       for (const leg of existing.legs.filter(l => l.end > T && l.start < T + 1)) {
@@ -194,20 +196,26 @@ function assignments(state: HotelState): Assignment[] {
   const T = hourStart(state);
   const nativeSeats = new Map<string, { lane: string; desk: Leg[] }>();
   if ((supports.length || cleaning.length) && state.staffPlan?.start === T) {
+    const away: Array<[string, { lane: string; desk: Leg[] }]> = [];
     for (const member of state.staffRoster ?? []) {
       if (member.role !== 'front_desk' || member.leaving) continue;
       const now = Math.max(T, member.stats?.fatigueAt ?? T);
+      // A demolished desk no longer holds a seat (as above, only with clerk cleaning on).
       const desk = state.staffPlan.itineraries.find(it => it.staffId === member.id)?.legs.filter(l =>
         l.kind === 'stay' && l.activity === 'desk' && l.end > now + 1e-9 && l.start < T + 1
-        && lanes.some(lane => lane.key === l.lane)) ?? [];
+        && (!STAFF_CLEANING_SUPPORT.enabled || lanes.some(lane => lane.key === l.lane))) ?? [];
       const first = desk[0];
       if (first?.kind === 'stay' && first.lane) nativeSeats.set(member.id, { lane: first.lane, desk });
       else {
+        const duty = staffDutyAt(member, now);
         const returning = cleaning.find(c => c.member.id === member.id && c.support.to > now);
-        if (returning && lanes.some(lane => lane.key === returning.support.lane))
-          nativeSeats.set(member.id, { lane: returning.support.lane, desk });
+        if (returning && !duty.absent && duty.end > now + 1e-9 && lanes.some(lane => lane.key === returning.support.lane))
+          away.push([member.id, { lane: returning.support.lane, desk }]);
       }
     }
+    // Only an on-duty clerk still away on a room visit holds their seat, and
+    // never against a clerk whose own plan sits there this hour.
+    for (const [id, seat] of away) if (![...nativeSeats.values()].some(other => other.lane === seat.lane)) nativeSeats.set(id, seat);
   }
   const groups = (['early', 'late', 'night'] as const).map(shift => (state.staffRoster ?? [])
     .filter(m => m.role === 'front_desk' && (m.shift ?? 'late') === shift && !m.leaving)

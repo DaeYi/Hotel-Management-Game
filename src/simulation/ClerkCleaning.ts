@@ -45,14 +45,22 @@ export function planClerkCleaning(
   nativePlans: Map<string, StaffItinerary>, jobs: TurnoverJob[], claimed: Set<string>, from: number,
 ): StaffItinerary {
   const T = hourStart(state), end = T + 1, saved = member.cleaningSupport;
+  const windowEnd = Math.floor(from / 24) * 24 + STAFF_CLEANING_SUPPORT.endHour;
+  // An absence never outlasts the hour it was planned in, the morning window
+  // or the clerk's shift. Beyond those, the native plan alone places them.
+  const bound = Math.min(end, windowEnd, staffDutyAt(member, from).end);
+  const commitment = (support: CleaningSupport): CleaningSupport | undefined => {
+    const to = Math.min(support.to, bound);
+    return to > Math.max(support.from, T) + 1e-9 ? { ...support, to } : undefined;
+  };
   const unchanged = () => saved ? { ...baseline, end: { ...baseline.end, cleaningSupport: saved } } : baseline;
   const recalled = () => {
     if (!saved) return baseline;
     const returned = baseline.legs.find(l => l.kind === 'stay' && l.activity === 'desk');
     // No counter stay means no arrival promise: a blocked route may leave
     // the clerk in the room for the rest of this hour.
-    const to = Math.max(from, returned?.start ?? Math.max(end, ...baseline.legs.map(l => l.end)));
-    return { ...baseline, end: { ...baseline.end, cleaningSupport: { ...saved, workUntil: Math.min(saved.workUntil, from), to } } };
+    const support = commitment({ ...saved, workUntil: Math.min(saved.workUntil, from), to: Math.max(from, returned?.start ?? end) });
+    return support ? { ...baseline, end: { ...baseline.end, cleaningSupport: support } } : baseline;
   };
   // A finished visit stays in the hourly history. It cannot become a second
   // visit each time the player edits the hotel while paused.
@@ -61,7 +69,6 @@ export function planClerkCleaning(
   const duty = staffDutyAt(member, from);
   if (duty.absent || duty.available > from + 1e-9 || duty.end <= from
     || (member.fatigueBreak?.end ?? -Infinity) > from || (member.restUntil ?? -Infinity) > from) return recalled();
-  const windowEnd = Math.floor(from / 24) * 24 + STAFF_CLEANING_SUPPORT.endHour;
   if (!saved && (from % 24 < STAFF_CLEANING_SUPPORT.startHour || from >= windowEnd)) return baseline;
   const underway = state.guests.some(g => (g.trip ?? []).some(l => l.kind === 'stay'
     && (l.activity === 'check_in' || l.activity === 'complain') && l.serviceStaffId === member.id
@@ -80,6 +87,24 @@ export function planClerkCleaning(
 
   const initialFatigue = fatigueAt(state, member, from), gain = fatigueGain(member);
   const energyLimit = fatigueOn() && gain > 0 ? from + Math.max(0, (STAFF_FATIGUE.breakAt - initialFatigue) / gain) : Infinity;
+  // The room work is over. The native plan normally walks the clerk back to
+  // a seat; when that walk ends with the hour or the shift it has no seat to
+  // offer and would turn them out to the street mid-way. Finish the planned
+  // walk back to their own seat instead.
+  if (saved && from >= saved.workUntil - 1e-9 && !baseline.legs.some(l => l.kind === 'stay' && l.activity === 'desk')) {
+    const legs: Leg[] = [];
+    let t = from, pos: TilePos = member.at;
+    if (member.carry && member.carry.end > from) {
+      legs.push(member.carry); t = member.carry.end; pos = member.carry.path.at(-1)!;
+    }
+    const back = findRoute(state, pos, lane.front, TRAVEL.hoursPerTile);
+    if (back) {
+      if (back.path.length > 1) { const walk = makeWalk(back.path, t, TRAVEL.hoursPerTile); legs.push(walk); t = walk.end; }
+      const last = legs.at(-1), carry = last?.kind === 'walk' && last.end > end + 1e-9 ? last : undefined;
+      if (t >= Math.min(end, duty.end) - 1e-9) return { staffId: member.id, legs, end: { ...baseline.end, at: back.path.at(-1)!,
+        roomId: undefined, carry, deskLane: undefined, cleaningSupport: commitment({ ...saved, to: t }) } };
+    }
+  }
   // Native coverage is reserved for the entire trip, not just its departure.
   const coverageEnd = coveredUntil(nativePlans, member.id, from);
   const latest = Math.min(end, windowEnd, duty.end, saved?.to ?? from + STAFF_CLEANING_SUPPORT.supportHours, energyLimit, coverageEnd);
@@ -125,7 +150,7 @@ export function planClerkCleaning(
     // A changed building/roster can recall an existing visit; never continue
     // optional room work if the remaining native coverage has vanished.
     if (saved && coverageEnd < t - 1e-9) break;
-    const support: CleaningSupport = { roomId: job.room.id, lane: seat, from: saved?.from ?? from, to: t, workUntil: Math.min(saved?.workUntil ?? workUntil, workUntil) };
+    const support = commitment({ roomId: job.room.id, lane: seat, from: saved?.from ?? from, to: t, workUntil: Math.min(saved?.workUntil ?? workUntil, workUntil) });
     const returnAt = t;
     const returnFatigue = projectFatigue(member, legs, from, returnAt, initialFatigue);
     const tired = fatigueOn() && returnFatigue < STAFF_FATIGUE.tiredAt - 1e-9 && gain > 0

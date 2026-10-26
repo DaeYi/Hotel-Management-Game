@@ -809,9 +809,11 @@ export function rosterAfter(state: HotelState, plan: StaffPlan): StaffMember[] {
       .reduce((hours, leg) => hours + (leg.kind === 'stay' && leg.job ? Math.max(0, Math.min(leg.end, plan.start + 1, m.dismissedAt ?? Infinity) - Math.max(leg.start, plan.start)) : 0), 0);
     const duty = m.role === 'front_desk' ? staffDutyAt(m, plan.start) : undefined;
     const recordAttendance = !duty || (m.hiredAt ?? -Infinity) < duty.end && (m.dismissedAt ?? Infinity) > duty.start;
+    // A clerk's room visit ends within its own hour, even one from an older
+    // save: the next hour starts from where the walk really leaves them.
     const after = afterWork(e ? { ...m, at: e.at, roomId: e.roomId, carry: e.carry, deskLane: e.deskLane, fatigueBreak: e.fatigueBreak,
       receptionSupport: e.receptionSupport && e.receptionSupport.to > plan.start + 1 ? e.receptionSupport : undefined,
-      cleaningSupport: e.cleaningSupport && e.cleaningSupport.to > plan.start + 1 + 1e-9 ? e.cleaningSupport : undefined } : m, workHours, duty?.day ?? state.day, recordAttendance);
+      cleaningSupport: undefined } : m, workHours, duty?.day ?? state.day, recordAttendance);
     return fatigueOn() && after.stats ? { ...after, stats: { ...after.stats,
       fatigue: fatigueAt({ ...state, staffPlan: plan }, m, plan.start + 1), fatigueAt: plan.start + 1 } } : after;
   });
