@@ -82,14 +82,18 @@ function ReceptionDetails({ member }: { member: StaffMember }) {
 }
 
 function CleaningDetails({ member }: { member: StaffMember }) {
+  const c = useController();
   if (!cleaningTrained(member)) return null;
   const premium = Math.round((STAFF_CLEANING_SUPPORT.wagePremium - 1) * 100);
   const window = `${String(STAFF_CLEANING_SUPPORT.startHour).padStart(2, '0')}:00–${String(STAFF_CLEANING_SUPPORT.endHour).padStart(2, '0')}:00`;
+  // Someone else has to mind the desk for the whole trip (a candidate isn't on the roster yet)
+  const cover = (c.state.staffRoster ?? []).some(m => m.id !== member.id && m.role === 'front_desk' && !m.leaving && m.shift === 'early');
   return <div class="staff-cleaning-training tiny" aria-label={`Turnover training for ${member.name}`}>
     <div><span class="staff-training-badge">Turnover trained</span> · Cleaning {Math.round(cleaningRate(member) * 100) / 100}×</div>
     <div class="dim">{premium}% training premium included in the agreed wage.</div>
-    <div class="dim">Can help with vacant-room turnovers {window} when reception has spare coverage. Fixed trips last up to {STAFF_CLEANING_SUPPORT.supportHours}h, including walks back to the desk.</div>
-    {member.shift !== 'early' && <div class="dim">This shift is outside the turnover support window.</div>}
+    <div class="dim">Can help with vacant-room turnovers {window}, but only while another early-shift clerk stays at the desk for the whole trip. Trips last up to {STAFF_CLEANING_SUPPORT.supportHours}h, including the walk back to the desk.</div>
+    {member.shift !== 'early' ? <div class="dim">On this shift they only work the desk: turnover help is early-shift only.</div>
+      : !cover && <div class="warn-text">No other early-shift clerk yet, so they can't leave the desk to clean.</div>}
   </div>;
 }
 
@@ -107,8 +111,26 @@ export function StaffEnergy({ member }: { member: StaffMember }) {
     <div class="tiny">Energy: {energy}% · {status}</div>
     <progress class="staff-energy-meter" value={energy} max={100} aria-label={`Energy for ${member.name ?? 'staff member'}`} aria-valuetext={`${energy}% energy; ${status}`} />
     {resting && recovery !== null && <div class="dim tiny">Recovering {recovery} energy/hour.</div>}
-    {!resting && fatigue >= STAFF_FATIGUE.tiredAt && <div class="dim tiny">{leg?.kind === 'stay' && leg.activity === 'desk' ? 'New service' : 'Work'} is {Math.round((1 - STAFF_FATIGUE.tiredRate) * 100)}% slower while tired.</div>}
+    {!resting && fatigue >= STAFF_FATIGUE.tiredAt && <div class="dim tiny">{cleaningTrained(member) ? 'Cleaning and new service are'
+      : member.role === 'front_desk' || receptionTrained(member) && leg?.kind === 'stay' && leg.activity === 'desk' ? 'New service is' : 'Work is'} {Math.round((1 - STAFF_FATIGUE.tiredRate) * 100)}% slower while tired.</div>}
   </div>;
+}
+
+/**
+ * A clerk's turnover visit, from the same itinerary: waiting at the desk for
+ * the room to empty, walking there, walking back, or left in the room with no
+ * way back to a desk (a route blocked mid-visit, this hour or later).
+ */
+function turnoverTrip(member: StaffMember, state: HotelState, t: number, leg: Leg | undefined): string | null {
+  const itinerary = getStaffPlan(state).itineraries.find(i => i.staffId === member.id);
+  const visit = itinerary?.end.cleaningSupport;
+  if (visit && visit.from <= t && t < visit.to) {
+    if (leg?.kind === 'walk') return t < visit.workUntil ? 'Walking to a turnover' : 'Heading back to the desk';
+    if (leg?.kind === 'stay' && leg.activity === 'wait' && t < visit.workUntil) return 'Waiting to start a turnover';
+  }
+  if (leg) return null;
+  const at = itinerary?.legs.length ? positionAt(itinerary.legs, t) : member.at && { x: member.at.gridX, y: member.at.gridY, floor: member.at.floor };
+  return at && state.rooms.some(r => r.gridX === at.x && r.gridY === at.y && r.floor === at.floor) ? "Can't get back to the desk" : null;
 }
 
 /** Current work, from the very same itinerary the world draws. */
@@ -123,6 +145,8 @@ export function staffActivity(member: StaffMember, state: HotelState, t: number)
     if (duty.available > t) return member.restUntil && member.restUntil > t ? 'Resting before the next shift' : `Late this shift: ${Math.round(duty.lateHours * 60)} minutes`;
     const leg = activeStaffLeg(member, state, t);
     if (leg?.kind === 'stay' && leg.activity === 'clean' && leg.job === 'turnover') return 'Helping with a turnover';
+    const trip = turnoverTrip(member, state, t, leg);
+    if (trip) return trip;
     return leg?.kind === 'walk' ? 'Walking' : leg?.kind === 'stay' && leg.activity === 'desk' ? 'At the front desk' : member.at ? 'Waiting for a desk seat' : 'Off site';
   }
   const a = attendance(member, state.day);

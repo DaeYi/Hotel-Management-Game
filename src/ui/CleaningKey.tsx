@@ -1,5 +1,7 @@
 import { CLEANING_COLORS } from '../render/GridRenderer';
 import { GUEST_HOUSEKEEPING, GUEST_PROFILE } from '../config/balance';
+import { clerksHelpClean } from '../simulation/CleaningStatus';
+import { useController } from './context';
 
 // The cleaning overlay's key: little swatches drawn the way the floor plan
 // draws each state, from the same colors.
@@ -44,10 +46,12 @@ const LABELS: Record<CleaningKeyKind, string> = {
 
 /** The key under the floor plan while the overlay is on. */
 export function CleaningLegend() {
+  // A trained clerk can be the one on the way to a turnover
+  const staff = clerksHelpClean(useController().state);
   return (
     <>
       {(Object.keys(LABELS) as CleaningKeyKind[]).filter(kind => kind !== 'guest_in' || (GUEST_HOUSEKEEPING.enabled && GUEST_PROFILE.enabled)).map(kind => (
-        <span key={kind}><CleaningSwatch kind={kind} />{LABELS[kind]}</span>
+        <span key={kind}><CleaningSwatch kind={kind} />{kind === 'on_the_way' && staff ? 'Staff on the way' : LABELS[kind]}</span>
       ))}
       <span><span class="cleaning-bar" aria-hidden="true"><span style={{ background: css(CLEANING_COLORS.housekeeper) }} /></span>How far along</span>
     </>

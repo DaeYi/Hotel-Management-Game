@@ -3,7 +3,7 @@ import { HOUSEKEEPING, GUEST_PROFILE, ECONOMY, GUEST_HOUSEKEEPING } from '../../
 import { lateCheckoutPolicy } from '../../simulation/Profile';
 import { checkoutsToday } from '../../simulation/CleaningStatus';
 import { checkHousekeepingCompliance } from '../../simulation/HousekeepingManager';
-import { summarizeCleaning, describeWait, GRUBBY_BELOW, type CleaningWait } from '../../simulation/CleaningStatus';
+import { summarizeCleaning, describeWait, clerksHelpClean, GRUBBY_BELOW, type CleaningWait } from '../../simulation/CleaningStatus';
 import { useController, useLiveClock } from '../context';
 import { CleaningSwatch } from '../CleaningKey';
 import { PanelCard } from './PanelCard';
@@ -59,7 +59,7 @@ export function HousekeepingPanel() {
       <div class="body small">Right now (shown on the floor plan):</div>
       <ul class="cleaning-now small">
         <li><CleaningSwatch kind="cleaning" />Being cleaned: {turnovers.cleaning}</li>
-        <li><CleaningSwatch kind="on_the_way" />Housekeeper on the way: {turnovers.onTheWay}</li>
+        <li><CleaningSwatch kind="on_the_way" />{clerksHelpClean(c.state) ? 'Staff' : 'Housekeeper'} on the way: {turnovers.onTheWay}</li>
         <li>
           <CleaningSwatch kind="waiting" />Dirty, waiting: {turnovers.waiting - blocked}
           {why.length > 0 && <span class="dim"> ({why.join('; ')})</span>}

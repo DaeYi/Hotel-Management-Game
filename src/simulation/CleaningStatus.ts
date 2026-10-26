@@ -6,12 +6,14 @@ import { getStaffPlan, getRoster, isOnShift, guestsAsleepIn } from './StaffManag
 import { hourStart } from './Movement.js';
 import { isGuestAway } from './GuestMovement.js';
 import { housekeepingPrefOf, dndOpening } from './CleaningPreference.js';
+import { cleaningTrained } from './StaffProfiles.js';
 
 // Where each room's cleaning stands at a moment in the hour, for the cleaning
 // overlay, the housekeeping panel and the room inspector. It reads the same
-// staff plan the housekeepers on screen walk (and the tick credits), so a room
-// shown "being cleaned" has a housekeeper standing in it, and the work left
-// counts down exactly as the tick will credit it.
+// staff plan the staff on screen walk (and the tick credits), so a room shown
+// "being cleaned" has someone standing in it -- a housekeeper, or a trained
+// clerk helping with a turnover -- and the work left counts down exactly as
+// the tick will credit it.
 
 export type CleaningJob = 'turnover' | 'daily';
 /** In the room now; walking there (or due there later this hour); or nobody's on it this hour. */
@@ -25,7 +27,7 @@ export interface RoomCleaning {
   wait?: CleaningWait; // set while waiting
   hoursLeft: number; // housekeeper-hours of work still to do, as of the moment asked about
   progress: number; // 0-1: how much of the job is done
-  staffId?: string; // the housekeeper on it (cleaning, or on the way)
+  staffId?: string; // who's on it (cleaning, or on the way): a housekeeper, or a trained clerk
 }
 
 /** Below this cleanliness a room hurts its guest's review. */
@@ -46,17 +48,19 @@ export function roomCleaningAt(state: HotelState, t: number, plan: StaffPlan = g
   const staffed = roster.some(m => m.role === 'housekeeper' && !m.leaving);
   const isHousekeeper = (staffId: string) => (roles.get(staffId) ?? (staffId.startsWith('housekeeper') ? 'housekeeper' : 'maintenance')) === 'housekeeper';
 
-  // Every housekeeper's cleaning stays this hour, by room; and who ends the hour still walking to one
+  // Everyone's cleaning stays this hour, by room -- the very stays the tick
+  // credits, a trained clerk's turnover visit included; and which housekeepers
+  // end the hour still walking to one (a clerk's visit fits inside the hour)
   const stays = new Map<string, Array<{ staffId: string; job: CleaningJob; start: number; end: number; rate: number }>>();
   const heading = new Map<string, string>();
   for (const it of plan.itineraries) {
-    if (!isHousekeeper(it.staffId)) continue;
     for (const leg of it.legs) {
       if (leg.kind !== 'stay' || !leg.placeId || (leg.job !== 'turnover' && leg.job !== 'daily')) continue;
       const list = stays.get(leg.placeId) ?? [];
       list.push({ staffId: it.staffId, job: leg.job, start: leg.start, end: leg.end, rate: leg.workRate ?? 1 });
       stays.set(leg.placeId, list);
     }
+    if (!isHousekeeper(it.staffId)) continue;
     const target = it.end.roomId;
     if (target && !it.legs.some(l => l.kind === 'stay' && l.placeId === target)) heading.set(target, it.staffId);
   }
@@ -117,6 +121,11 @@ export function describeWait(wait: CleaningWait): string {
     case 'asleep': return 'the guests are asleep';
     case 'busy': return 'all housekeepers busy';
   }
+}
+
+/** Whether a trained clerk may be the one on a turnover, so the words can't just say "housekeeper". */
+export function clerksHelpClean(state: HotelState): boolean {
+  return (state.staffRoster ?? []).some(m => !m.leaving && cleaningTrained(m));
 }
 
 export interface CleaningSummary {
