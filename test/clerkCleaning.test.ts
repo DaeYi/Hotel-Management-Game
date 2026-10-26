@@ -129,7 +129,10 @@ describe('A trained clerk helps only while reception stays covered', () => {
 
   it('stays in the 07:00–14:00 window and returns before the early shift ends', () => {
     expect(cleans(hotel(6))).toHaveLength(0);
-    expect(cleans(hotel(14))).toHaveLength(0);
+    // Early clerks are off duty at 14:00. Trained clerks moved to the late
+    // shift are at reception then, so only the window keeps them there.
+    const late = hotel(14);
+    expect(cleans({ ...late, staffRoster: late.staffRoster!.map(member => ({ ...member, shift: 'late' as const })) })).toHaveLength(0);
     const state = planned(hotel(13)), T = hourStart(state);
     expect(cleans(state).length).toBeGreaterThan(0);
     expect(legs(state).every(leg => leg.end <= T + 1 + 1e-9)).toBe(true);
@@ -138,8 +141,18 @@ describe('A trained clerk helps only while reception stays covered', () => {
 
   it('leaves daily cleans, repairs, untrained profiles, and overly distant rooms alone', () => {
     const state = hotel();
-    expect(cleans({ ...state, rooms: state.rooms.map(room => ({ ...room, status: 'occupied', dailyCleanHoursRemaining: 2, cleaningHoursRemaining: 0 })) })).toHaveLength(0);
-    expect(cleans({ ...state, rooms: state.rooms.map(room => ({ ...room, status: 'vacant', condition: 5, cleaningHoursRemaining: 0 })) })).toHaveLength(0);
+    // The same room is close enough for a trip while it awaits a turnover.
+    expect(cleans({ ...state }).map(leg => leg.placeId)).toContain(state.rooms[0].id);
+    const daily: HotelState = { ...state, rooms: state.rooms.map(room => ({ ...room, status: 'occupied', dailyCleanHoursRemaining: 2, cleaningHoursRemaining: 0 })) };
+    const repair: HotelState = { ...state, rooms: state.rooms.map(room => ({ ...room, status: 'vacant', condition: 5, cleaningHoursRemaining: 0 })) };
+    // That work is real: a housekeeper or maintenance worker would take it.
+    const worker = (other: HotelState, role: 'housekeeper' | 'maintenance'): HotelState => ({ ...other,
+      staff: { ...other.staff, [role === 'housekeeper' ? 'housekeepers' : 'maintenanceWorkers']: 1 },
+      staffRoster: [...other.staffRoster!, { ...other.staffRoster![1], id: 'worker', role }] });
+    expect(legs(worker(daily, 'housekeeper'), 'worker').some(leg => leg.kind === 'stay' && leg.job === 'daily')).toBe(true);
+    expect(legs(worker(repair, 'maintenance'), 'worker').some(leg => leg.kind === 'stay' && leg.job === 'repair')).toBe(true);
+    // Without those workers, the clerk spends the whole hour at reception.
+    for (const other of [daily, repair]) expect(legs(other).every(leg => leg.kind === 'stay' && leg.activity === 'desk')).toBe(true);
     expect(cleans(changeMember(state, 'helper', member => ({ ...member, profile: { ...member.profile!, cleaningTrained: undefined } })))).toHaveLength(0);
     TRAVEL.hoursPerTile = 0.5;
     expect(cleans(state)).toHaveLength(0);
@@ -369,10 +382,42 @@ describe('Clerk room work preserves progress, identity, and elapsed time', () =>
     expectPhysicalCoverage(state, at);
   });
 
-  it('turning off the new slice reproduces an untrained clerk’s existing plan', () => {
-    const state = hotel();
-    const untrained = getStaffPlan(changeMember(state, 'helper', member => ({ ...member, profile: { ...member.profile!, cleaningTrained: undefined } })));
+  it('turning off the new slice keeps a trained clerk on an untrained clerk’s reception plan', () => {
+    const state = hotel(), T = hourStart(state);
+    // With the slice on, this hotel sends the trained clerk to the turnover.
+    expect(cleans({ ...state }).length).toBeGreaterThan(0);
     STAFF_CLEANING_SUPPORT.enabled = false;
-    expect(getStaffPlan(state)).toEqual(untrained);
+    const off = planned({ ...state });
+    expect(off.staffPlan).toEqual(getStaffPlan(changeMember(state, 'helper', member => ({ ...member, profile: { ...member.profile!, cleaningTrained: undefined } }))));
+    expect(legs(off).every(leg => leg.kind === 'stay' && leg.activity === 'desk')).toBe(true);
+    expect(cleaningSupports(off)).toHaveLength(0);
+    expect(processCleaningTick(off).state.rooms[0].cleaningHoursRemaining).toBe(10);
+    expectPhysicalCoverage(off, T);
+  });
+
+  for (const fatigue of [true, false]) it(`turning off the new slice during a trip keeps elapsed work and never promises the desk before the clerk is back with fatigue ${fatigue ? 'on' : 'off'}`, () => {
+    STAFF_FATIGUE.enabled = fatigue;
+    const trip = planned(hotel()), at = cleans(trip)[0].start + 0.05;
+    STAFF_CLEANING_SUPPORT.enabled = false;
+    // A paused replan sends the clerk straight back to reception.
+    const state = replanStaff(trip, at);
+    expect(cleans(state).every(leg => leg.end <= at + 1e-9)).toBe(true);
+    expect(actualWork(state)).toBeCloseTo(0.05, 10);
+    const returned = legs(state).find((leg): leg is StayLeg => leg.kind === 'stay' && leg.activity === 'desk' && leg.start >= at)!;
+    expect(returned).toBeDefined();
+    expect(returned.start).toBeGreaterThan(at);
+    expect(deskCoverage(state, (at + returned.start) / 2).some(duty => duty.staffId === 'helper')).toBe(false);
+    expect(deskCoverage(state, returned.start + 0.001).some(duty => duty.staffId === 'helper')).toBe(true);
+    expectPhysicalCoverage(state, at);
+    const next = planned({ ...processCleaningTick(state).state, hour: state.hour + 1,
+      staffRoster: rosterAfter(state, state.staffPlan!), staffPlan: null });
+    expect(cleans(next)).toHaveLength(0);
+    expect(cleaningSupports(next)).toHaveLength(0);
+    // With the way back blocked, the clerk stays out of reception coverage.
+    const blocked = settleChanges(trip, addRoom(trip, 'standard', 5, 1, 0, 'up')!, at);
+    expect(cleans(blocked).every(leg => leg.end <= at + 1e-9)).toBe(true);
+    expect(actualWork(blocked)).toBeCloseTo(0.05, 10);
+    expect(legs(blocked).some(leg => leg.kind === 'stay' && leg.activity === 'desk' && leg.end > at)).toBe(false);
+    expectPhysicalCoverage(blocked, at);
   });
 });
