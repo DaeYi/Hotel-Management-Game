@@ -111,7 +111,7 @@ export function StaffEnergy({ member }: { member: StaffMember }) {
     <div class="tiny">Energy: {energy}% · {status}</div>
     <progress class="staff-energy-meter" value={energy} max={100} aria-label={`Energy for ${member.name ?? 'staff member'}`} aria-valuetext={`${energy}% energy; ${status}`} />
     {resting && recovery !== null && <div class="dim tiny">Recovering {recovery} energy/hour.</div>}
-    {!resting && fatigue >= STAFF_FATIGUE.tiredAt && <div class="dim tiny">{cleaningTrained(member) ? 'Cleaning and new service are'
+    {!resting && fatigue >= STAFF_FATIGUE.tiredAt && <div class="dim tiny">{cleaningTrained(member) && member.shift === 'early' ? 'Cleaning and new service are'
       : member.role === 'front_desk' || receptionTrained(member) && leg?.kind === 'stay' && leg.activity === 'desk' ? 'New service is' : 'Work is'} {Math.round((1 - STAFF_FATIGUE.tiredRate) * 100)}% slower while tired.</div>}
   </div>;
 }

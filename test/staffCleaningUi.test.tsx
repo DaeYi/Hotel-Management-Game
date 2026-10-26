@@ -181,3 +181,21 @@ it('says what tiredness slows for clerks, and only mentions cleaning for trained
   expect(energyNote(native)).toContain('New service is 15% slower while tired.');
   expect(energyNote(trained)).toContain('New service is 15% slower while tired.');
 });
+
+it('does not promise cleaning from a trained clerk moved off the early shift', () => {
+  const c = controller(), base = { ...c.state, day: 2, hour: 16 }, T = hourStart(base), lane = physicalDeskLanes(base)[0];
+  const moved: StaffMember = { id: 'front_desk-moved', name: 'Dana Nguyen', role: 'front_desk', shift: 'late', at: lane.front,
+    profile: { experience: 'skilled', style: 'standard', reliability: 'dependable', stamina: 'normal', cleaningTrained: true },
+    stats: { workHours: 80, lateDays: 0, absentDays: 0, fatigue: 70, fatigueAt: T }, dailyWage: 46 };
+  const walk = makeWalk([lane.front, { ...lane.front, gridX: lane.front.gridX + 1 }], T, 1);
+  c.state = { ...base, staff: { frontDesk: 1, housekeepers: 0, maintenanceWorkers: 0 }, staffRoster: [moved],
+    staffPlan: { start: T, itineraries: [{ staffId: moved.id, legs: [walk], end: { at: lane.front } }] } };
+  render(<App controller={c} worldRef={createRef()} />);
+  act(() => { c.togglePanel('staff'); c.update(0); });
+  expect(screen.getByLabelText('Turnover support').textContent).toContain("Can't help: turnover help is only on the early shift.");
+  act(() => { c.selectStaff(moved.id); c.update(0); });
+  const dialog = screen.getByRole('dialog', { name: moved.name }).textContent;
+  expect(dialog).toContain('On this shift they only work the desk: turnover help is early-shift only.');
+  expect(dialog).toContain('New service is 15% slower while tired.');
+  expect(dialog).not.toContain('Cleaning and new service');
+});
