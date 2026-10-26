@@ -87,13 +87,13 @@ describe('Turnover-trained clerks in long games', () => {
       expect(run.trained, `seed ${SEEDS[i]}`).toBeGreaterThanOrEqual(1);
       expect(run.cleanHours, `seed ${SEEDS[i]}`).toBeGreaterThan(100);
     }
-  }, 120000); // Four 300-day games of a growing hotel exceeded the default five seconds.
+  }, 600000); // Four 300-day games take about 40 seconds locally, and the CI runner has been three to five times slower.
 
   it('is worth at least half as much again as the understaffed player it builds on', () => {
     const lean = median(games('understaffed').map(r => r.summary.finalValuation));
     expect(games('understaffed').every(r => r.trained === 0)).toBe(true);
     expect(median(games('crossTrained').map(r => r.summary.finalValuation))).toBeGreaterThanOrEqual(1.5 * lean);
-  }, 120000); // Four more 300-day games (and the cross-trained ones if run alone) exceeded the default five seconds.
+  }, 600000); // Four more 300-day games (eight if run alone) take 20-60 seconds locally, three to five times that on CI.
 });
 
 describe('Reception coverage during real cross-trained play', () => {
