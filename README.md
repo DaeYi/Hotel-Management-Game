@@ -21,6 +21,8 @@ npm run simulate -- 400 24 balanced
 
 The full suite includes a 24-seed, 400-day staffing comparison and can take around 30 minutes on CI. A focused run accepts test paths, for example `npm test -- test/controller.test.ts test/events.test.ts`.
 
+The simulator takes the number of days, the number of games and, optionally, one automated player; leave the player out to compare them all. Besides `balanced`, `understaffed`, `overstaffed` and the others, `crossTrained` keeps housekeeping lean and hires turnover-trained clerks: it keeps one more early-shift clerk than reception needs, so a trained clerk can clean empty rooms while a colleague stays at the desk.
+
 ## Saves
 
 Progress is stored in this browser. Building and management actions save immediately, even while paused. Simulation ticks and hiding or leaving the page also save. Reloading restores the current part of the hour, pause state, and speed. A warning appears if browser storage fails; keep the page open and retry. Starting a new game explicitly discards the old save.
