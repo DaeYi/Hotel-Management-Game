@@ -6,7 +6,7 @@ import { positionAt, legsEnd, hash01 } from '../simulation/Movement';
 import { guestFigures, type Figure } from './figures';
 import { BREAK_ROOM } from '../config/balance';
 import { STAFF_PERSONALITIES } from '../config/staff';
-import { experienceOf, namedFrontDesk, receptionTrained } from '../simulation/StaffProfiles';
+import { experienceOf, namedFrontDesk, receptionTrained, cleaningTrained } from '../simulation/StaffProfiles';
 import { fatigueOn } from '../simulation/StaffFatigue';
 import { GRID_OFFSET_X, GRID_OFFSET_Y, TILE_SIZE } from './GridRenderer';
 import { drawClock, drawComplaint, drawQuirk, drawMoodFace, RING_COLORS, SELECTED_COLOR } from './quirks';
@@ -95,7 +95,8 @@ export class ActorLayer {
     for (const it of plan.itineraries) {
       const member = roster.get(it.staffId);
       const marks = STAFF_PERSONALITIES.enabled && member ? { staffId: it.staffId, chevrons: experienceOf(member) === 'veteran' ? 2 : experienceOf(member) === 'skilled' ? 1 : 0,
-        ...(receptionTrained(member) ? { uniformAccent: ACTOR_COLORS.frontDesk } : {}) } : {};
+        ...(receptionTrained(member) ? { uniformAccent: ACTOR_COLORS.frontDesk }
+          : cleaningTrained(member) ? { uniformAccent: ACTOR_COLORS.housekeeper } : {}) } : {};
       const color = member?.role === 'front_desk' ? ACTOR_COLORS.frontDesk : member?.role === 'housekeeper' || it.staffId.startsWith('housekeeper') ? ACTOR_COLORS.housekeeper : ACTOR_COLORS.maintenance;
       if (it.legs.length === 0) {
         const at = it.end.at ? roster.get(it.staffId)?.at : null; // staying put (null: gone home)

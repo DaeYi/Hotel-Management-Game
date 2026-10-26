@@ -4,14 +4,14 @@ import { STAFF, HOSTED_NIGHTS, GUEST_PROFILE, DESK, BREAK_ROOM } from '../../con
 import { visitorPolicy } from '../../simulation/Visitors';
 import { getMaintenanceStatus, getStaffDailyCost } from '../../simulation/MaintenanceManager';
 import { getUpkeepMultiplier } from '../../simulation/StarRatingManager';
-import { getHousekeepingStatus } from '../../simulation/HousekeepingManager';
+import { getHousekeepingStatus, clerksFreeToClean } from '../../simulation/HousekeepingManager';
 import { getAccessibleDesks, getAccessibleBreakRooms, getMannedDeskStaff, getCheckInCapacity, getStaffTravelHours } from '../../simulation/Layout';
 import { useController, useLiveClock } from '../context';
 import { queueOn, deskToday, waitingInLine } from '../../simulation/DeskQueue';
 import { formatMoney, formatWalk } from '../format';
 import { PanelCard } from './PanelCard';
 import { StaffPeople, staffActivity } from '../StaffPeople';
-import { namedFrontDesk, receptionTrained } from '../../simulation/StaffProfiles';
+import { namedFrontDesk, receptionTrained, cleaningTrained } from '../../simulation/StaffProfiles';
 import { deskCoverage } from '../../simulation/FrontDesk';
 import { FRONT_DESK_STAFF, STAFF_FATIGUE } from '../../config/staff';
 import { fatigueOn, breakRoomOccupancy } from '../../simulation/StaffFatigue';
@@ -116,10 +116,18 @@ export function StaffPanel() {
     : !namedDesk && seated < state.staff.frontDesk ? ` (${state.staff.frontDesk - seated} idle: need desks)`
     : state.staff.frontDesk === 0 && seated === 0 ? ' (unstaffed!)' : '';
 
-  const hk = getHousekeepingStatus(state);
+  const hk = getHousekeepingStatus(state, c.gameTime);
   const maint = getMaintenanceStatus(state);
   const trained = (state.staffRoster ?? []).filter(m => !m.leaving && receptionTrained(m));
   const supporting = trained.filter(m => staffActivity(m, state, c.gameTime) === 'Supporting reception').length;
+  const turnoverTrained = (state.staffRoster ?? []).filter(m => !m.leaving && cleaningTrained(m));
+  const cleaningSupport = turnoverTrained.filter(m => staffActivity(m, state, c.gameTime) === 'Helping with a turnover').length;
+  // Why none of them ever leaves the desk: another early-shift clerk has to stay at reception
+  const cantClean = turnoverTrained.length > 0 && clerksFreeToClean(state).length === 0
+    ? turnoverTrained.some(m => m.shift === 'early')
+      ? "Can't leave the desk to clean: another early-shift clerk must stay at reception for the whole trip."
+      : "Can't help: turnover help is only on the early shift."
+    : null;
 
   const upkeep = getUpkeepMultiplier(state.starRating);
   const walks = state.rooms.map(r => getStaffTravelHours(state, r)).filter(Number.isFinite);
@@ -145,6 +153,7 @@ export function StaffPanel() {
         <div class="dim">24-hour coverage needs a clerk on each shift. Night shifts pay 25% more. + fills the least-covered shift.</div>
       </div>}
       {queueOn(state) && <DeskToday />}
+      {turnoverTrained.length > 0 && <div class="dim tiny" aria-label="Turnover support">Turnover support: {turnoverTrained.length} trained clerk{turnoverTrained.length === 1 ? '' : 's'} · {cleaningSupport} cleaning now.{cantClean && <span class="warn-text"> {cantClean}</span>}</div>}
       <hr class="divider" />
       <StaffRow label={`Housekeepers (base ${formatMoney(STAFF.housekeeping.dailyWage)}/day)`} staffKey="housekeepers"
         status={`Cleaning: ${hk.roomsBeingCleaned}${hk.roomsWaiting > 0 ? ` (${hk.roomsWaiting} waiting!)` : ''}  |  Busy day: ${Math.round(hk.hoursNeeded)}h of ${Math.round(hk.hoursAvailable * 10) / 10}h`} />

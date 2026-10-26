@@ -1,4 +1,4 @@
-import type { HotelState, RoomType, FacilityType, AmenityTier, Direction } from './types.js';
+import type { HotelState, RoomType, FacilityType, AmenityTier, Direction, StaffMember, FrontDeskShift } from './types.js';
 import { ROOM_CONFIG, FACILITY_CONFIG, GRID, LOAN, ELEVATOR, STARTER_LAYOUT, DESK, CLOSET, BREAK_ROOM } from '../config/balance.js';
 import { fatigueOn } from './StaffFatigue.js';
 import { STAFF_FATIGUE } from '../config/staff.js';
@@ -18,7 +18,8 @@ import { housekeepersNeeded, PLANNING_OCCUPANCY } from './HousekeepingManager.js
 import { getAverageOccupancy } from './ObjectivesManager.js';
 import { getExpectedArrivalsPerDay } from './GuestManager.js';
 import { getTotalDemandMultiplier } from './SeasonManager.js';
-import { frontDeskOn } from './StaffProfiles.js';
+import { frontDeskOn, namedFrontDesk, cleaningTrained, staffValue, type StaffCandidate } from './StaffProfiles.js';
+import { hiringCandidates, hireCandidate, dismissStaff } from './StaffHiring.js';
 
 /**
  * A scripted player for headless balance runs. Called once per game hour;
@@ -37,6 +38,7 @@ interface ManagedOptions {
   upgrade: boolean; // upgrade facilities when unlocked
   market: boolean; // run marketing campaigns when rooms sit empty
   staffing?: number; // housekeepers hired relative to the estimated need (default 1)
+  trainedEarlyClerks?: number; // extra early-shift places, filled only by turnover-trained clerks (default 0)
 }
 
 const STALE_DECOR = 60; // reinvesting strategies renovate below this
@@ -145,6 +147,40 @@ function addDeskIfNeeded(state: HotelState, afford: Afford): HotelState {
   return state;
 }
 
+const DESK_SHIFTS = ['early', 'late', 'night'] as const;
+const asMember = (c: StaffCandidate): StaffMember => ({ ...c, at: null, stats: { workHours: c.workHours, lateDays: 0, absentDays: 0 } });
+
+/**
+ * Reception plus `extra` early-shift places for turnover-trained clerks, who
+ * clean vacant rooms while a colleague covers the desk. Early hires take a
+ * trained candidate whenever one is offered and the extra places wait for
+ * one; reception's own places still go to the best-value candidate. Trims let
+ * untrained clerks go first. Returns the headcount the roster should reach.
+ */
+function crossTrainDesk(state: HotelState, perShift: number, extra: number): HotelState {
+  const onShift = (st: HotelState, shift: FrontDeskShift) => st.staffRoster!.filter(m => m.role === 'front_desk' && !m.leaving && (m.shift ?? 'late') === shift);
+  const wanted = (shift: FrontDeskShift) => perShift + (shift === 'early' ? extra : 0);
+  // Hire and dismiss from the actual team; the headcount set above is only a target
+  let s: HotelState = { ...state, staff: { ...state.staff, frontDesk: state.staffRoster!.filter(m => m.role === 'front_desk' && !m.leaving).length } };
+  for (const shift of DESK_SHIFTS) {
+    for (let over = onShift(s, shift).length - wanted(shift); over > 0; over--) {
+      const worst = [...onShift(s, shift)].sort((a, b) => Number(cleaningTrained(a)) - Number(cleaningTrained(b))
+        || staffValue(a) - staffValue(b) || (b.serial ?? 0) - (a.serial ?? 0))[0];
+      s = dismissStaff(s, worst.id) ?? s;
+    }
+  }
+  while (onShift(s, 'early').length < wanted('early')) {
+    const offer = hiringCandidates(s, 'front_desk', 'early').filter(c => cleaningTrained(c))
+      .reduce<StaffCandidate | undefined>((best, c) => !best || staffValue(asMember(c)) > staffValue(asMember(best)) ? c : best, undefined);
+    const hired = offer && hireCandidate(s, 'front_desk', offer.id, 'early');
+    if (!hired) break;
+    s = hired;
+  }
+  // Short reception places are filled by the usual quick hire, fewest-staffed shift first
+  const headcount = DESK_SHIFTS.reduce((n, shift) => n + Math.max(perShift, onShift(s, shift).length), 0);
+  return { ...s, staff: { ...s.staff, frontDesk: headcount } };
+}
+
 /** Whether the bot can spend `cost` and keep its reserve (times `mult` for bigger purchases). */
 type Afford = (state: HotelState, cost: number, mult?: number) => boolean;
 
@@ -210,6 +246,7 @@ function managedStrategy(opts: ManagedOptions): Strategy {
     const safety = SAFETY_DAYS * getDailyRunningCost(s);
     const afford: Afford = (st, cost, mult = 1) => st.cash - cost >= Math.max(opts.cashReserve * mult, safety);
 
+    const deskPerShift = Math.max(1, Math.ceil(rooms / 20));
     s = {
       ...s,
       staff: {
@@ -217,10 +254,11 @@ function managedStrategy(opts: ManagedOptions): Strategy {
         // walks included); a maintenance worker keeps up with ~40 rooms, front desk ~20.
         housekeepers: Math.max(1, Math.round(housekeepersNeeded(s, staffingOccupancy(s)) * (opts.staffing ?? 1))),
         maintenanceWorkers: Math.max(1, Math.ceil(rooms / 40)),
-        frontDesk: Math.max(1, Math.ceil(rooms / 20)) * (frontDeskOn() ? 3 : 1),
+        frontDesk: deskPerShift * (frontDeskOn() ? 3 : 1),
       },
       housekeeping: { turnoverQuality: s.peakStarRating >= 2 ? 'thorough' : 'standard', dailyCadence: 'daily' },
     };
+    if (opts.trainedEarlyClerks && namedFrontDesk(s) && s.staffRoster) s = crossTrainDesk(s, deskPerShift, opts.trainedEarlyClerks);
 
     const tier = amenityTierFor(s.starRating);
     s = { ...s, amenities: { standard: tier, deluxe: tier, suite: tier } };
@@ -348,6 +386,9 @@ export const hoarderStrategy = managedStrategy({ priceMultiplier: 1.0, cashReser
 /** Balanced play with housekeepers hired at `staffing` times the estimated need, for measuring a staffing curve. */
 export const staffedStrategy = (staffing: number): Strategy =>
   managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...ALL_SINKS, staffing });
+/** Lean housekeeping, plus extra early-shift places held for turnover-trained clerks who help clean. */
+export const crossTrainedStrategy = (trainedEarlyClerks = 1, staffing = 0.6): Strategy =>
+  managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...ALL_SINKS, staffing, trainedEarlyClerks });
 
 export const STRATEGIES: Record<string, Strategy> = {
   idle: idleStrategy,
@@ -357,6 +398,8 @@ export const STRATEGIES: Record<string, Strategy> = {
   // Housekeeping staffed below / above the estimated need, for checking there's a right amount
   understaffed: staffedStrategy(0.6),
   overstaffed: staffedStrategy(1.6),
+  // Understaffed housekeeping with turnover-trained early clerks helping clean
+  crossTrained: crossTrainedStrategy(),
   // One sink at a time, for measuring what each is worth
   renovateOnly: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...NO_SINKS, renovate: true }),
   upgradeOnly: managedStrategy({ priceMultiplier: 1.0, cashReserve: 8000, expandAtOccupancy: 0.9, ...NO_SINKS, upgrade: true }),

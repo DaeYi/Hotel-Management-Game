@@ -281,6 +281,15 @@ export interface ReceptionSupport {
   tiredFrom?: number;
 }
 
+/** A clerk's bounded turnover visit, including the walk back to reception. */
+export interface CleaningSupport {
+  roomId: string;
+  lane: string;
+  from: number;
+  to: number;
+  workUntil: number; // fixed stop time; replanning never restarts the visit
+}
+
 /** A housekeeper or maintenance worker, as of the last hour boundary. */
 export interface StaffMember extends StaffIdentity {
   id: string;
@@ -296,6 +305,7 @@ export interface StaffMember extends StaffIdentity {
   restUntil?: number;
   fatigueBreak?: FatigueBreak; // fixed destination and end, including travel across hour boundaries
   receptionSupport?: ReceptionSupport;
+  cleaningSupport?: CleaningSupport;
 }
 
 /** Every housekeeper's and maintenance worker's hour, planned at its start; the tick credits exactly the work in it. */
@@ -307,7 +317,7 @@ export interface StaffPlan {
 export interface StaffItinerary {
   staffId: string;
   legs: Leg[];
-  end: Pick<StaffMember, 'at' | 'roomId' | 'carry' | 'deskLane' | 'fatigueBreak' | 'receptionSupport'>;
+  end: Pick<StaffMember, 'at' | 'roomId' | 'carry' | 'deskLane' | 'fatigueBreak' | 'receptionSupport' | 'cleaningSupport'>;
 }
 
 export interface Booking {

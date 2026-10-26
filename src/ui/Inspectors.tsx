@@ -138,7 +138,7 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
     const tags = guest ? guestTags(guest) : [];
     status = `Occupied${guest ? `: ${describeGuest(partyOf(guest), guest.purpose)}${tags.length ? ` (${tags.join(', ')})` : ''}` : ''}${where ? `, ${where}` : ''}`;
   }
-  else if (room.status === 'cleaning') status = turnoverStatus(cleaning);
+  else if (room.status === 'cleaning') status = turnoverStatus(cleaning, state);
   else if (room.status === 'renovating') status = `Renovating (${room.renovationHoursRemaining}h left)`;
   else if (room.condition <= ECONOMY.roomBreakdownThreshold) status = 'OUT OF ORDER';
   else status = isRoomReachable(state, room) ? 'Vacant' : 'Door blocked: no hallway access!';
@@ -259,12 +259,15 @@ function formatHoursLeft(hours: number): string {
   return hours < 1 ? `${Math.max(1, Math.round(hours * 60))} min` : `${hours.toFixed(1)}h`;
 }
 
-/** A room between guests: being cleaned, a housekeeper on the way, or waiting (and why). */
-function turnoverStatus(cleaning: RoomCleaning | undefined): string {
+/** A room between guests: being cleaned, a housekeeper (or a trained clerk) on the way, or waiting (and why). */
+function turnoverStatus(cleaning: RoomCleaning | undefined, state: HotelState): string {
   if (!cleaning) return 'Cleaned: reopens on the hour';
   const left = formatHoursLeft(cleaning.hoursLeft);
-  if (cleaning.phase === 'cleaning') return `Being cleaned (${left} left)`;
-  if (cleaning.phase === 'on_the_way') return `Dirty: housekeeper on the way (${left} to clean)`;
+  // A trained clerk helping out: say who, so it doesn't read as a housekeeper
+  const worker = state.staffRoster?.find(m => m.id === cleaning.staffId);
+  const clerk = worker?.role === 'front_desk' ? `${worker.name ?? 'a clerk'} from the front desk` : null;
+  if (cleaning.phase === 'cleaning') return clerk ? `Being cleaned by ${clerk} (${left} left)` : `Being cleaned (${left} left)`;
+  if (cleaning.phase === 'on_the_way') return `Dirty: ${clerk ?? 'housekeeper'} on the way (${left} to clean)`;
   return `Dirty: waiting, ${describeWait(cleaning.wait!)}`;
 }
 

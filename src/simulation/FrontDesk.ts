@@ -1,11 +1,12 @@
 import type { Fixture, HotelState, StaffMember, StaffItinerary, TilePos, Leg, WalkLeg, FatigueBreak } from './types.js';
 import { DESK, TRAVEL } from '../config/balance.js';
-import { STAFF_FATIGUE } from '../config/staff.js';
+import { STAFF_CLEANING_SUPPORT, STAFF_FATIGUE } from '../config/staff.js';
 import { getAccessibleDesks, getAccessibleBreakRooms, getFixtureFront, findRoute, routeFromStreet, routeToStreet, isEntranceTile, isHallway } from './Layout.js';
 import { hourStart, makeStay, makeWalk, finalTile, sameTile } from './Movement.js';
 import { checkInHours, namedFrontDesk, staffDuty, staffDutyAt } from './StaffProfiles.js';
 import { fatigueOn, fatigueAt, fatigueGain, projectFatigue, planStaffRest, restReservations, type RestReservation } from './StaffFatigue.js';
 import { receptionSupports } from './CrossTraining.js';
+import { cleaningSupports } from './ClerkCleaning.js';
 
 export interface DeskDuty { staffId: string; from: number; to: number; checkInHours: number; startUntil?: number; serviceRate?: number }
 export interface DeskLane { desk: Fixture; seat: number; front: TilePos; key: string; duties?: DeskDuty[] }
@@ -33,6 +34,7 @@ const fatigueCache = new WeakMap<HotelState, { schedules: ClerkSchedule[]; reser
 function fatigueSchedules(state: HotelState): { schedules: ClerkSchedule[]; reservations: RestReservation[] } {
   const cached = fatigueCache.get(state);
   if (cached) return cached;
+  const laneKeys = new Set(physicalDeskLanes(state).map(lane => lane.key));
   const breakRooms = new Map(getAccessibleBreakRooms(state).map(room => [room.id, room]));
   const T = hourStart(state), reservations = restReservations(state).filter(r => breakRooms.has(r.placeId)), schedules: ClerkSchedule[] = [];
   for (const a of [...assignments(state)].sort((x, y) => x.from - y.from || x.member.id.localeCompare(y.member.id))) {
@@ -80,7 +82,10 @@ function fatigueSchedules(state: HotelState): { schedules: ClerkSchedule[]; rese
       ? state.staffPlan.itineraries.find(it => it.staffId === member.id) : undefined;
     // A later hire may now yield to a committed helper or take another seat.
     // Replay a saved counter stay only while it still belongs to this assignment.
+    // A stay at a since-demolished desk is only history. (With clerk cleaning
+    // switched off, this keeps the earlier reception rules exactly.)
     const existing = saved?.legs.some(l => l.kind === 'stay' && l.activity === 'desk' && l.end > T
+      && (!STAFF_CLEANING_SUPPORT.enabled || !!l.lane && laneKeys.has(l.lane))
       && (l.lane !== a.lane.key || l.start < a.from - 1e-9)) ? undefined : saved;
     if (existing) {
       for (const leg of existing.legs.filter(l => l.end > T && l.start < T + 1)) {
@@ -187,17 +192,30 @@ function assignments(state: HotelState): Assignment[] {
   if (cached) return cached;
   const lanes = physicalDeskLanes(state), result: Assignment[] = [];
   const supports = receptionSupports(state);
+  const cleaning = cleaningSupports(state);
   const T = hourStart(state);
   const nativeSeats = new Map<string, { lane: string; desk: Leg[] }>();
-  if (supports.length && state.staffPlan?.start === T) {
+  if ((supports.length || cleaning.length) && state.staffPlan?.start === T) {
+    const away: Array<[string, { lane: string; desk: Leg[] }]> = [];
     for (const member of state.staffRoster ?? []) {
       if (member.role !== 'front_desk' || member.leaving) continue;
       const now = Math.max(T, member.stats?.fatigueAt ?? T);
+      // A demolished desk no longer holds a seat (as above, only with clerk cleaning on).
       const desk = state.staffPlan.itineraries.find(it => it.staffId === member.id)?.legs.filter(l =>
-        l.kind === 'stay' && l.activity === 'desk' && l.end > now + 1e-9 && l.start < T + 1) ?? [];
+        l.kind === 'stay' && l.activity === 'desk' && l.end > now + 1e-9 && l.start < T + 1
+        && (!STAFF_CLEANING_SUPPORT.enabled || lanes.some(lane => lane.key === l.lane))) ?? [];
       const first = desk[0];
       if (first?.kind === 'stay' && first.lane) nativeSeats.set(member.id, { lane: first.lane, desk });
+      else {
+        const duty = staffDutyAt(member, now);
+        const returning = cleaning.find(c => c.member.id === member.id && c.support.to > now);
+        if (returning && !duty.absent && duty.end > now + 1e-9 && lanes.some(lane => lane.key === returning.support.lane))
+          away.push([member.id, { lane: returning.support.lane, desk }]);
+      }
     }
+    // Only an on-duty clerk still away on a room visit holds their seat, and
+    // never against a clerk whose own plan sits there this hour.
+    for (const [id, seat] of away) if (![...nativeSeats.values()].some(other => other.lane === seat.lane)) nativeSeats.set(id, seat);
   }
   const groups = (['early', 'late', 'night'] as const).map(shift => (state.staffRoster ?? [])
     .filter(m => m.role === 'front_desk' && (m.shift ?? 'late') === shift && !m.leaving)
@@ -271,6 +289,7 @@ export function scheduledDeskLanes(state: HotelState): DeskLane[] {
   if (cached) return cached;
   const all = assignments(state);
   const supports = receptionSupports(state);
+  const cleaning = cleaningSupports(state);
   const lanes = physicalDeskLanes(state).map(lane => ({ ...lane, duties: [...(fatigueOn()
     ? fatigueSchedules(state).schedules.filter(s => s.assignment.lane.key === lane.key).flatMap(s => s.duties).sort((a, b) => a.from - b.from)
     : all.filter(a => a.lane.key === lane.key).map(a => ({ staffId: a.member.id, from: a.from, to: a.to, checkInHours: checkInHours(a.member) }))),
@@ -281,7 +300,23 @@ export function scheduledDeskLanes(state: HotelState): DeskLane[] {
       if (tired <= support.from + 1e-9) return [{ ...base, checkInHours: hours / STAFF_FATIGUE.tiredRate, serviceRate: STAFF_FATIGUE.tiredRate }];
       return [{ ...base, startUntil: tired, checkInHours: hours, serviceRate: 1 },
         { ...base, from: tired, checkInHours: hours / STAFF_FATIGUE.tiredRate, serviceRate: STAFF_FATIGUE.tiredRate }];
-    })].sort((a, b) => a.from - b.from) }));
+    })].flatMap((duty: DeskDuty) => {
+      // Both walks and the room stay close the lane. A service beginning
+      // before departure must also finish before the clerk leaves.
+      let pieces = [duty];
+      for (const { member, support } of cleaning) {
+        if (member.id !== duty.staffId) continue;
+        pieces = pieces.flatMap(part => {
+          if (support.to <= part.from || support.from >= part.to) return [part];
+          const kept: DeskDuty[] = [];
+          if (part.from < support.from) kept.push({ ...part, to: support.from,
+            ...(part.startUntil !== undefined ? { startUntil: Math.min(part.startUntil, support.from) } : {}) });
+          if (part.to > support.to && (part.startUntil ?? part.to) > support.to) kept.push({ ...part, from: support.to });
+          return kept;
+        });
+      }
+      return pieces;
+    }).sort((a, b) => a.from - b.from) }));
   laneCache.set(state, lanes);
   return lanes;
 }

@@ -1,4 +1,4 @@
-import type { HotelState, Room, GameEvent, Guest } from './types.js';
+import type { HotelState, Room, GameEvent, Guest, StaffMember } from './types.js';
 import { HOUSEKEEPING, STAFF, ECONOMY, GUEST_HOUSEKEEPING } from '../config/balance.js';
 import { formatRoomLabel, isRoomReachable } from './HotelState.js';
 import { getStaffTravelHours } from './Layout.js';
@@ -6,10 +6,11 @@ import { getStaffPlan, plannedWork, isOnShift } from './StaffManager.js';
 import { isCheckoutDay } from './GuestManager.js';
 import { occupantFactor, guestsById } from './Party.js';
 import { housekeepingPrefOf } from './CleaningPreference.js';
-import { cleanlinessDelta, staffRate, attendanceShare, attendance } from './StaffProfiles.js';
+import { cleanlinessDelta, staffRate, attendanceShare, attendance, cleaningTrained } from './StaffProfiles.js';
 import { recordHospitality } from './StaffHospitality.js';
 import { guestTileAt } from './GuestMovement.js';
-import { sameTile } from './Movement.js';
+import { sameTile, hourStart } from './Movement.js';
+import { roomCleaningAt } from './CleaningStatus.js';
 import { fatigueCapacityShare, fatigueOn } from './StaffFatigue.js';
 
 /**
@@ -31,9 +32,9 @@ export function startTurnoverCleaning(room: Room, quality: string): Room {
 
 /**
  * One hour of housekeeping: credit each room exactly the cleaning the staff
- * plan has a housekeeper doing in it this hour (getStaffPlan -- the plan the
+ * plan has a worker doing in it this hour (getStaffPlan -- the plan the
  * walking staff on screen follow). Daily cleans still pending when the shift
- * ends are skipped. No housekeepers = rooms stay in 'cleaning' indefinitely.
+ * ends are skipped. Trained clerks can contribute real morning turnover work.
  */
 export function processCleaningTick(state: HotelState): { state: HotelState; events: GameEvent[] } {
   const events: GameEvent[] = [];
@@ -291,7 +292,9 @@ export function checkHousekeepingCompliance(state: HotelState): string | null {
 
   // Check if there are enough housekeepers
   if (state.staff.housekeepers <= 0 && state.rooms.length > 0) {
-    return 'No housekeepers hired! Rooms will not be cleaned';
+    if (clerksFreeToClean(state).length > 0)
+      return 'No dedicated housekeepers. Trained clerks only help with morning turnovers; daily cleans still need housekeepers.';
+    return `No housekeepers hired! Rooms will not be cleaned${clerkWithoutCover(state) ? `. ${NO_COVER}` : ''}`;
   }
 
   for (const req of HOUSEKEEPING.starRequirements) {
@@ -310,10 +313,28 @@ export function checkHousekeepingCompliance(state: HotelState): string | null {
 }
 
 /**
- * Get housekeeping staffing info for the UI: what's waiting now, and whether
- * the team can keep up with a full hotel's workload.
+ * Trained clerks who can ever leave the desk for a turnover: they're on the
+ * early shift, and another early-shift clerk is there to stay at reception
+ * for the whole trip. (Whether one actually goes depends on the hour.)
  */
-export function getHousekeepingStatus(state: HotelState): {
+export function clerksFreeToClean(state: HotelState): StaffMember[] {
+  const early = (state.staffRoster ?? []).filter(m => m.role === 'front_desk' && !m.leaving && m.shift === 'early');
+  return early.length > 1 ? early.filter(m => cleaningTrained(m)) : [];
+}
+
+/** A trained clerk who is the only early-shift clerk, so never leaves the desk. */
+function clerkWithoutCover(state: HotelState): boolean {
+  return clerksFreeToClean(state).length === 0
+    && (state.staffRoster ?? []).some(m => !m.leaving && m.shift === 'early' && cleaningTrained(m));
+}
+const NO_COVER = "Your trained clerk can't leave the desk to clean without another early-shift clerk to cover it.";
+
+/**
+ * Get housekeeping staffing info for the UI: what's waiting now (at time t,
+ * by default the start of the state's hour), and whether the team can keep up
+ * with a full hotel's workload.
+ */
+export function getHousekeepingStatus(state: HotelState, t = hourStart(state)): {
   housekeepers: number;
   roomsBeingCleaned: number;
   roomsWaiting: number;
@@ -323,7 +344,11 @@ export function getHousekeepingStatus(state: HotelState): {
 } {
   const housekeepers = state.staff.housekeepers;
   const roomsBeingCleaned = state.rooms.filter(r => r.status === 'cleaning').length;
-  const roomsWaiting = Math.max(0, roomsBeingCleaned - housekeepers);
+  // Turnovers nobody is cleaning or on the way to right now (a trained clerk
+  // helping counts), from the plan the staff walk; not the overnight queue
+  // that waits for the morning shift
+  const roomsWaiting = [...roomCleaningAt(state, t).values()]
+    .filter(c => c.job === 'turnover' && c.phase === 'waiting' && c.wait !== 'off_shift').length;
   const hoursNeeded = estimateHousekeepingHours(state, PLANNING_OCCUPANCY);
   const crew = (state.staffRoster ?? []).filter(m => m.role === 'housekeeper' && !m.leaving).slice(0, housekeepers);
   const hoursAvailable = crew.reduce((hours, m) => {
@@ -333,11 +358,13 @@ export function getHousekeepingStatus(state: HotelState): {
 
   let recommendation: string | null = null;
   if (housekeepers === 0 && state.rooms.length > 0) {
-    recommendation = 'Hire housekeepers or rooms will never be cleaned!';
+    recommendation = clerksFreeToClean(state).length > 0
+      ? 'Hire housekeepers: trained clerks only help with morning turnovers while another clerk minds the desk, and daily cleans need housekeepers.'
+      : `Hire housekeepers or rooms will never be cleaned!${clerkWithoutCover(state) ? ` ${NO_COVER}` : ''}`;
   } else if (hoursNeeded > hoursAvailable * 1.05) {
     recommendation = `A busy day needs ${housekeepersNeeded(state, PLANNING_OCCUPANCY)} housekeepers.`;
   } else if (roomsWaiting > 0) {
-    recommendation = `${roomsWaiting} rooms waiting to be cleaned.`;
+    recommendation = `${roomsWaiting} room${roomsWaiting === 1 ? '' : 's'} waiting to be cleaned.`;
   }
 
   return { housekeepers, roomsBeingCleaned, roomsWaiting, hoursNeeded, hoursAvailable, recommendation };

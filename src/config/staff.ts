@@ -70,3 +70,14 @@ export const STAFF_CROSS_TRAINING = {
   supportHours: 1,
   minSupportHours: 0.5,
 };
+
+/** Some new early-shift clerks can help with vacant-room turnovers. */
+export const STAFF_CLEANING_SUPPORT = {
+  enabled: true,
+  candidateChance: 0.10,
+  wagePremium: 1.15,
+  startHour: 7,
+  endHour: 14,
+  supportHours: 1,
+  minWorkHours: 0.25,
+};
