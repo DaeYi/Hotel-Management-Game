@@ -26,6 +26,6 @@
   },
   "dependencies": {
     "phaser": "^3.90.0",
-    "preact": "^10.29.8"
+    "preact": "^11.0.1"
   }
 }
