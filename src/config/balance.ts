@@ -485,6 +485,10 @@ export const SPOTLIGHT = {
   arrivalDays: [2, 4] as [number, number], // days after the Monday: Wednesday to Friday
   arrivalHours: [15, 17] as [number, number], // when they walk in (their room's decided at the hour boundary before)
   leadDays: [1, 2] as [number, number], // announced this many days ahead
+  // The story says they'll wait for the suite held for them (once) only when its estimate is past their hour by more
+  // than this (hours), till the hour before they come (then by any: it's certain): a day or two ahead the estimate
+  // swings by up to half an hour either way
+  slipMargin: 0.5,
   nights: 2,
   writer: {
     bookingWeight: 5, // their review counts this many times over in the hotel's rolling windows

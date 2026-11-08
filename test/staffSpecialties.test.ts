@@ -69,6 +69,17 @@ describe('Each employee chooses their specialty without sharing a room', () => {
     expect(getStaffPlan(s)).toEqual(getStaffPlan({ ...s, staffRoster: [runner] }));
   });
 
+  it('room attendants turn the suite held for a spotlight guest over before their dailies', () => {
+    const s = occupied(hotel(worker('room_attendant'), true));
+    s.rooms[1] = startTurnoverCleaning(s.rooms[1], 'standard');
+    const held = { ...s, spotlight: { kind: 'writer' as const, week: 1, salt: '', announceDay: s.day, arrivalDay: s.day + 1, arrivalHour: 15,
+      status: 'announced' as const, chainId: 'held', roomId: s.rooms[1].id } };
+    const firstJob = (state: HotelState) => getStaffPlan(state).itineraries[0].legs.find((l): l is StayLeg => l.kind === 'stay' && !!l.job)?.placeId;
+    expect(firstJob(s)).toBe(s.rooms[0].id); // (her dailies first)
+    expect(firstJob(held)).toBe(s.rooms[1].id);
+    expect(firstJob({ ...held, spotlight: { ...held.spotlight, status: 'staying' as const } })).toBe(s.rooms[0].id);
+  });
+
   it('room attendants prefer a room whose whole party is out and keep one worker per job', () => {
     let s = occupied(hotel(worker('room_attendant'), true));
     const home = { ...guest(), id: 'home', name: 'Home' };

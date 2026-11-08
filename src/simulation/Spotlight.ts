@@ -1,5 +1,5 @@
-import type { FacilityType, GameEvent, Guest, GuestProfile, GuestTrait, HotelState, Party, Purpose, Room, SpotlightHold, SpotlightKind, SpotlightPlan, StaffMember } from './types.js';
-import { staffRate, attendance, nextStaffWork, staffDutyAt } from './StaffProfiles.js';
+import type { FacilityType, GameEvent, Guest, GuestProfile, GuestTrait, HotelState, Party, Purpose, Room, SpotlightHold, SpotlightKind, SpotlightPlan, StaffMember, StaffPlan, StaffRush } from './types.js';
+import { staffRate, attendance, nextStaffWork, staffDutyAt, specialtyOf } from './StaffProfiles.js';
 import { SPOTLIGHT, GUEST_PROFILE, GUEST_PURPOSES, GUEST_NAMES, ECONOMY, SATISFACTION, FACILITY_CONFIG, STAR_RATING, AMENITIES, REVIEW, STORY, STAFF, HOUSEKEEPING, TRAVEL } from '../config/balance.js';
 import { STAFF_FATIGUE, STAFF_PERSONALITIES } from '../config/staff.js';
 import { fatigueOn, fatigueAt, fatigueGain, projectFatigue, planStaffRest, restReservations, type RestReservation } from './StaffFatigue.js';
@@ -8,10 +8,11 @@ import { roomTile } from './GuestMovement.js';
 import { getDayOfWeek } from './SeasonManager.js';
 import { appendStoryLogEntry } from './StoryGenerator.js';
 import { profileRoom, fitsParty, isBookable } from './RoomProfile.js';
-import { isRoomReachable, formatRoomLabel } from './HotelState.js';
+import { isRoomReachable, formatRoomLabel, refitRoom } from './HotelState.js';
 import { rollProfile, checkoutHour } from './Profile.js';
 import { isCheckoutDay } from './GuestManager.js';
 import { baseWalkHours } from './HousekeepingManager.js';
+import { getStaffPlan, getRoster, plannedWork, rosterAfter } from './StaffManager.js';
 import { surnameOf } from './Party.js';
 import { FEATURE_LABELS } from './Preferences.js';
 import { getOpenFacilities, findRoute, getAccessibleBreakRooms, isHallway } from './Layout.js';
@@ -66,23 +67,113 @@ export function topFloor(state: Pick<HotelState, 'rooms'>): number {
 const isSuite = (room: Room) => profileRoom(room).type === 'suite';
 const quality = (room: Room) => (room.status !== 'renovating' ? (room.decor + room.condition) / 2 : room.refitting ? (room.refitting.decorAfter + room.condition) / 2 : 100);
 
+/** When the spotlight guest comes, for judging a suite: their hour, or (byLast) the last check-in that day. */
+type Judged = Pick<SpotlightPlan, 'kind' | 'arrivalDay' | 'arrivalHour'> & { byLast?: boolean };
+
 /**
  * Whether a suite will be free for the spotlight guest by the time they come:
  * a reachable suite their party fits, in working order, vacant now, being
  * cleaned (with a day to spare, or a clean short enough), renovating but done
  * by then (a refit doesn't mend a broken room), or with a guest who leaves
- * before the day.
+ * before the day (judged by the last check-in, on the day too). `asHeld`:
+ * judged as the suite held for them (as a hold is picked), whose turnover
+ * jumps the queue if it wouldn't be ready in its turn; otherwise as things
+ * stand.
  */
-export function freeBy(state: HotelState, room: Room, plan: Pick<SpotlightPlan, 'kind' | 'arrivalDay' | 'arrivalHour'>, between = false): boolean {
-  if (!isSuite(room) || !isBookable(room) || !fitsParty(profileRoom(room), PARTY[plan.kind]) || !isRoomReachable(state, room)) return false;
-  if (room.status === 'renovating') return (!room.refitting || room.condition > ECONOMY.roomBreakdownThreshold) && hourEnd(state) + room.renovationHoursRemaining <= arrivalTime(plan);
-  if (room.condition <= ECONOMY.roomBreakdownThreshold) return false;
-  if (room.status === 'vacant') return true;
-  if (room.status === 'cleaning') return cleanedAt(state, room, between) <= arrivalTime(plan);
-  // Its guest leaves before the day, and the turnover after them is done in time
-  const guest = state.guests.find(g => g.id === room.guestId);
-  return !!guest && guest.checkInDay + guest.stayLength < plan.arrivalDay && cleanedAt(state, room, between) <= arrivalTime(plan);
+export function freeBy(state: HotelState, room: Room, plan: Judged, between = false, asHeld = false): boolean {
+  return readyAt(state, room, plan, between, asHeld) <= arrivalTime(plan);
 }
+
+/**
+ * When a suite will be free for the spotlight guest (absolute hours;
+ * -Infinity: now; Infinity: not for them by their day), as freeBy judges it.
+ * `rushed`: the held suite if it's rushed (rushedFrom), for many suites judged
+ * on one state (worked out once).
+ */
+export function readyAt(state: HotelState, room: Room, plan: Judged, between = false, asHeld = false, rushed?: () => string | undefined): number {
+  if (!isSuite(room) || !isBookable(room) || !fitsParty(profileRoom(room), PARTY[plan.kind]) || !isRoomReachable(state, room)) return Infinity;
+  if (room.status === 'renovating') return !room.refitting || room.condition > ECONOMY.roomBreakdownThreshold ? hourEnd(state) + room.renovationHoursRemaining : Infinity;
+  if (room.condition <= ECONOMY.roomBreakdownThreshold) return Infinity;
+  if (room.status === 'vacant') return -Infinity;
+  if (room.status === 'occupied') {
+    // Its guest leaves before the day (or, by the last check-in, that morning), then the turnover after them
+    const guest = state.guests.find(g => g.id === room.guestId);
+    const leaves = guest ? guest.checkInDay + guest.stayLength : Infinity;
+    if (!(leaves < plan.arrivalDay || (plan.byLast && leaves === plan.arrivalDay))) return Infinity;
+  }
+  const from: From = between ? 'plan' : 'end';
+  // Held (or as if held): in its turn, or (if that's too late for their hour) rushed, if that's sooner: kept for
+  // whoever would finish it first, as the planner has it (rushFor); any other suite behind the held one while that's
+  // rushed
+  if (asHeld || heldId(state) === room.id) {
+    const inTurn = cleanedAt(state, room, from, undefined, room.id);
+    return inTurn <= dueAt(state, plan) ? inTurn : Math.min(inTurn, cleanedAt(state, room, from, room.id, room.id));
+  }
+  return cleanedAt(state, room, from, rushed ? rushed() : rushedFrom(state, from), heldId(state));
+}
+
+/**
+ * The suite held for the spotlight guest if it's rushed, judged as readyAt
+ * judges it: if in its turn it wouldn't be ready by their hour, and rushed it
+ * would be sooner (between hours, from where this hour's plan leaves things,
+ * as the next hour's plan will decide it: this hour's own rush may be for a
+ * hold since moved, or for none).
+ */
+function rushedFrom(state: HotelState, from: From): string | undefined {
+  const id = heldId(state);
+  const room = id ? state.rooms.find(r => r.id === id) : undefined;
+  if (!id || !room || room.status !== 'cleaning') return undefined;
+  const inTurn = cleanedAt(state, room, from, undefined, id);
+  return inTurn > arrivalTime(state.spotlight!) && cleanedAt(state, room, from, id, id) < inTurn - 1e-9 ? id : undefined;
+}
+
+/**
+ * When the spotlight guest is due, for judging a suite held: their hour, from
+ * the plan announced (every caller in the game has it announced, the
+ * announcement's own pick too: a suite late in its turn is judged by the
+ * sooner of that and rushed, even when asked about the last check-in), or
+ * (none announced: a direct call) the one asked about.
+ */
+const dueAt = (state: HotelState, plan: Judged) => (state.spotlight?.status === 'announced' ? arrivalTime(state.spotlight) : arrivalTime(plan));
+
+/** The suite held for the spotlight guest if this hour's plan rushes it (rushFor). */
+export function rushedSuite(state: HotelState): string | undefined {
+  const id = heldId(state);
+  return id && getStaffPlan(state).rush?.roomId === id ? id : undefined;
+}
+
+/**
+ * Whether this hour's plan should rush the suite held for the spotlight guest
+ * (its turnover jumping the housekeepers' queue), and for whom: when, from
+ * where the hour's plan made without it leaves things, it wouldn't be ready
+ * for them by their hour in its turn, and rushed it would be sooner. Kept for
+ * the housekeeper who'd finish it first, from when she's next free (the
+ * estimate's `by`; one not on the roster: first in the queue, for whoever's
+ * free). Never with no housekeepers (the estimate doesn't count clerks
+ * helping with turnovers: it has the suite never ready, so it isn't held).
+ * `helps`: whether the plan made with it does get the suite ready sooner than
+ * that one.
+ */
+export function rushFor(state: HotelState, plain: StaffPlan): { rush: StaffRush; helps: (rushed: StaffPlan) => boolean } | undefined {
+  const id = heldId(state);
+  const room = id ? state.rooms.find(r => r.id === id) : undefined;
+  if (!id || !room || room.status !== 'cleaning' || !isRoomReachable(state, room)) return undefined;
+  const inTurn = cleanedAfter(state, plain, room, undefined, id);
+  if (inTurn <= arrivalTime(state.spotlight!)) return undefined;
+  const best = simulate(state, room, 'start', id, id);
+  const staffId = best.by !== undefined ? housekeepersOf(getRoster(state), state.staff.housekeepers)[best.by]?.id : undefined;
+  if (!(best.done < inTurn - 1e-9)) return undefined;
+  return { rush: staffId ? { roomId: id, staffId } : { roomId: id }, helps: rushed => cleanedAfter(state, rushed, room, id, id) < inTurn - 1e-9 };
+}
+
+/** The housekeepers who work this hour, in the roster's order (as the planner and the estimate have them). */
+const housekeepersOf = (roster: StaffMember[], staff: number) => roster.filter(m => m.role === 'housekeeper' && !m.leaving).slice(0, staff);
+
+/** "19:00": the hour by which a suite will be ready (the next whole hour). */
+const readyClock = (t: number) => `${String(Math.ceil(t - 1e-9) % 24).padStart(2, '0')}:00`;
+
+/** The suite held for the announced spotlight guest, if any. */
+const heldId = (state: HotelState) => (spotlightOn() && state.spotlight?.status === 'announced' ? state.spotlight.roomId : undefined);
 
 /** The next moment from t the housekeepers are at work (absolute hours). */
 function atWork(t: number, member?: StaffMember): number {
@@ -92,28 +183,27 @@ function atWork(t: number, member?: StaffMember): number {
   return t < start ? start : t >= end ? start + 24 : t;
 }
 
-/** Time t plus hours of housekeeping, counted in the housekeepers' shift hours (absolute hours). */
-function inShift(t: number, hours: number, member?: StaffMember): number {
-  let at = t;
-  let work = hours;
-  for (let days = 0; days < 60 && work > 1e-9; days++) {
-    const a = member ? attendance(member, Math.floor(at / 24) + 1) : { absent: false, lateHours: 0 };
-    if (a.absent) { at = Math.floor(at / 24) * 24 + 24; continue; }
-    const start = Math.floor(at / 24) * 24 + STAFF.housekeeping.workStartHour + a.lateHours;
-    const end = Math.floor(at / 24) * 24 + STAFF.housekeeping.workEndHour;
-    if (at < start) at = start;
-    if (at >= end) { at = Math.floor(at / 24) * 24 + 24; continue; }
-    const step = Math.min(work, end - at);
-    at += step;
-    work -= step;
-  }
-  return work > 1e-9 ? Infinity : at;
-}
+/** The end of the shift that a moment at work falls in (absolute hours). */
+const shiftEndAt = (t: number, member?: StaffMember) => (member ? staffDutyAt(member, t).end : Math.floor(t / 24) * 24 + STAFF.housekeeping.workEndHour);
 
-/** A held suite must allow for the same tired rates, recovery and real breaks as its cleaning crew. */
-function finishTurnover(state: HotelState, member: StaffMember | undefined, room: Room, from: number, units: number, walk: number, reservations: RestReservation[]): { done: number; member?: StaffMember } {
-  if (!Number.isFinite(from)) return { done: Infinity, member };
-  if (!member || !fatigueOn()) return { done: inShift(from, units / (member ? staffRate(member) : 1) + walk, member), member };
+/**
+ * How far a housekeeper gets with a turnover from `from` (a walk to it, then
+ * the work): done, or (`left`, the units still to do) stopped at the end of
+ * the shift she does it in, and how she'd be then. She's walked out at the end
+ * of her shift, and the planner hands the room out afresh in the morning. A
+ * held suite must allow for the same tired rates, recovery and real breaks as
+ * its cleaning crew.
+ */
+function finishTurnover(state: HotelState, member: StaffMember | undefined, room: Room, from: number, units: number, walk: number, reservations: RestReservation[]): { done: number; member?: StaffMember; left: number } {
+  if (!Number.isFinite(from)) return { done: Infinity, member, left: 0 };
+  if (!member || !fatigueOn()) {
+    const rate = member ? staffRate(member) : 1;
+    const start = atWork(from, member);
+    if (!Number.isFinite(start)) return { done: Infinity, member, left: 0 };
+    const end = shiftEndAt(start, member);
+    if (start + walk + units / rate <= end + 1e-9) return { done: start + walk + units / rate, member, left: 0 };
+    return { done: end, member, left: units - Math.max(0, end - start - walk) * rate };
+  }
   let at = from, energy = fatigueAt(state, member, from), pos = roomTile(room);
   const advance = (until: number) => { energy = projectFatigue(member, [], at, until, energy); at = until; };
   const active = (hours: number) => {
@@ -153,27 +243,35 @@ function finishTurnover(state: HotelState, member: StaffMember | undefined, room
       }
     }
     const back = findRoute(state, restedAt, pos, TRAVEL.hoursPerTile);
-    if (!back) return { done: Infinity, member };
+    if (!back) return { done: Infinity, member, left: 0 };
     walk = Math.max(walk, back.hours);
   }
+  const stop = shiftEndAt(atWork(at, member), member);
+  const after = (left: number) => {
+    const hours = member.profile?.experience === 'rookie' ? 0 : STAFF_PERSONALITIES.experienceHours[member.profile?.experience ?? 'skilled'];
+    return { done: at, left, member: { ...member, at: pos, fatigueBreak: undefined,
+      stats: { workHours: member.stats?.workHours ?? hours, lateDays: 0, absentDays: 0, ...member.stats, fatigue: energy, fatigueAt: at } } };
+  };
   // Keep the existing conservative base-to-room transfer estimate. Fatigue
   // follows its elapsed walking time, while overnight gaps recover normally.
   for (let guard = 0; walk > 1e-9 && guard < 120; guard++) {
+    if (atWork(at, member) >= stop - 1e-9) return after(units);
     advance(atWork(at, member));
     const step = Math.min(walk, staffDutyAt(member, at).end - at);
     active(step); walk -= step;
   }
-  if (walk > 1e-9) return { done: Infinity, member };
+  if (walk > 1e-9) return { done: Infinity, member, left: 0 };
   const baseRate = staffRate({ ...member, stats: { ...member.stats!, fatigue: 0 } });
   for (let guard = 0; units > 1e-9 && guard < 2000; guard++) {
-    if (at - from > 60 * 24) return { done: Infinity, member };
+    if (at - from > 60 * 24) return { done: Infinity, member, left: 0 };
+    if (atWork(at, member) >= stop - 1e-9) return after(units);
     advance(atWork(at, member));
     if (energy >= STAFF_FATIGUE.breakAt - 1e-9) {
       const rest = planStaffRest(state, member, pos, at, reservations);
       energy = projectFatigue(member, rest.legs, at, rest.until, energy);
       at = rest.until;
       const back = findRoute(state, rest.at, pos, TRAVEL.hoursPerTile);
-      if (!back) return { done: Infinity, member };
+      if (!back) return { done: Infinity, member, left: 0 };
       active(back.hours);
       continue;
     }
@@ -182,28 +280,57 @@ function finishTurnover(state: HotelState, member: StaffMember | undefined, room
     const step = Math.min(units / rate, staffDutyAt(member, at).end - at, (threshold - energy) / fatigueGain(member));
     active(step); units -= step * rate;
   }
-  if (units > 1e-9) return { done: Infinity, member };
-  const hours = member.profile?.experience === 'rookie' ? 0 : STAFF_PERSONALITIES.experienceHours[member.profile?.experience ?? 'skilled'];
-  return { done: at, member: { ...member, at: pos, fatigueBreak: undefined,
-    stats: { workHours: member.stats?.workHours ?? hours, lateDays: 0, absentDays: 0, ...member.stats, fatigue: energy, fatigueAt: at } } };
+  if (units > 1e-9) return { done: Infinity, member, left: 0 };
+  return after(0);
 }
+
+/** Where an estimate starts: the end of this hour, as the tick has it; its start, before anyone's planned (the planner); or between hours, where this hour's plan leaves things. */
+type From = 'end' | 'start' | 'plan';
 
 /**
  * When a room being cleaned (or its guest's leaving, then cleaned) will be
  * done (absolute hours), as the housekeepers work it out hour by hour
- * (StaffManager.planStaff): each keeps at the room they're in; one who comes
- * free, at work, takes the best turnover waiting then (the fewest hours left,
- * ties to the earlier room; rooms they can't reach left out), walking to it
- * (a walk from base: they mostly go from one room to the next), and keeps at
- * it; a checkout's room joins when its guest leaves (up to tomorrow's, or this
- * room's guest's day); all in their shift hours, from the next hour (or this
- * one, between hours: before this hour's work is done). Never, with no
- * housekeepers.
+ * (StaffManager.planStaff): each keeps at the room she's in; then whoever
+ * comes free in the earliest hour (the roster's order within an hour, as the
+ * planner plans it) takes the best turnover waiting then: the suite `held`
+ * for a spotlight guest if she's a room attendant (they do it before their
+ * dailies), else the fewest hours left, ties to the earlier room (rooms they
+ * can't reach left out), walking to it (a walk from base: they mostly go from
+ * one room to the next), and keeps at it till the end of her shift (what's
+ * left goes back in the queue for the morning: she's walked out). The suite
+ * `first` (rushed: jumping the queue) goes to whoever would finish it first,
+ * from when she's next free. A checkout's room joins when its guest leaves
+ * (up to tomorrow's, or this room's guest's day: two days ahead, the arrival
+ * day's checkouts aren't counted yet); all in their shift hours, from the
+ * next hour (`from` 'start': this one, before anyone's planned). Between hours
+ * ('plan': a card), from where this hour's plan leaves things. Never, with no
+ * housekeepers. (A room attendant's dailies aren't counted: she's taken for a
+ * turnover runner otherwise. The tick judges before the hour's check-ins:
+ * their checkouts join from the next hour.)
  */
-function cleanedAt(state: HotelState, room: Room, between: boolean): number {
+function cleanedAt(state: HotelState, room: Room, from: From, first: string | undefined, held: string | undefined): number {
+  return from === 'plan' ? cleanedAfter(state, getStaffPlan(state), room, first, held) : simulate(state, room, from, first, held).done;
+}
+
+/** As cleanedAt, from where an hour's plan leaves things: its work done, everyone where it leaves them (the hour's housekeepers are already sent). */
+function cleanedAfter(state: HotelState, hour: StaffPlan, room: Room, first: string | undefined, held: string | undefined): number {
+  if (state.staff.housekeepers <= 0) return Infinity;
+  const worked = plannedWork(hour, 'turnover');
+  const left = (r: Room): Room => (r.status === 'cleaning' && worked.has(r.id) ? { ...r, cleaningHoursRemaining: r.cleaningHoursRemaining - worked.get(r.id)! } : r);
+  const self = left(room);
+  if (self.status === 'cleaning' && self.cleaningHoursRemaining <= 1e-9) return hourEnd(state); // (done this hour)
+  const rooms = state.rooms.map(r => {
+    const after = left(r);
+    return after.status === 'cleaning' && after.cleaningHoursRemaining <= 1e-9 ? { ...after, status: 'vacant' as const, cleaningHoursRemaining: 0 } : after;
+  });
+  return simulate({ ...state, rooms, staffRoster: rosterAfter(state, hour) }, self, 'end', first, held).done;
+}
+
+/** The estimate itself (cleanedAt), from this hour's end or start; `by`: which of the hour's housekeepers (housekeepersOf) does the room. */
+function simulate(state: HotelState, room: Room, from: 'end' | 'start', first: string | undefined, held: string | undefined): { done: number; by?: number } {
   const staff = state.staff.housekeepers;
-  if (staff <= 0) return Infinity;
-  const t = between ? hourEnd(state) - 1 : hourEnd(state);
+  if (staff <= 0) return { done: Infinity };
+  const t = from === 'start' ? hourEnd(state) - 1 : hourEnd(state);
   const walk = baseWalkHours(state);
   const turnover = HOUSEKEEPING.turnoverDuration[state.housekeeping.turnoverQuality] ?? HOUSEKEEPING.turnoverDuration.standard;
   const leavesOn = (r: Room) => {
@@ -223,39 +350,78 @@ function cleanedAt(state: HotelState, room: Room, between: boolean): number {
       if (leaving && leaving.day <= horizon) jobs.push({ id: r.id, hours: turnover, from: Math.max(t, (Math.max(leaving.day, state.day) - 1) * 24 + checkoutHour(leaving.g, state)), order });
     }
   });
-  if (!jobs.some(j => j.id === room.id)) return Infinity;
+  if (!jobs.some(j => j.id === room.id)) return { done: Infinity };
   const taken = new Set<string>();
   const free: number[] = [];
   const workers: Array<StaffMember | undefined> = [];
+  const attendant: boolean[] = [];
   const reservations = fatigueOn() ? restReservations(state) : [];
-  // Each keeps at the room they're in (no walk to it)
-  for (const m of (state.staffRoster ?? []).filter(x => x.role === 'housekeeper' && !x.leaving).slice(0, staff)) {
+  const roomOf = (id: string) => state.rooms.find(r => r.id === id) ?? room;
+  /** Housekeeper k does a job from `at`: when she's done (undefined: not this shift; what's left goes back in the queue). */
+  const work = (k: number, job: Job, at: number, walkHours: number): number | undefined => {
+    const result = finishTurnover(state, workers[k], roomOf(job.id), at, job.hours, walkHours, reservations);
+    free[k] = result.done;
+    workers[k] = result.member;
+    if (result.left <= 1e-9) return result.done;
+    taken.delete(job.id);
+    job.hours = result.left;
+    job.from = result.done;
+    return undefined;
+  };
+  /** When housekeeper k would finish a job taken from `at`, shift by shift (a walk to it each time). */
+  const finishOf = (k: number, job: Job, at: number) => {
+    let from = at, units = job.hours, member = workers[k];
+    for (let shifts = 0; shifts < 60; shifts++) {
+      const result = finishTurnover(state, member, roomOf(job.id), from, units, walk, reservations);
+      if (result.left <= 1e-9 || !Number.isFinite(result.done)) return result.done;
+      ({ done: from, left: units, member } = result);
+    }
+    return Infinity;
+  };
+  // Each keeps at the room she's in (no walk to it)
+  for (const m of housekeepersOf(state.staffRoster ?? [], staff)) {
+    const k = free.length;
+    free.push(t); workers.push(m); attendant.push(specialtyOf(m) === 'room_attendant');
     const job = m.roomId ? jobs.find(j => j.id === m.roomId && !taken.has(j.id) && j.from <= t + 1e-9) : undefined; // (a turnover under way: not a daily clean)
-    if (!job || attendance(m, Math.floor(t / 24) + 1).absent) { free.push(t); workers.push(m); continue; }
+    if (!job || attendance(m, Math.floor(t / 24) + 1).absent || atWork(t, m) > t + 1e-9) continue; // (off shift: walked out)
     taken.add(job.id);
-    const result = finishTurnover(state, m, state.rooms.find(r => r.id === job.id) ?? room, t, job.hours, 0, reservations);
-    if (job.id === room.id) return result.done;
-    free.push(result.done);
-    workers.push(result.member);
+    const done = work(k, job, t, 0);
+    if (job.id === room.id && done !== undefined) return { done, by: k };
   }
-  while (free.length < staff) { free.push(t); workers.push(undefined); }
-  for (let guard = 0; guard < 2000; guard++) {
+  while (free.length < staff) { free.push(t); workers.push(undefined); attendant.push(false); }
+  const hourOf = (k: number) => Math.floor(free[k] + 1e-9);
+  for (let guard = 0; guard < 4000; guard++) {
     for (let k = 0; k < free.length; k++) free[k] = atWork(free[k], workers[k]);
-    const i = free.reduce((best, x, k) => (x < free[best] ? k : best), 0);
+    // Whoever's free in the earliest hour; within it, the roster's order (each plans her hour in turn)
+    const i = free.reduce((best, _x, k) => (hourOf(k) < hourOf(best) ? k : best), 0);
+    if (!Number.isFinite(free[i])) return { done: Infinity };
     const waiting = jobs.filter(j => !taken.has(j.id) && j.from <= free[i] + 1e-9);
     if (waiting.length === 0) {
       // Nothing yet: till the next guest leaves (this room's among them)
       free[i] = Math.min(...jobs.filter(j => !taken.has(j.id)).map(j => j.from));
       continue;
     }
-    const job = waiting.reduce((best, j) => (j.hours < best.hours || (j.hours === best.hours && j.order < best.order) ? j : best));
+    const rushed = first !== undefined ? waiting.find(j => j.id === first) : undefined;
+    if (rushed) {
+      // Kept for whoever would finish it first, from when she's next free
+      let k = 0;
+      let soonest = Infinity;
+      free.forEach((x, n) => {
+        const done = finishOf(n, rushed, Math.max(x, rushed.from));
+        if (done < soonest - 1e-9) { soonest = done; k = n; }
+      });
+      taken.add(rushed.id);
+      const done = work(k, rushed, Math.max(free[k], rushed.from), walk);
+      if (rushed.id === room.id && done !== undefined) return { done, by: k };
+      continue;
+    }
+    const job = (attendant[i] && held !== undefined ? waiting.find(j => j.id === held) : undefined)
+      ?? waiting.reduce((best, j) => (j.hours < best.hours || (j.hours === best.hours && j.order < best.order) ? j : best));
     taken.add(job.id);
-    const result = finishTurnover(state, workers[i], state.rooms.find(r => r.id === job.id) ?? room, free[i], job.hours, walk, reservations);
-    if (job.id === room.id) return result.done;
-    free[i] = result.done;
-    workers[i] = result.member;
+    const done = work(i, job, free[i], walk);
+    if (job.id === room.id && done !== undefined) return { done, by: i };
   }
-  return Infinity;
+  return { done: Infinity };
 }
 
 const above = (a: number[], b: number[]) => {
@@ -280,47 +446,115 @@ const rankFor = (plan: Pick<SpotlightPlan, 'kind'>) => (room: Room) => (plan.kin
 /**
  * The suite to hold: the one held now while it'll still do (picked by hand,
  * or the best when it was picked: a better one coming free later doesn't take
- * the hold from a suite that's ready), else (if the hotel holds one) the best
- * that will be free; none once let go by hand.
+ * the hold from a suite that's ready; one that won't be ready by their hour
+ * gives way to one that will and suits them as well), else (if the hotel holds one) the best that
+ * will be free by their hour, or failing that by the last check-in (they wait
+ * for it); none once let go by hand.
  */
 function pickHold(state: HotelState, plan: SpotlightPlan): string | undefined {
   if (plan.released) return undefined;
   const held = plan.roomId ? state.rooms.find(r => r.id === plan.roomId) : undefined;
   // Kept while it'll be ready for them by the last check-in (they wait for it); a celebrity's (not picked by hand)
   // moves up to a suite higher up that's ready: the top floor is the point
-  if (held && freeBy(state, held, lastCheckIn(plan)) && (plan.chosen || holdPolicy(state) === 'hold')) {
-    const higher = plan.kind === 'celebrity' && !plan.chosen ? bestOf(state.rooms.filter(r => r.floor > held.floor && r.status === 'vacant' && freeBy(state, r, plan)), rankFor(plan)) : null; // (ready now: never giving up a ready suite for one that might not be)
+  if (held && freeBy(state, held, lastCheckIn(plan), false, true) && (plan.chosen || holdPolicy(state) === 'hold')) {
+    // A hold that won't be ready by their hour (a second choice, or one that's slipped), not picked by hand, gives
+    // way to a suite that will be and suits them as well (as they'd take one free when they come)
+    if (!plan.chosen && !freeBy(state, held, plan, false, true)) {
+      const ready = bestOf(state.rooms.filter(r => r.id !== held.id && freeBy(state, r, plan, false, true) && !above(rankFor(plan)(held), rankFor(plan)(r))), rankFor(plan));
+      if (ready) return ready.id;
+    }
+    const higher = plan.kind === 'celebrity' && !plan.chosen ? bestOf(state.rooms.filter(r => r.floor > held.floor && r.status === 'vacant' && freeBy(state, r, plan, false, true)), rankFor(plan)) : null; // (ready now: never giving up a ready suite for one that might not be)
     return (higher ?? held).id;
   }
   if (holdPolicy(state) === 'none') return undefined;
-  return bestOf(state.rooms.filter(r => freeBy(state, r, plan)), rankFor(plan))?.id;
+  // Each judged as if held (its turnover first in the queue): the best ready by their hour, else the best ready by
+  // the last check-in (they wait for it; of two as good, the one ready sooner)
+  const sooner = (r: Room) => [...rankFor(plan)(r), -readyAt(state, r, lastCheckIn(plan), false, true)];
+  return (bestOf(state.rooms.filter(r => freeBy(state, r, plan, false, true)), rankFor(plan))
+    ?? bestOf(state.rooms.filter(r => freeBy(state, r, lastCheckIn(plan), false, true)), sooner))?.id;
 }
 
-/** The plan as if they came at the last check-in (what's ready for them by then). */
-const lastCheckIn = <P extends Pick<SpotlightPlan, 'arrivalHour'>>(plan: P): P => ({ ...plan, arrivalHour: ECONOMY.checkInEndHour });
+/** The plan as if they came at the last check-in (what's ready for them by then, a guest leaving that morning's suite too). */
+const lastCheckIn = <P extends Judged>(plan: P): P & { byLast: true } => ({ ...plan, arrivalHour: ECONOMY.checkInEndHour, byLast: true });
 
-/** For a suite's card while a spotlight guest is announced: whether it's held for them, or could be (null: neither). */
-export function holdFor(state: HotelState, room: Room): { held: boolean; who: string; when: string } | null {
+/**
+ * For a suite's card while a spotlight guest is announced: whether it's held
+ * for them, or could be (null: neither): a suite that would be ready for them,
+ * held, by the last check-in; `readyBy` if only after their hour (they'd wait
+ * for it, or take the `rival`: free sooner, by `rivalBy` if after their hour);
+ * `here`: they've come.
+ */
+export function holdFor(state: HotelState, room: Room): { held: boolean; who: string; when: string; readyBy?: string; rival?: string; rivalBy?: string; here?: boolean } | null {
   const plan = spotlightOn() ? state.spotlight : undefined;
   if (!plan || plan.status !== 'announced') return null;
   const held = plan.roomId === room.id;
-  if (!held && !freeBy(state, room, plan, true)) return null;
-  return { held, who: WHO[plan.kind], when: shortWhen(plan) };
+  const at = readyAt(state, room, lastCheckIn(plan), true, true);
+  if (!held && at > arrivalTime(lastCheckIn(plan))) return null;
+  const late = at > arrivalTime(plan) && Number.isFinite(at) && at <= arrivalTime(lastCheckIn(plan));
+  const rival = late ? rivalOf(state, plan, room, at, true) : null;
+  return {
+    held, who: WHO[plan.kind], when: shortWhen(plan), ...(late ? { readyBy: readyClock(at) } : {}),
+    ...(rival ? { rival: roomName(rival.room), ...(rival.at > arrivalTime(plan) ? { rivalBy: readyClock(rival.at) } : {}) } : {}),
+    ...(hourEnd(state) > arrivalTime(plan) ? { here: true } : {}),
+  };
 }
 
-/** Hold a suite for the announced spotlight guest by hand (null: it isn't a suite that will be free by then). */
+/**
+ * Of a suite held for the spotlight guest that won't be ready till `at`,
+ * after their hour: the one they'd take instead, as things stand with this
+ * one held (spotlightArrival takes one that suits them as well once it's
+ * free): at least as good, and free in an earlier hour than this one (the
+ * soonest; of those, the best); `at`: the hour they'd take it. One with a
+ * refit booked is judged as that leaves it (refitBooked).
+ */
+function rivalOf(state: HotelState, plan: SpotlightPlan, room: Room, at: number, between: boolean): { room: Room; at: number } | null {
+  const as = state.spotlight?.roomId === room.id ? state : { ...state, spotlight: { ...plan, roomId: room.id } };
+  const rank = rankFor(plan);
+  const due = arrivalTime(plan);
+  const mine = Math.ceil(at - 1e-9);
+  let first: { id: string | undefined } | undefined;
+  const rushed = () => (first ??= { id: rushedFrom(as, between ? 'plan' : 'end') }).id;
+  const timed = state.rooms.filter(r => r.id !== room.id).flatMap(r => {
+    const free = readyAt(as, r, lastCheckIn(plan), between, false, rushed);
+    const refit = r.pendingRefit && free < Infinity ? refitBooked(as, plan, r, free, between) : null;
+    if (refit === undefined || above(rank(room), rank(refit?.room ?? r))) return [];
+    return [{ r, at: Math.max(due, Math.ceil((refit?.at ?? free) - 1e-9)) }];
+  }).filter(x => x.at < mine);
+  if (timed.length === 0) return null;
+  const soonest = Math.min(...timed.map(x => x.at));
+  return { room: bestOf(timed.filter(x => x.at === soonest).map(x => x.r), rank)!, at: soonest };
+}
+
+/**
+ * A suite with a refit booked, free at `free`, for the spotlight guest who'd
+ * take it (not held): the refit starts once it's empty, in that hour, if
+ * there's the money (as things stand) and it changes anything (null: it
+ * won't, and the suite's as it is); then it's the suite refitted, free once
+ * that's done (undefined: not a suite for them, refitted).
+ */
+function refitBooked(state: HotelState, plan: SpotlightPlan, room: Room, free: number, between: boolean): { room: Room; at: number } | null | undefined {
+  const empty: Room = { ...room, status: 'vacant', cleaningHoursRemaining: 0, guestId: undefined };
+  const refitted = refitRoom({ ...state, rooms: state.rooms.map(r => (r.id === room.id ? empty : r)) }, room.id, room.pendingRefit!, 'now');
+  const after = refitted?.rooms.find(r => r.id === room.id);
+  if (!refitted || !after || after.status !== 'renovating') return null;
+  if (!(readyAt(refitted, after, lastCheckIn(plan), between) < Infinity)) return undefined;
+  return { room: after, at: Math.max(hourEnd(state), Math.ceil(free - 1e-9)) + after.renovationHoursRemaining };
+}
+
+/** Hold a suite for the announced spotlight guest by hand (null: it isn't a suite that would be ready for them, held, by the last check-in). */
 export function holdSuite(state: HotelState, roomId: string): HotelState | null {
   const plan = spotlightOn() ? state.spotlight : undefined;
   const room = state.rooms.find(r => r.id === roomId);
-  if (!plan || plan.status !== 'announced' || !room || !freeBy(state, room, plan, true)) return null;
-  return { ...state, spotlight: { ...plan, roomId, chosen: true, released: false } };
+  if (!plan || plan.status !== 'announced' || !room || !freeBy(state, room, lastCheckIn(plan), true, true)) return null;
+  const { waitNoted: _noted, ...rest } = plan;
+  return { ...state, spotlight: { ...rest, roomId, chosen: true, released: false } };
 }
 
-/** Let the held suite go: it can be booked, and the spotlight guest takes the best suite free when they come. */
+/** Let the held suite go: it can be booked, and the spotlight guest takes the best suite free when they come (here already, as soon as one's free). */
 export function releaseHold(state: HotelState): HotelState | null {
   const plan = spotlightOn() ? state.spotlight : undefined;
   if (!plan || plan.status !== 'announced' || !plan.roomId) return null;
-  const { roomId: _held, ...rest } = plan;
+  const { roomId: _held, waitNoted: _noted, ...rest } = plan;
   return { ...state, spotlight: { ...rest, chosen: false, released: true } };
 }
 
@@ -335,23 +569,44 @@ export function holdLetGo(state: HotelState): boolean {
   return spotlightOn() && state.spotlight?.status === 'announced' && !!state.spotlight.released;
 }
 
-/** The suite held for the spotlight guest that a booking of this many nights may not take (they'd still be in it when the guest comes). */
-export function heldFrom(state: HotelState, nights: number): string | null {
-  const plan = spotlightOn() ? state.spotlight : undefined;
-  if (!plan || plan.status !== 'announced' || !plan.roomId) return null;
-  return state.day + nights >= plan.arrivalDay ? plan.roomId : null;
-}
-
-/** Whether a room is the suite held for an announced spotlight guest (a refit booked on it waits till they've been). */
+/**
+ * Whether a room is the suite held for an announced spotlight guest: nobody
+ * else is booked or moved into it till they come, however short their stay,
+ * its turnover jumps the housekeepers' queue if it wouldn't be ready for them
+ * in its turn (rushFor), room attendants do it before their dailies, and a
+ * refit booked on it waits till they've been.
+ */
 export function heldNow(state: HotelState, roomId: string): boolean {
-  const plan = spotlightOn() ? state.spotlight : undefined;
-  return !!plan && plan.status === 'announced' && plan.roomId === roomId;
+  return heldId(state) === roomId;
 }
 
 /** Whether renovating a room now would run past the spotlight guest's arrival in the suite held for them. */
 export function holdBlocksRenovation(state: HotelState, roomId: string, hours: number): boolean {
   const plan = spotlightOn() ? state.spotlight : undefined;
   return !!plan && plan.status === 'announced' && plan.roomId === roomId && hourEnd(state) + hours > arrivalTime(plan);
+}
+
+/**
+ * How far past their hour a suite's estimate must be for the story to say
+ * they'll wait for it: a day or two ahead, more than SPOTLIGHT.slipMargin (a
+ * few minutes either way is finer than the estimate can judge); from the hour
+ * before they come (their room's decided at its end), any (it's certain).
+ */
+const waitMargin = (state: HotelState, plan: SpotlightPlan) => (hourEnd(state) >= arrivalTime(plan) ? 0 : SPOTLIGHT.slipMargin);
+
+/**
+ * For the story, of a suite held: when it'll be ready, if only after their
+ * hour (by more than `margin`): they'll wait for it (`here`: they've come, and
+ * are waiting), or take one as good free sooner (as the card has it).
+ */
+function waitFor(state: HotelState, plan: SpotlightPlan, room: Room, here = false, margin = 0): string {
+  const at = readyAt(state, room, lastCheckIn(plan), false, true);
+  if (!(at > arrivalTime(plan) + margin && Number.isFinite(at))) return '';
+  const rival = rivalOf(state, plan, room, at, false);
+  const then = rival
+    ? `they'll take ${roomName(rival.room)}${rival.at > arrivalTime(plan) ? ` (free by about ${readyClock(rival.at)})` : ''} if it's still free, else wait for it`
+    : here ? "they're waiting for it" : "they'll wait for it";
+  return ` It'll be ready by about ${readyClock(at)}: ${then}.`;
 }
 
 function log(state: HotelState, plan: SpotlightPlan, type: string, message: string, roomId?: string): HotelState {
@@ -398,12 +653,14 @@ export function planSpotlight(state: HotelState): { state: HotelState; events: G
   if (plan.status === 'planned' && current.day >= plan.announceDay && current.hour === at) {
     if (current.starRating < SPOTLIGHT.fromStars || !hasSuite) return { state: { ...current, spotlight: { ...plan, status: 'done' } }, events };
     plan = { ...plan, status: 'announced' };
-    const roomId = pickHold(current, plan);
+    const roomId = pickHold({ ...current, spotlight: plan }, plan); // (judged as announced: rushed if held, as it will be)
     plan = { ...plan, ...(roomId ? { roomId } : {}) };
     current = { ...current, spotlight: plan };
     const room = current.rooms.find(r => r.id === roomId);
+    const note = room ? waitFor(current, plan, room, false, waitMargin(current, plan)) : '';
+    if (note) current = { ...current, spotlight: plan = { ...plan, waitNoted: true } };
     const wants = plan.kind === 'celebrity' ? 'wants a top-floor suite' : 'wants a suite';
-    const held = room ? ` ${roomName(room)} is held for them.` : holdPolicy(current) === 'hold' ? ' Every suite is taken until after they come.' : '';
+    const held = room ? ` ${roomName(room)} is held for them.${note}` : holdPolicy(current) === 'hold' ? ' Every suite is taken until after they come.' : '';
     const message = `A ${WHO[plan.kind]} arrives ${whenDue(plan)} and ${wants}.${held}`;
     current = log(current, plan, 'spotlight_announced', message, roomId);
     events.push({ type: 'spotlight_announced', message, data: { kind: plan.kind, roomId } });
@@ -414,16 +671,30 @@ export function planSpotlight(state: HotelState): { state: HotelState; events: G
   if (plan.status === 'announced') {
     if (current.day > plan.arrivalDay) return { state: { ...current, spotlight: { ...plan, status: 'done' } }, events }; // (they never came)
     const roomId = pickHold(current, plan);
+    const kept = roomId === plan.roomId ? current.rooms.find(r => r.id === roomId) : undefined;
+    const here = hourEnd(current) > arrivalTime(plan); // (they've come: waiting for it)
+    if (kept && !plan.waitNoted && kept.status !== 'occupied') {
+      // The hold's slipped past their hour: said once (the estimate can swing back and forth), once its guest's gone
+      // (while they're still in it, the estimate swings by more than the margin), and only once it's clearly past it
+      // (waitMargin)
+      const note = waitFor(current, plan, kept, here, waitMargin(current, plan));
+      if (note) {
+        plan = { ...plan, waitNoted: true };
+        current = log({ ...current, spotlight: plan }, plan, 'spotlight_hold', `${roomName(kept)}, held for the ${WHO[plan.kind]}, ${here ? "isn't ready yet" : "won't be ready when they come"}.${note}`, kept.id);
+      }
+    }
     if (roomId !== plan.roomId) {
       const wasId = plan.roomId;
       const was = current.rooms.find(r => r.id === wasId);
       const moved = current.rooms.find(r => r.id === roomId);
-      const { roomId: _was, ...rest } = plan;
+      const { roomId: _was, waitNoted: _noted, ...rest } = plan;
       plan = { ...rest, ...(roomId ? { roomId } : {}), chosen: false };
       current = { ...current, spotlight: plan };
-      if (moved) current = log(current, plan, 'spotlight_hold', `The suite held for the ${WHO[plan.kind]} is now ${roomName(moved)}.`, moved.id);
+      const note = moved ? waitFor(current, plan, moved, here, waitMargin(current, plan)) : '';
+      if (note) current = { ...current, spotlight: plan = { ...plan, waitNoted: true } };
+      if (moved) current = log(current, plan, 'spotlight_hold', `${was ? `The suite held for the ${WHO[plan.kind]} is now ${roomName(moved)}` : `${roomName(moved)} is now held for the ${WHO[plan.kind]}`}.${note}`, moved.id);
       else if (holdPolicy(current) === 'hold') {
-        const late = was && hourEnd(current) > arrivalTime(plan); // (they're here, waiting for it)
+        const late = was && here; // (they're here, waiting for it)
         current = log(current, plan, 'spotlight_hold', late
           ? `${roomName(was)} won't be ready for the ${WHO[plan.kind]} today after all: they'll take the best room free.`
           : `No suite will be free for the ${WHO[plan.kind]} by then: they'll take the best suite free when they come, or the best room.`);

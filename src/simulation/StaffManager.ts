@@ -1,4 +1,4 @@
-import type { HotelState, Room, StaffMember, StaffPlan, StaffItinerary, StaffRole, FrontDeskShift, Leg, WalkLeg, TilePos, ReceptionSupport } from './types.js';
+import type { HotelState, Room, StaffMember, StaffPlan, StaffRush, StaffItinerary, StaffRole, FrontDeskShift, Leg, WalkLeg, TilePos, ReceptionSupport } from './types.js';
 import { STAFF, TRAVEL, GUEST_PROFILE, GUEST_HOUSEKEEPING } from '../config/balance.js';
 import { findRoute, routeFromStreet, routeToStreet, getStaffBases, getAccessibleBreakRooms, isEntranceTile, stepHours, doorTile, isHallway } from './Layout.js';
 import { isRoomReachable } from './HotelState.js';
@@ -14,6 +14,7 @@ import { planDeskClerk, scheduledDeskLanes, physicalDeskLanes } from './FrontDes
 import { fatigueOn, fatigueAt, projectFatigue, planStaffRest, restReservations, fatigueGain } from './StaffFatigue.js';
 import { receptionSupports } from './CrossTraining.js';
 import { cleaningSupports, planClerkCleaning } from './ClerkCleaning.js';
+import { rushFor, heldNow } from './Spotlight.js';
 
 // Housekeepers and maintenance workers are people with a place in the
 // building. Each hour boundary, every one of them gets an itinerary for the
@@ -130,17 +131,18 @@ interface Job {
  * done earlier this hour (when re-planning mid-hour), which the rooms' hours
  * don't show until the tick.
  */
-function jobQueues(state: HotelState, done: { turnover: Map<string, number>; daily: Map<string, number>; repair?: Map<string, number> } = { turnover: new Map(), daily: new Map() }): Record<StaffRole, Job[]> {
+function jobQueues(state: HotelState, done: { turnover: Map<string, number>; daily: Map<string, number>; repair?: Map<string, number> } = { turnover: new Map(), daily: new Map() }, rush?: StaffRush): Record<StaffRole, Job[]> {
   const reachable = (r: Room) => isRoomReachable(state, r);
   const T = hourStart(state);
   const guestOut = (r: Room) => state.guests.some(g => g.id === r.guestId && isGuestAway(g, T));
   const left = (r: Room, kind: 'turnover' | 'daily') =>
     (kind === 'turnover' ? r.cleaningHoursRemaining : r.dailyCleanHoursRemaining) - (done[kind].get(r.id) ?? 0);
   const dailyRooms = state.rooms.filter(r => r.status === 'occupied' && left(r, 'daily') > 1e-9 && reachable(r) && !guestsAsleepIn(state, r));
+  const first = rush && !rush.staffId ? rush.roomId : undefined; // (rushed for nobody in particular: first for whoever's free, clerks helping too)
   const housekeeping: Job[] = [
-    // Turnovers first (they block bookings), soonest-finished first
+    // Turnovers first (they block bookings): soonest-finished first (or the held suite, rushed for anyone)
     ...state.rooms.filter(r => r.status === 'cleaning' && left(r, 'turnover') > 1e-9 && reachable(r))
-      .sort((a, b) => left(a, 'turnover') - left(b, 'turnover'))
+      .sort((a, b) => Number(b.id === first) - Number(a.id === first) || left(a, 'turnover') - left(b, 'turnover'))
       .map(room => ({ room, kind: 'turnover' as const, hours: left(room, 'turnover') })),
     // Then the daily cleans queued at HOUSEKEEPING.dailyCleaningHour (none
     // whose guests are asleep in them): rooms whose guest is out first
@@ -224,27 +226,56 @@ function roomClearAt(state: HotelState, room: Room): number {
  * Plan every housekeeper's and maintenance worker's coming hour from the
  * state at its start. Each worker keeps at the room they were on (if it still
  * needs them), then takes the most urgent unclaimed job; one worker per room.
- * A walk that doesn't finish by the end of the hour carries over.
+ * A walk that doesn't finish by the end of the hour carries over. The suite
+ * held for a spotlight guest jumps the housekeepers' queue (`rush`) if, as the
+ * hour planned without that leaves things, it wouldn't be ready for them in
+ * its turn, and rushing gets it ready sooner (Spotlight.rushFor; undefined:
+ * decide that here, null: not rushed).
  */
 export function planStaff(
   state: HotelState,
   roster: StaffMember[] = getRoster(state),
   from = hourStart(state),
   done?: { turnover: Map<string, number>; daily: Map<string, number>; repair?: Map<string, number> },
+  rush?: StaffRush | null,
+): StaffPlan {
+  if (rush !== undefined) return planHour(state, roster, from, done, rush ?? undefined);
+  const plain = planHour(state, roster, from, done, undefined);
+  const pick = rushFor(state, plain);
+  if (!pick) return plain;
+  const rushed = planHour(state, roster, from, done, pick.rush);
+  return pick.helps(rushed) ? rushed : plain;
+}
+
+function planHour(
+  state: HotelState,
+  roster: StaffMember[],
+  from: number,
+  done: { turnover: Map<string, number>; daily: Map<string, number>; repair?: Map<string, number> } | undefined,
+  rush: StaffRush | undefined,
 ): StaffPlan {
   const T = hourStart(state);
   const end = T + 1;
   const pace = TRAVEL.hoursPerTile;
-  const queues = jobQueues(state, done);
+  const queues = jobQueues(state, done, rush);
   const personalQueues = new Map(roster.map(m => {
     let queue = queues[m.role];
+    if (m.role === 'housekeeper' && rush?.staffId) {
+      // The rushed suite: kept for the housekeeper who'd finish it first (first in her queue), out of everyone else's
+      const suite = queue.find(j => j.kind === 'turnover' && j.room.id === rush.roomId);
+      queue = queue.filter(j => j !== suite);
+      if (suite && m.id === rush.staffId) queue = [suite, ...queue];
+    }
     const specialty = specialtyOf(m);
     if (specialty === 'room_attendant') {
       const out = (j: Job) => {
         const guest = state.guests.find(g => g.id === j.room.guestId);
         return !!guest && partyOutOfRoom(guest, j.room, T + 0.5, T + 0.5);
       };
-      queue = [...queue.filter(j => j.kind === 'daily').sort((a, b) => Number(out(b)) - Number(out(a))), ...queue.filter(j => j.kind !== 'daily')];
+      // The suite held for a spotlight guest before her dailies, however soon it's due (dailies don't block bookings;
+      // the other turnovers she'd do after them anyway), unless it's rushed for someone else
+      const held = (j: Job) => j.kind === 'turnover' && heldNow(state, j.room.id);
+      queue = [...queue.filter(held), ...queue.filter(j => j.kind === 'daily').sort((a, b) => Number(out(b)) - Number(out(a))), ...queue.filter(j => j.kind !== 'daily' && !held(j))];
     } else if (specialty === 'preventive') {
       const previous = state.staffPlan?.itineraries.find(it => it.staffId === m.id);
       const preventive = state.rooms.filter(room => room.status === 'occupied' && isRoomReachable(state, room)
@@ -738,12 +769,12 @@ export function planStaff(
     }
     for (const m of [...clerks].sort((a, b) => Number(!!b.cleaningSupport) - Number(!!a.cleaningSupport))) {
       const plan = planClerkCleaning(deskState, m, deskPlans.get(m.id)!, coverage,
-        queues.housekeeper.filter(j => j.kind === 'turnover').map(j => ({ room: j.room, hours: j.hours, clearAt: roomClearAt(state, j.room) })), claimed, from);
+        queues.housekeeper.filter(j => j.kind === 'turnover' && !(rush?.staffId && j.room.id === rush.roomId)).map(j => ({ room: j.room, hours: j.hours, clearAt: roomClearAt(state, j.room) })), claimed, from);
       deskPlans.set(m.id, plan); coverage.set(m.id, plan);
     }
-    return { start: T, itineraries: itineraries.map(it => deskPlans.get(it.staffId) ?? it) };
+    return { start: T, itineraries: itineraries.map(it => deskPlans.get(it.staffId) ?? it), ...(rush ? { rush } : {}) };
   }
-  return { start: T, itineraries };
+  return { start: T, itineraries, ...(rush ? { rush } : {}) };
 }
 
 /** This hour's staff plan: the one made at the hour boundary, or (for a state without one) planned now. */
@@ -886,9 +917,22 @@ export function replanStaff(state: HotelState, t: number): HotelState {
     return { ...m, at: cut.at ?? finalTile(it.legs), carry: undefined, roomId };
   });
   const sofar: StaffPlan = { start: plan.start, itineraries: [...done].map(([staffId, legs]) => ({ staffId, legs, end: { at: null } })) };
-  const fresh = planStaff(state, now, t, { turnover: plannedWork(sofar, 'turnover'), daily: plannedWork(sofar, 'daily'), repair: plannedWork(sofar, 'repair') });
+  const rush = keptRush(state, plan.rush, now);
+  const fresh = planStaff(state, now, t, { turnover: plannedWork(sofar, 'turnover'), daily: plannedWork(sofar, 'daily'), repair: plannedWork(sofar, 'repair') }, rush);
   const itineraries = fresh.itineraries.map(it => ({ ...it, legs: [...(done.get(it.staffId) ?? []), ...it.legs] }));
-  return { ...state, staffPlan: { start: plan.start, itineraries } };
+  return { ...state, staffPlan: { start: plan.start, itineraries, ...(fresh.rush ? { rush: fresh.rush } : {}) } };
+}
+
+/**
+ * The hour's rush, as decided at its start, for a re-plan in the hour: none
+ * once the suite's no longer held; kept for the housekeeper it was kept for
+ * while she's still working here; undefined (decided again, as at the hour's
+ * start, among those still working: not handed to whoever's first on the
+ * roster, however slow) once she's been let go.
+ */
+function keptRush(state: HotelState, rush: StaffRush | undefined, roster: StaffMember[]): StaffRush | null | undefined {
+  if (!rush || !heldNow(state, rush.roomId)) return null;
+  return rush.staffId && !roster.some(m => m.id === rush.staffId && m.role === 'housekeeper' && !m.leaving) ? undefined : rush;
 }
 
 /** The legs before a given one. */

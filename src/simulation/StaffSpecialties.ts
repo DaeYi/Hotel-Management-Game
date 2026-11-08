@@ -3,7 +3,7 @@ import { STAFF_PERSONALITIES, STAFF_SPECIALTIES } from '../config/staff.js';
 import { specialtyOf } from './StaffProfiles.js';
 import { spendingOf } from './Spending.js';
 import { getAvailableRooms } from './HotelState.js';
-import { heldFrom } from './Spotlight.js';
+import { heldNow } from './Spotlight.js';
 import { profileRoom, fitsParty, partyPriceFactor, classPriceFactor } from './RoomProfile.js';
 import { partyOf } from './Party.js';
 import { getPartyFairPrice } from './StarRatingManager.js';
@@ -26,7 +26,7 @@ export function offerUpsell(state: HotelState, guestId: string, member: StaffMem
   const beingRepaired = new Set((state.staffPlan?.itineraries ?? []).flatMap(it => it.legs.filter(l =>
     l.kind === 'stay' && l.job === 'repair' && l.start < now && l.end > (state.staffPlan?.start ?? now - 1)).map(l => (l as StayLeg).placeId)));
   const candidates = getAvailableRooms(state).filter(r => rank[r.type] > rank[original.type] && !beingRepaired.has(r.id)
-    && r.pricePerNight > original.pricePerNight && r.id !== heldFrom(state, guest.stayLength)
+    && r.pricePerNight > original.pricePerNight && !heldNow(state, r.id)
     && fitsParty(profileRoom(r), party)
     && partyPriceFactor(profileRoom(r), party) === classPriceFactor(profileRoom(r))
     && r.pricePerNight <= guest.budget

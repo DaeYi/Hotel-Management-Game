@@ -197,7 +197,7 @@ export function StaffPanel() {
           </div>
           {holdLetGo(state) && <div class="small warn-text">The hold was let go for the guest coming now: Hold a suite to hold one again, or pick one on its card.</div>}
           <div class="dim tiny">
-            Hold one: the best suite free by then is kept for them (nobody who'd still be in it can book it), and they check in to it
+            Hold one: the best suite free by then (or, failing that, the best ready that evening: they wait for it) is kept for them (nobody else can book it till they come; its turnover jumps the housekeepers' queue if it wouldn't be ready in its turn), and they check in to it
             first in line. Don't: they take the best suite free when they come, or any room. Either way you can hold or let go a suite
             from its card.
           </div>

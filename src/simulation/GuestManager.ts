@@ -25,7 +25,7 @@ import { hospitalityReview } from './StaffHospitality.js';
 import { roomFit, type RoomFeature } from './Preferences.js';
 import { getTotalDemandMultiplier } from './SeasonManager.js';
 import { getReputationPenaltyMultiplier } from './StoryGenerator.js';
-import { spotlightOn, spotlightArrival, heldFrom, judgedStars, expectationAt, amenityRuleAt, celebrityPull, spotlightNightRate } from './Spotlight.js';
+import { spotlightOn, spotlightArrival, heldNow, judgedStars, expectationAt, amenityRuleAt, celebrityPull, spotlightNightRate } from './Spotlight.js';
 
 export function generateGuestTrait(prng: PRNG): GuestTrait {
   const roll = prng.next();
@@ -338,11 +338,8 @@ export function processArrivals(
       }
     }
   }
-  // The suite held for an announced spotlight guest is no one else's if they'd still be in it when the guest comes
-  const holdOut = (rooms: Room[], g: Guest) => {
-    const held = heldFrom(state, g.stayLength);
-    return held ? rooms.filter(r => r.id !== held) : rooms;
-  };
+  // The suite held for an announced spotlight guest is no one else's till they come
+  const holdOut = (rooms: Room[]) => rooms.filter(r => !heldNow(state, r.id));
 
   for (let i = 0; i < totalArrivals; i++) {
     let guest: Guest;
@@ -416,7 +413,7 @@ export function processArrivals(
       continue;
     }
 
-    const remainingRooms = holdOut(available.filter(r => !booked.has(r.id)), guest);
+    const remainingRooms = holdOut(available.filter(r => !booked.has(r.id)));
     const priceTolerance = spendingOn() ? 1 + prng.next() * ECONOMY.priceToleranceSpread * toleranceMult(guest) : 1 + prng.next() * ECONOMY.priceToleranceSpread;
     const match = matchAtCounter(state, guest, remainingRooms, priceTolerance);
     if (match.noFit) {
@@ -459,7 +456,7 @@ export function processArrivals(
         announceArrival(result, guest, reserved, undefined, false);
         return;
       }
-      const match = matchAtCounter(state, guest, holdOut(available.filter(r => !booked.has(r.id)), guest), priceTolerance);
+      const match = matchAtCounter(state, guest, holdOut(available.filter(r => !booked.has(r.id))), priceTolerance);
       if (match.noFit) {
         turnAwayNoFit(result, guest, at);
         requeue();

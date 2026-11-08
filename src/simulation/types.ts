@@ -312,6 +312,13 @@ export interface StaffMember extends StaffIdentity {
 export interface StaffPlan {
   start: number; // absolute game hour the plan covers ([start, start + 1))
   itineraries: StaffItinerary[];
+  rush?: StaffRush; // the suite held for a spotlight guest, jumping the housekeepers' queue this hour
+}
+
+/** The suite held for a spotlight guest jumping the housekeepers' queue: kept for one housekeeper (staffId), or (none: the estimate's finisher isn't on the roster) first in the queue for whoever's free, clerks helping too. */
+export interface StaffRush {
+  roomId: string;
+  staffId?: string;
 }
 
 export interface StaffItinerary {
@@ -514,6 +521,7 @@ export interface SpotlightPlan {
   roomId?: string; // the suite held for them (announced), or theirs (staying)
   chosen?: boolean; // the held suite was picked by hand
   released?: boolean; // the hold was let go by hand (for this one)
+  waitNoted?: boolean; // the story has said the held suite will only be ready after their hour
   guestId?: string;
   chainId: string; // their story chain
   outcome?: 'write_up' | 'pan' | 'review';

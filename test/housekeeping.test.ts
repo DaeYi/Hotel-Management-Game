@@ -160,12 +160,13 @@ describe('Balance: there is a right amount of housekeeping', () => {
     const right = median('balanced');
     // Measured over 24 seeds x 400 days: 0.6x the housekeepers ends about 39% lower (turnovers pile up,
     // daily cleans go undone), 1.6x about 30% lower (idle wages hold back building); 1.0x to 1.2x is
-    // the top of the curve. With spotlight guests (phase 3b), measured over 96 seeds: staffing to the
-    // workload beats 0.6x by 1.60x and 1.6x by 1.39x (1.61x and 1.34x without them). These 24 seeds:
-    // 1.69x and 1.47x (1.62x and 1.38x without). The test once took six seeds, too few: re-rolling the
-    // random stream alone (no change to the game) failed one six-seed run in five or so, and no run of 24.
-    // Even 24 can fall short: of the four runs of 24 in those 96 seeds, one (48-71) is 1.47x and 1.29x
-    // with spotlight guests, so a change that fails here needs the 96-seed check before it's blamed.
+    // the top of the curve. With spotlight guests and the held suite held strictly (2026-11), measured
+    // over 96 seeds: staffing to the workload beats 0.6x by 2.93x and 1.6x by 2.08x (3.03x and 2.12x
+    // without them). These 24 seeds: 2.31x and 1.77x (2.59x and 2.03x without). The test once took six
+    // seeds, too few: re-rolling the random stream alone (no change to the game) failed one six-seed run
+    // in five or so, and no run of 24. Even 24 can fall short (in phase 3b's day, before the clerk and
+    // desk changes widened the gap, seeds 48-71 gave 1.47x and 1.29x), so a change that fails here needs
+    // the 96-seed check before it's blamed.
     expect(right).toBeGreaterThan(median('understaffed') * 1.5);
     expect(right).toBeGreaterThan(median('overstaffed') * 1.15);
   }, 3600000); // Same 72 seeded runs; fatigue now projects physical work, recovery and future desk coverage.
