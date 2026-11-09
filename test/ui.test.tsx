@@ -6,6 +6,7 @@ import { GameController } from '../src/game/GameController';
 import { App } from '../src/ui/App';
 import { OBJECTIVES, TRAVEL, SPENDING } from '../src/config/balance';
 import { guestWhereabouts } from '../src/ui/Inspectors';
+import { holdFor } from '../src/simulation/Spotlight';
 import { createStarterHotel, addRoom, addFacility } from '../src/simulation/HotelState';
 import { findRoute } from '../src/simulation/Layout';
 import { makeWalk, makeStay } from '../src/simulation/Movement';
@@ -882,6 +883,114 @@ describe('Spotlight guests', () => {
     fireEvent.click(screen.getByText("Don't hold one"));
     flush();
     expect(controller.state.spotlightHold).toBe('none');
+  });
+
+  it('a held suite ready only after their hour says when on its card (they\'ll wait, or take one as good if it\'s free); another that would be offers the hold with its ready time', () => {
+    const { controller, flush } = setup();
+    controller.state = { ...controller.state, cash: 1_000_000, peakStarRating: 5, starRating: 3 };
+    controller.selectTool('suite');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.tileDown({ gridX: 6, gridY: 2 });
+    controller.selectTool(null);
+    const [a] = controller.state.rooms;
+    controller.state = {
+      ...controller.state, day: 10, hour: 12, staff: { ...controller.state.staff, housekeepers: 2 }, staffRoster: undefined,
+      rooms: controller.state.rooms.map(r => ({ ...r, decor: 50, status: 'cleaning' as const, cleaningHoursRemaining: r.id === a.id ? 8 : 5 })),
+      spotlight: { kind: 'writer', week: 1, salt: '', announceDay: 9, arrivalDay: 10, arrivalHour: 15, status: 'announced', chainId: 'spotlight-10', roomId: a.id },
+    };
+    flush();
+    const ha = holdFor(controller.state, controller.state.rooms[0])!;
+    const hb = holdFor(controller.state, controller.state.rooms[1])!;
+    expect(ha.readyBy).toMatch(/^\d\d:00$/);
+    expect(hb.readyBy).toMatch(/^\d\d:00$/);
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    flush();
+    // (B, as good and ready sooner, after their hour too, is the one they'd take if it's still free when it is)
+    expect(ha).toMatchObject({ rival: expect.stringMatching(/^Room /), rivalBy: expect.stringMatching(/^\d\d:00$/) });
+    expect(screen.getByRole('dialog', { name: /Suite/ }).textContent).toContain(`Held:        for the travel writer (Wed ~15:00; ready by ${ha.readyBy}: they'll take ${ha.rival} (free by about ${ha.rivalBy}) if it's still free, else wait)`);
+    controller.tileDown({ gridX: 6, gridY: 2 });
+    flush();
+    const button = screen.getByText(/^Hold for the travel writer/) as HTMLButtonElement;
+    expect(button.textContent).toBe(`Hold for the travel writer (ready ${hb.readyBy})`);
+    expect(button.title).toBe(`Instead of the suite held now (if any): it would be ready by ${hb.readyBy}, after they come, and they'd wait for it`);
+    // The other suite free (as good): they'd take it, if it's still free when they come
+    controller.state = { ...controller.state, rooms: controller.state.rooms.map(r => (r.id === a.id ? r : { ...r, status: 'vacant' as const, cleaningHoursRemaining: 0 })) };
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    flush();
+    const rival = holdFor(controller.state, controller.state.rooms[0])!;
+    expect(rival.rival).toMatch(/^Room /);
+    expect(screen.getByRole('dialog', { name: /Suite/ }).textContent).toContain(`Held:        for the travel writer (Wed ~15:00; ready by ${rival.readyBy}: they'll take ${rival.rival} if it's still free, else wait)`);
+  });
+
+  it('the hold button on a suite ready only after their hour names the one as good they\'d take instead (and when, if after their hour)', () => {
+    const { controller, flush } = setup();
+    controller.state = { ...controller.state, cash: 1_000_000, peakStarRating: 5, starRating: 3 };
+    controller.selectTool('suite');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.tileDown({ gridX: 6, gridY: 2 });
+    controller.selectTool(null);
+    const [a] = controller.state.rooms;
+    // 09:00, nothing held: A 8h, B vacant and as good, one housekeeper; the writer due at 15:00
+    controller.state = {
+      ...controller.state, day: 10, hour: 9, spotlightHold: 'none', staff: { ...controller.state.staff, housekeepers: 1 }, staffRoster: undefined,
+      rooms: controller.state.rooms.map(r => ({ ...r, decor: 60, ...(r.id === a.id ? { status: 'cleaning' as const, cleaningHoursRemaining: 8 } : {}) })),
+      spotlight: { kind: 'writer', week: 1, salt: '', announceDay: 9, arrivalDay: 10, arrivalHour: 15, status: 'announced', chainId: 'spotlight-10' },
+    };
+    flush();
+    const card = holdFor(controller.state, controller.state.rooms[0])!;
+    expect(card).toMatchObject({ held: false, readyBy: expect.stringMatching(/:00$/), rival: expect.stringMatching(/^Room /) });
+    expect(card.rivalBy).toBeUndefined();
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    flush();
+    const button = () => screen.getByText(/^Hold for the travel writer/) as HTMLButtonElement;
+    expect(button().title).toBe(`Instead of the suite held now (if any): it would be ready by ${card.readyBy}, after they come, and they'd wait for it (or take ${card.rival}, if it's still free)`);
+    // 12:00, two housekeepers: A 8h, B 5h (free after their hour, before A)
+    controller.state = { ...controller.state, hour: 12, staff: { ...controller.state.staff, housekeepers: 2 }, staffPlan: null,
+      rooms: controller.state.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: r.id === a.id ? 8 : 5 })) };
+    flush();
+    const later = holdFor(controller.state, controller.state.rooms[0])!;
+    expect(later).toMatchObject({ held: false, rival: expect.stringMatching(/^Room /), rivalBy: expect.stringMatching(/^\d\d:00$/) });
+    controller.tileDown({ gridX: 6, gridY: 2 });
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    flush();
+    expect(button().title).toBe(`Instead of the suite held now (if any): it would be ready by ${later.readyBy}, after they come, and they'd wait for it (or take ${later.rival}, free by about ${later.rivalBy}, if it's still free)`);
+  });
+
+  it('once they\'ve come, the hold button on another suite says they\'re here (not "after they come"), and the held card that they\'re waiting', () => {
+    const { controller, flush } = setup();
+    controller.state = { ...controller.state, cash: 1_000_000, peakStarRating: 5, starRating: 3 };
+    controller.selectTool('suite');
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    controller.tileDown({ gridX: 6, gridY: 2 });
+    controller.selectTool(null);
+    const [a] = controller.state.rooms;
+    // 16:00, the writer due at 15:00 waiting for A (4h left); B plainer (3h left); two housekeepers
+    controller.state = {
+      ...controller.state, day: 9, hour: 16, staff: { ...controller.state.staff, housekeepers: 2 }, staffRoster: undefined, staffPlan: null,
+      rooms: controller.state.rooms.map(r => ({ ...r, decor: r.id === a.id ? 60 : 30, status: 'cleaning' as const, cleaningHoursRemaining: r.id === a.id ? 4 : 3 })),
+      spotlight: { kind: 'writer', week: 1, salt: '', announceDay: 8, arrivalDay: 9, arrivalHour: 15, status: 'announced', chainId: 'spotlight-9', roomId: a.id, waitNoted: true },
+    };
+    flush();
+    const held = holdFor(controller.state, controller.state.rooms[0])!;
+    expect(held).toMatchObject({ held: true, here: true, readyBy: expect.stringMatching(/^\d\d:00$/) });
+    expect(held.rival).toBeUndefined();
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    flush();
+    expect(screen.getByRole('dialog', { name: /Suite/ }).textContent).toContain(`; ready by ${held.readyBy}: they're waiting)`);
+    expect((screen.getByText('Let the hold go') as HTMLButtonElement).title).toBe("It can be booked again; the travel writer (here already) takes the best suite as soon as one's free");
+    const offered = holdFor(controller.state, controller.state.rooms[1])!;
+    expect(offered).toMatchObject({ held: false, here: true, readyBy: expect.stringMatching(/^\d\d:00$/) });
+    controller.tileDown({ gridX: 6, gridY: 2 });
+    flush();
+    const button = screen.getByText(/^Hold for the travel writer/) as HTMLButtonElement;
+    expect(button.title).toBe(`Instead of the suite held now (if any): it would be ready by ${offered.readyBy}, and they're here already: they'd wait for it`);
+    // (in the hour before they come, not yet)
+    controller.state = { ...controller.state, hour: 14, staffPlan: null };
+    flush();
+    expect(holdFor(controller.state, controller.state.rooms[1])!.here).toBeUndefined();
+    controller.tileDown({ gridX: 5, gridY: 2 });
+    flush();
+    expect((screen.getByText('Let the hold go') as HTMLButtonElement).title).toBe('It can be booked again; the travel writer takes the best suite free when they come');
   });
 
   it('the Furnish panel: a refit of the held suite that wouldn\'t be done in time is booked for after the guest', () => {

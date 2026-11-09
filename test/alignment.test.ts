@@ -1,4 +1,4 @@
-import { it, expect } from 'vitest';
+import { it, expect, vi } from 'vitest';
 import { staffRate, specialtyOf } from '../src/simulation/StaffProfiles.js';
 import { fatigueAt } from '../src/simulation/StaffFatigue.js';
 import { createStarterHotel, addRoom, getAvailableRooms } from '../src/simulation/HotelState.js';
@@ -17,7 +17,7 @@ import { partyOf, partyLoad } from '../src/simulation/Party.js';
 import { fitsParty } from '../src/simulation/RoomProfile.js';
 import { guestFigures } from '../src/render/figures.js';
 import { STAFF, TRAVEL, SPOTLIGHT } from '../src/config/balance.js';
-import type { HotelState, Leg, OnSiteTakings } from '../src/simulation/types.js';
+import type { HotelState, Leg, OnSiteTakings, SpotlightPlan } from '../src/simulation/types.js';
 import { guestPace } from '../src/simulation/Profile.js';
 import { housekeepingPrefOf, partyOutOfRoom } from '../src/simulation/CleaningPreference.js';
 import { patienceHours, readyAt } from '../src/simulation/DeskQueue.js';
@@ -41,6 +41,13 @@ function contiguous(legs: Leg[]): boolean {
 // facilities never hold more than their capacity, people leave by the street
 // entrance, and nobody is in a room while it's turned over or repaired --
 // counting every member of every party, each drawn where the simulation has them.
+// The spotlight plan as the desk saw it each hour: right after the hour's planSpotlight (check W)
+const deskSaw = vi.hoisted(() => ({ plan: undefined as SpotlightPlan | undefined, state: undefined as HotelState | undefined }));
+vi.mock('../src/simulation/Spotlight.js', async importOriginal => {
+  const m = await importOriginal<typeof import('../src/simulation/Spotlight.js')>();
+  return { ...m, planSpotlight: (s: HotelState) => { const r = m.planSpotlight(s); deskSaw.plan = r.state.spotlight; deskSaw.state = r.state; return r; } };
+});
+
 it('what everyone is shown doing is what the simulation does, hour after hour', () => {
   const problems: Record<string, number> = {};
   const examples: Record<string, string> = {};
@@ -56,6 +63,8 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
   let dinners = 0;
   let thriftyTrips = 0;
   let held = 0;
+  let bookedWhileHeld = 0;
+  let heldFreeAtDesk = 0;
   let heldTaken = 0;
   let spotlights = 0;
   let toured = 0;
@@ -216,6 +225,8 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
           }
         }
       }
+      deskSaw.plan = undefined;
+      deskSaw.state = undefined;
       const r = tickSimulation(before, prng);
       const after = r.state;
       const T1v = hourStart(after);
@@ -325,17 +336,33 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
         if (isCheckoutDay(g, after.day)) bad('dinner on their last day', g.id);
         if (hostsTonight(g, after.day)) bad('dinner on a night with friends round', g.id);
       }
-      // W: spotlight guests. Nobody is booked into the suite held for one who'd still be in it on their day; the
+      // W: spotlight guests. Nobody else is booked into the suite held for one while they're announced (the hold as
+      // the desk saw it, after the hour's planSpotlight), or moved into it (the hold after the hour: moves come after
+      // check-in), nor upsold into it (at the counter, against the hold from before the hour's planSpotlight). (This
+      // only checks what happens: the rules' own tests are in spotlight.test.ts and staffHospitality.test.ts, as a
+      // move or an upsell into a suite while one's held never comes up here.) The
       // guest walks in on their day, no earlier than their hour, and checks in (first in line) to a suite if one
       // was free; a travel writer leaving has tried every facility type the hotel had open all their stay
       const spot = before.spotlight;
-      if (spot?.status === 'announced' && spot.roomId) {
-        held++;
-        for (const g of after.guests) {
-          if (had.has(g.id) || g.spotlight) continue;
-          if (after.rooms.find(x => x.guestId === g.id)?.id === spot.roomId && g.checkInDay + g.stayLength >= spot.arrivalDay) bad('booked into the held suite', g.id);
-        }
+      const sawPlan = deskSaw.plan as SpotlightPlan | undefined; // (set inside the tick)
+      const sawState = deskSaw.state as HotelState | undefined;
+      const deskHold = sawPlan?.status === 'announced' ? sawPlan.roomId : undefined;
+      const moveHold = after.spotlight?.status === 'announced' ? after.spotlight.roomId : undefined;
+      const counterHold = before.spotlight?.status === 'announced' ? before.spotlight.roomId : undefined;
+      if (deskHold) held++;
+      let bookedNow = 0;
+      for (const g of after.guests) {
+        if (g.spotlight) continue;
+        const room = after.rooms.find(x => x.guestId === g.id)?.id;
+        if (!room) continue;
+        const was = before.rooms.find(x => x.guestId === g.id)?.id;
+        const upsold = !!g.service?.upsell && g.service.upsell.at >= T - 1e-9 && g.service.upsell.fromRoomId !== room;
+        if (!had.has(g.id)) {
+          if (deskHold) { bookedWhileHeld++; bookedNow++; }
+          if (room === deskHold) bad('booked into the held suite', g.id);
+        } else if (was !== room && room === (upsold ? counterHold : moveHold)) bad(upsold ? 'upsold into the held suite' : 'moved into the held suite', g.id);
       }
+      if (deskHold && bookedNow > 0 && sawState && getAvailableRooms(sawState).some(x => x.id === deskHold)) heldFreeAtDesk++;
       for (const g of after.guests) {
         if (had.has(g.id) || !g.spotlight) continue;
         spotlights++;
@@ -497,7 +524,7 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
   } finally {
     SPOTLIGHT.weeklyChance = weekly;
   }
-  if (process.env.ALIGNMENT_COUNTS === '1') process.stdout.write(`${JSON.stringify({ problems, examples, partyTrips, dndCleans, visitorNights, queued, gaveUp, complaintTrips, charges, dinners, thriftyTrips, held, spotlights, heldTaken, toured, writersLeft, tourSkips, preventiveRepairs, preventiveStarts, preventiveContinuations, preventiveCompleted })}\n`);
+  if (process.env.ALIGNMENT_COUNTS === '1') process.stdout.write(`${JSON.stringify({ problems, examples, partyTrips, dndCleans, visitorNights, queued, gaveUp, complaintTrips, charges, dinners, thriftyTrips, held, bookedWhileHeld, heldFreeAtDesk, spotlights, heldTaken, toured, writersLeft, tourSkips, preventiveRepairs, preventiveStarts, preventiveContinuations, preventiveCompleted })}\n`);
   expect(problems, JSON.stringify(examples)).toEqual({});
   expect(partyTrips).toBeGreaterThan(50); // parties of three or more came and went
   expect(dndCleans).toBeGreaterThan(20); // do-not-disturb rooms were cleaned (while their guests were out)
@@ -509,6 +536,8 @@ it('what everyone is shown doing is what the simulation does, hour after hour', 
   expect(dinners).toBeGreaterThan(200); // thrifty guests ate in town
   expect(thriftyTrips).toBeGreaterThan(300); // (and went to the gym and pool)
   expect(held).toBeGreaterThan(24); // a suite was held for a spotlight guest
+  expect(bookedWhileHeld).toBeGreaterThan(50); // while others checked in
+  expect(heldFreeAtDesk).toBeGreaterThan(50); // (hours the held suite stood free at the desk while others got rooms)
   expect(spotlights).toBeGreaterThan(3); // who came
   expect(heldTaken).toBeGreaterThan(2); // into the suite held for them
   expect(toured / writersLeft).toBeGreaterThan(0.6); // and travel writers tried everything (most: some found a facility full every hour)

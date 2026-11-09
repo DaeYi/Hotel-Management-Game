@@ -16,7 +16,7 @@ import { formatRoomLabel, isRoomReachable } from './HotelState.js';
 import { roomMoveTrip, isGuestAway } from './GuestMovement.js';
 import { isCheckoutDue } from './GuestManager.js';
 import { hourEnd, hourStart, legsEnd } from './Movement.js';
-import { spotlightOn, heldFrom } from './Spotlight.js';
+import { spotlightOn, heldNow, holdFor } from './Spotlight.js';
 import { recordNoiseHospitality } from './StaffHospitality.js';
 
 // ============================================================================
@@ -137,17 +137,17 @@ export interface AdvanceResult {
 
 /**
  * A room to move a guest to: the same kind of room as theirs, empty, working,
- * reachable, and big enough for their party. `rooms` is the rooms as they
- * stand after any moves made earlier this hour (so two guests are never moved
- * into the same one).
+ * reachable, and big enough for their party, and not the suite held for a
+ * spotlight guest (unless `anyHeld`). `rooms` is the rooms as they stand after
+ * any moves made earlier this hour (so two guests are never moved into the
+ * same one).
  */
-function findHealthySameTypeRoom(state: HotelState, rooms: Room[], exclude: Room, guest: Guest): Room | null {
+function findHealthySameTypeRoom(state: HotelState, rooms: Room[], exclude: Room, guest: Guest, anyHeld = false): Room | null {
   const party = partyOf(guest);
-  const held = heldFrom(state, guest.checkInDay + guest.stayLength - state.day); // (held for a spotlight guest, and they'd still be in it)
   // The smallest that fits, then the cheapest: a couple doesn't take the family room a family needs
   return rooms.filter(r =>
     r.id !== exclude.id
-    && r.id !== held
+    && (anyHeld || !heldNow(state, r.id)) // (held for a spotlight guest)
     && r.type === exclude.type
     && r.status === 'vacant'
     && r.condition > ECONOMY.roomBreakdownThreshold
@@ -280,17 +280,25 @@ export function advanceIncidents(state: HotelState, prng: PRNG, T = hourEnd(stat
     if (hoursRemaining <= 0) {
       earlyDepartureGuestIds.add(guest.id);
       const roomLabel = formatRoomLabel(room.gridX, room.gridY, room.floor);
+      // The only room to move them to was the suite held for a spotlight guest: say so
+      const held = spotlightOn() ? findHealthySameTypeRoom(current, rooms, room, guest, true) : null;
+      const hold = held ? holdFor(current, held) : null;
+      const heldFor = hold?.held ? hold.who : undefined;
       const appended = appendStoryLogEntry(current, {
         type: 'mid_stay_breakdown_escalated',
         guestName: partyLabel(guest),
         roomId: room.id,
-        message: `No rooms available -- ${partyLabel(guest)} had to leave Room ${roomLabel} early.`,
+        message: held && heldFor
+          ? `The only suite they could move to, Room ${formatRoomLabel(held.gridX, held.gridY, held.floor)}, is held for the ${heldFor} -- ${partyLabel(guest)} had to leave Room ${roomLabel} early.`
+          : `No rooms available -- ${partyLabel(guest)} had to leave Room ${roomLabel} early.`,
         chainId: incident.chainId,
       });
       current = appended.state;
       events.push({
         type: 'noise_complaint_escalated', // reuses the "incident escalated" toast styling
-        message: `${PartyLabel(guest)} is leaving early -- no room to move to after a breakdown`,
+        message: held && heldFor
+          ? `${PartyLabel(guest)} is leaving early -- the only suite they could move to is held for the ${heldFor}`
+          : `${PartyLabel(guest)} is leaving early -- no room to move to after a breakdown`,
         data: { guestId: guest.id, roomId: room.id },
       });
       continue;

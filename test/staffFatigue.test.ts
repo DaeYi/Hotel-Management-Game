@@ -13,6 +13,7 @@ import { freeBy } from '../src/simulation/Spotlight.js';
 import { baseWalkHours } from '../src/simulation/HousekeepingManager.js';
 import { PRNG } from '../src/simulation/prng.js';
 import { settleChanges } from '../src/simulation/Settle.js';
+import { tickSimulation } from '../src/simulation/tick.js';
 import type { HotelState, Leg, StaffMember, StaffPlan } from '../src/simulation/types.js';
 
 function worker(extra: Partial<StaffMember> = {}): StaffMember {
@@ -345,7 +346,54 @@ describe('Held suites allow for the cleaning crew’s fatigue', () => {
     const tired = { ...state.staffRoster![0], stats: { ...state.staffRoster![0].stats!, fatigue: 85, fatigueAt: 47 } };
     const overnight: HotelState = { ...state, hour: 23, staffRoster: [tired],
       rooms: state.rooms.map(room => room.id === suite.id ? { ...room, cleaningHoursRemaining: 2 } : room) };
-    expect(freeBy(overnight, overnight.rooms.find(room => room.id === suite.id)!, { kind: 'writer', arrivalDay: 3, arrivalHour: 9.1 }, true)).toBe(true);
+    // (Off shift overnight she isn't kept on the room: she walks in to it from 07:00, two hours' work, no break)
+    const walk = baseWalkHours(overnight);
+    expect(freeBy(overnight, overnight.rooms.find(room => room.id === suite.id)!, { kind: 'writer', arrivalDay: 3, arrivalHour: 9.1 + walk }, true)).toBe(true);
+  });
+
+  // Judged against when the tick really finishes the suite (from the hour's plan that completes it), with the break
+  // and the overnight made by the real planner
+  function cleaner(fatigue: number, day: number, hour: number, remaining: number, far: boolean) {
+    let state: HotelState = { ...createStarterHotel(), cash: 1_000_000, day, hour, peakStarRating: 5 };
+    if (!far) state = addRoom(state, 'standard', 5, 2, 0, 'up')!;
+    state = addRoom(state, 'suite', far ? 0 : 6, 2, 0, 'up')!;
+    state = addFixture(state, 'breakroom', far ? 9 : 5, 0, 0)!;
+    const suite = state.rooms.find(r => r.type === 'suite')!;
+    const member = worker({ at: roomTile(suite), roomId: suite.id, stats: { workHours: 80, lateDays: 0, absentDays: 0, fatigue, fatigueAt: (day - 1) * 24 + hour } });
+    state = { ...state, frontDeskRosterReady: true, staff: { frontDesk: 0, housekeepers: 1, maintenanceWorkers: 0 }, staffRoster: [member], staffPlan: null,
+      rooms: state.rooms.map(r => (r.id === suite.id ? { ...r, status: 'cleaning' as const, cleaningHoursRemaining: remaining } : r)) };
+    return { state, suite: state.rooms.find(r => r.id === suite.id)! };
+  }
+  function finished(start: HotelState, suiteId: string): number {
+    let st = start;
+    for (let h = 0; h < 24; h++) {
+      const plan = getStaffPlan(st);
+      const suite = st.rooms.find(r => r.id === suiteId)!;
+      if ((plannedWork(plan, 'turnover').get(suiteId) ?? 0) >= suite.cleaningHoursRemaining - 1e-9) {
+        return Math.max(...plan.itineraries[0].legs.filter(l => l.kind === 'stay' && l.job === 'turnover' && l.placeId === suiteId).map(l => l.end));
+      }
+      st = tickSimulation(st, new PRNG(100 + h)).state;
+    }
+    return NaN;
+  }
+  const by = (state: HotelState, room: HotelState['rooms'][number], abs: number) =>
+    freeBy(state, room, { kind: 'writer', arrivalDay: Math.floor(abs / 24) + 1, arrivalHour: abs % 24 }, true);
+
+  it('a break that runs past the hour, its room farther than the usual walk: the quote waits for the rest of it and the walk back', () => {
+    const { state, suite } = cleaner(81, 2, 12, 1.5, true);
+    const rest = getStaffPlan(state).itineraries[0].legs.find(l => l.kind === 'stay' && l.activity === 'rest')!;
+    expect(rest.end).toBeGreaterThan(37); // (past 13:00: the end of the hour keeps it as her saved break)
+    const done = finished(state, suite.id);
+    expect(by(state, suite, done + 0.01)).toBe(true);
+    expect(by(state, suite, done - 0.01)).toBe(false);
+  });
+
+  it('a turnover that runs past 21:00, judged at 19:00: she recovers overnight before the rest of it', () => {
+    const { state, suite } = cleaner(75, 2, 19, 3, false);
+    const done = finished(state, suite.id);
+    // (Up to one walk early: the quote has her resume in the room at 07:00, the tick has her walk back in)
+    expect(by(state, suite, done + baseWalkHours(state))).toBe(true);
+    expect(by(state, suite, done - 0.5)).toBe(false);
   });
 
   it('does not promise a suite using fast recovery or the old destination after its cleaner’s break room is demolished', () => {

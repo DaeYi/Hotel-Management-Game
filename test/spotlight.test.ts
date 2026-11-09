@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { createStarterHotel, addRoom, addFacility, addElevator, buildFloor, renovateRoom, refitRoom, getAvailableRooms, isRoomReachable, startPendingRefits } from '../src/simulation/HotelState.js';
+import { createStarterHotel, addRoom, addFacility, addElevator, buildFloor, renovateRoom, refitRoom, getAvailableRooms, isRoomReachable, startPendingRefits, formatRoomLabel } from '../src/simulation/HotelState.js';
 import { getCheckInCapacity } from '../src/simulation/Layout.js';
 import { calculateEarlyDepartureSettlement } from '../src/simulation/EconomyManager.js';
 import {
-  planSpotlight, freeBy, heldFrom, holdBlocksRenovation, spotlightGuest, spotlightArrival, spotlightCheckedIn, judgedStars, expectationAt,
+  planSpotlight, freeBy, heldNow, rushedSuite, readyAt, holdBlocksRenovation, spotlightGuest, spotlightArrival, spotlightCheckedIn, judgedStars, expectationAt,
   amenityRuleAt, nameReview, recordSpotlightOutcome, celebrityPull, writeUpMultiplier, spotlightBanner, holdFor, holdSuite, releaseHold,
   describeSpotlight, topFloor, arrivalTime, setHoldPolicy, holdLetGo, spotlightNightRate, spotlightSettlement, doubleNights,
 } from '../src/simulation/Spotlight.js';
@@ -20,8 +20,11 @@ import { PRNG } from '../src/simulation/prng.js';
 import { tickSimulation } from '../src/simulation/tick.js';
 import { SPOTLIGHT, GUEST_PROFILE, STORY, ECONOMY, AMENITIES, STAR_RATING, RENOVATION, PATIENCE, REVIEW, FACILITY_VISITS, HOUSEKEEPING } from '../src/config/balance.js';
 import { baseWalkHours } from '../src/simulation/HousekeepingManager.js';
-import { getRoster } from '../src/simulation/StaffManager.js';
-import type { Booking, GameEvent, Guest, GuestProfile, HotelState, Leg, Room, SpotlightPlan, Walker } from '../src/simulation/types.js';
+import { getRoster, getStaffPlan, plannedWork, replanStaff } from '../src/simulation/StaffManager.js';
+import { roomTile } from '../src/simulation/GuestMovement.js';
+import { physicalDeskLanes } from '../src/simulation/FrontDesk.js';
+import { hourStart } from '../src/simulation/Movement.js';
+import type { Booking, GameEvent, Guest, GuestProfile, HotelState, Leg, Room, SpotlightPlan, StaffMember, StaffPlan, Walker } from '../src/simulation/types.js';
 import type { GuestReviewBreakdown } from '../src/simulation/GuestManager.js';
 
 const PROFILE: GuestProfile = { chronotype: 'regular', mobility: 'normal', sleep: 'normal', rowdiness: 'normal', checkoutHour: 11, favorite: 'none' };
@@ -54,6 +57,61 @@ function withSwitch<T>(sw: { enabled: boolean }, on: boolean, fn: () => T): T {
 }
 
 /** With lots of guests turning up (the market multiplied), restoring it after. */
+/** "15:00" from an absolute time: the next whole hour (as the story and the card say it). */
+const clock = (t: number) => `${String(Math.ceil(t - 1e-9) % 24).padStart(2, '0')}:00`;
+
+/** The first room the hour's turnover legs go to. */
+function firstTurnover(state: HotelState): string | undefined {
+  const leg = getStaffPlan(state).itineraries.flatMap(it => it.legs).find(l => l.kind === 'stay' && l.job === 'turnover');
+  return leg?.kind === 'stay' ? leg.placeId : undefined;
+}
+
+/** Ticks till the spotlight guest checks in (or `hours`): the hour they did, the room, when the suite came free, and who worked it. */
+function tickTillIn(start: HotelState, suiteId: string, hours = 14) {
+  let st = start;
+  let into: string | undefined;
+  let at: number | undefined;
+  let vacantAt: number | undefined;
+  const by = new Set<string>();
+  for (let h = 0; h < hours && !into; h++) {
+    for (const it of getStaffPlan(st).itineraries) if (it.legs.some(l => l.kind === 'stay' && l.job === 'turnover' && l.placeId === suiteId)) by.add(it.staffId);
+    const r = tickSimulation(st, new PRNG(7 + h));
+    st = r.state;
+    if (vacantAt === undefined && st.rooms.find(x => x.id === suiteId)!.status !== 'cleaning') vacantAt = st.hour;
+    const e = r.events.find(x => x.type === 'spotlight_arrived');
+    if (e) { into = e.data?.roomId as string | undefined; at = st.hour; }
+  }
+  return { into, at, vacantAt, by: [...by], state: st };
+}
+
+/**
+ * 12:00 on day 9: a suite and three standard rooms; two housekeepers, a slow
+ * rookie (free now, in Z) and a fast veteran (finishing X, 0.5h left); Y
+ * waiting (2h), the suite `hours` (the writer due at 15:00).
+ */
+function twoSpeeds(order: 'slowFirst' | 'fastFirst', hours: number, slowSpecialty: 'room_attendant' | 'turnover_runner' = 'turnover_runner') {
+  let s: HotelState = { ...createStarterHotel(), cash: 1_000_000, peakStarRating: 5, starRating: 3 };
+  s = addRoom(s, 'suite', 3, 2, 0, 'up')!;
+  s = addRoom(s, 'standard', 4, 2, 0, 'up')!;
+  s = addRoom(s, 'standard', 5, 2, 0, 'up')!;
+  s = addRoom(s, 'standard', 6, 2, 0, 'up')!;
+  const [S, X, Y, Z] = s.rooms;
+  const at = 8 * 24 + 12;
+  const slow: StaffMember = { id: 'hk-slow', serial: 1, name: 'Slow Rookie', role: 'housekeeper', dailyWage: 70, at: roomTile(Z),
+    profile: { experience: 'rookie', style: 'meticulous', reliability: 'dependable', stamina: 'high', specialty: slowSpecialty },
+    stats: { workHours: 0, lateDays: 0, absentDays: 0, fatigue: 0, fatigueAt: at } };
+  const fast: StaffMember = { id: 'hk-fast', serial: 2, name: 'Fast Veteran', role: 'housekeeper', dailyWage: 70, at: roomTile(X), roomId: X.id,
+    profile: { experience: 'veteran', style: 'speedy', reliability: 'dependable', stamina: 'high', specialty: 'turnover_runner' },
+    stats: { workHours: 500, lateDays: 0, absentDays: 0, fatigue: 0, fatigueAt: at } };
+  s = { ...s, day: 9, hour: 12, guests: [], noiseSources: [], staff: { ...s.staff, housekeepers: 2 },
+    staffRoster: order === 'slowFirst' ? [slow, fast] : [fast, slow], staffPlan: null,
+    rooms: s.rooms.map(r => (r.id === S.id ? { ...r, status: 'cleaning' as const, cleaningHoursRemaining: hours }
+      : r.id === X.id ? { ...r, status: 'cleaning' as const, cleaningHoursRemaining: 0.5 }
+      : r.id === Y.id ? { ...r, status: 'cleaning' as const, cleaningHoursRemaining: 2 } : r)) };
+  const held = { ...s, spotlight: plan({ arrivalDay: 9, arrivalHour: 15, roomId: S.id }) };
+  return { held, S };
+}
+
 function busy<T>(fn: () => T, arrivalsPerDay = 160): T {
   const was = ECONOMY.baseArrivalsPerDay;
   ECONOMY.baseArrivalsPerDay = arrivalsPerDay;
@@ -277,23 +335,28 @@ describe('Spotlight guests: the suite held', () => {
     // A housekeeper already in a room keeps at it (no walk to it)
     const inIt = { ...one, staffRoster: [{ ...(getRoster(one).find(m => m.role === 'housekeeper')!), roomId: a.id }] };
     expect(freeBy(inIt, behind, at(Math.ceil(12)))).toBe(true); // (10:00 + 2: hers already, before b's 1.5h)
-    // ... from the start of her shift, if it's night now (07:00 + 2)
-    expect(freeBy({ ...inIt, hour: 2 }, behind, at(9))).toBe(true);
-    expect(freeBy({ ...inIt, hour: 2 }, behind, at(8))).toBe(false);
-    // In queue order: three turnovers ahead, two housekeepers (the shortest two first, then the 1.8h to whoever's free first)
+    // ... but not overnight: off shift she's walked out, and from 07:00 takes the queue's first (b's 1.5h, then this)
+    const fromSeven = 7 + 1.5 + w + 2 + w;
+    expect(freeBy({ ...inIt, hour: 2 }, behind, at(Math.ceil(fromSeven)))).toBe(true);
+    expect(freeBy({ ...inIt, hour: 2 }, behind, at(Math.ceil(fromSeven) - 1))).toBe(false);
+    // In queue order: three turnovers ahead, two housekeepers, as the planner plans an hour (the roster's order, each
+    // her whole hour in turn)
     let three = addRoom(one, 'standard', 7, 2, 0, 'up')!;
     three = addRoom(three, 'standard', 8, 2, 0, 'up')!;
     const lens = [0.5, 1, 1.8];
     const queue3 = { ...three, staff: { ...three.staff, housekeepers: 2 }, rooms: three.rooms.map((r, i) => (i >= 2 ? { ...r, status: 'cleaning' as const, cleaningHoursRemaining: lens[i - 2] } : r.id === b.id ? { ...r, status: 'vacant' as const } : r)) };
-    // (10:00: one takes the 0.5h, the other the 1h; the 1.8h goes to the first free; the suite starts at 11:00 + a walk, done 13:00 + two walks)
-    expect(freeBy(queue3, behind, at(Math.ceil(13 + 2 * w)))).toBe(true);
-    expect(freeBy(queue3, behind, at(Math.ceil(13 + 2 * w) - 1))).toBe(false);
+    // (10:00: the first takes the 0.5h and, free again in the hour, the 1h; the second the 1.8h; at 11:00 the first, free
+    // first in the roster, takes the suite: 10:00 + 0.5 + 1 + 2 and three walks)
+    expect(freeBy(queue3, behind, at(Math.ceil(13.5 + 3 * w)))).toBe(true);
+    expect(freeBy(queue3, behind, at(Math.ceil(13.5 + 3 * w) - 1))).toBe(false);
     expect(freeBy({ ...two, staff: { ...two.staff, housekeepers: 0 } }, behind, { ...p, arrivalDay: 20 })).toBe(false); // (nobody to clean it)
     const alone = { ...s, staff: { ...s.staff, housekeepers: 0 }, rooms: s.rooms.map(r => (r.id === a.id ? behind : r)) };
     expect(freeBy(alone, behind, { ...p, arrivalDay: 20 })).toBe(false); // (nobody to clean it, nothing ahead of it)
-    // Between hours (a card), this hour's work is still to come: as the next hour boundary will count it
-    expect(freeBy({ ...s, day: 11, hour: 12 }, { ...a, status: 'cleaning', cleaningHoursRemaining: 3 - w }, p, true)).toBe(true); // (12:00 + 3)
-    expect(freeBy({ ...s, day: 11, hour: 12 }, { ...a, status: 'cleaning', cleaningHoursRemaining: 3 - w }, p)).toBe(false); // (13:00 + 3, at the boundary)
+    // Between hours (a card), from where this hour's plan leaves things: she was sent to it at 12:00 (a walk, then
+    // cleaning), and keeps at it from 13:00 with the rest (12:00 + 3); at the boundary, it's all still to do (13:00 + 3)
+    const dirtyA = { ...s, day: 11, hour: 12, rooms: s.rooms.map(r => (r.id === a.id ? { ...r, status: 'cleaning' as const, cleaningHoursRemaining: 3 - w } : r)) };
+    expect(freeBy(dirtyA, dirtyA.rooms.find(r => r.id === a.id)!, p, true)).toBe(true);
+    expect(freeBy(dirtyA, dirtyA.rooms.find(r => r.id === a.id)!, p)).toBe(false);
     // Cleaned in the housekeepers' hours only: none before their shift, none after it
     const late = { ...plan({ arrivalDay: 11, arrivalHour: ECONOMY.checkInEndHour }) }; // (as for the last check-in, 22:00)
     const evening = { ...s, day: 11, hour: 17 }; // (this hour ends at 18:00; the shift ends at 21:00)
@@ -327,24 +390,34 @@ describe('Spotlight guests: the suite held', () => {
     expect(freeBy(s2, s2.rooms[1], p)).toBe(false);
   });
 
-  it('nobody books the held suite who would still be in it when the guest comes; anyone leaving before may', () => {
-    const s = hotel(1, 0, { day: 9, hour: 9, spotlight: plan({ arrivalDay: 11 }) });
+  it('nobody else books the held suite while the guest is announced, however short their stay', () => {
+    const s = hotel(2, 0, { day: 9, hour: 9, spotlight: plan({ arrivalDay: 11 }) });
     const held = { ...s, spotlight: { ...s.spotlight!, roomId: s.rooms[0].id } };
-    expect(heldFrom(held, 2)).toBe(s.rooms[0].id); // in till day 11
-    expect(heldFrom(held, 1)).toBeNull(); // gone on day 10
-    expect(heldFrom(s, 2)).toBeNull(); // (none held)
-    expect(heldFrom({ ...held, spotlight: { ...held.spotlight!, status: 'staying' } }, 5)).toBeNull();
-    withSwitch(SPOTLIGHT, false, () => expect(heldFrom(held, 2)).toBeNull());
-    // At the desk: a stream of guests, and the only room never taken
+    expect(heldNow(held, s.rooms[0].id)).toBe(true);
+    expect(heldNow(held, s.rooms[1].id)).toBe(false);
+    expect(heldNow(s, s.rooms[0].id)).toBe(false); // (none held)
+    expect(heldNow({ ...held, spotlight: { ...held.spotlight!, status: 'staying' } }, s.rooms[0].id)).toBe(false); // (they've come)
+    withSwitch(SPOTLIGHT, false, () => expect(heldNow(held, s.rooms[0].id)).toBe(false));
+    // At the desk (with the queue and without), two days before they come: a stream of guests, and the held suite
+    // never taken, not even for one night (gone the day before), while the other suite is let as ever; once nothing
+    // holds it (no hold, they've come, they've been, the switch off), one-night guests take it too
     const hour = 15;
-    let taken = 0;
-    for (let seed = 0; seed < 40; seed++) {
-      for (const queue of [true, false]) {
-        const r = withSwitch(PATIENCE, queue, () => processArrivals({ ...held, hour, reviewScore: 9, starRating: 5 }, hour, new PRNG(seed)));
-        taken += r.checkedIn.filter(c => c.roomId === s.rooms[0].id && c.guest.stayLength >= 2).length;
+    const into = (state: HotelState, room: Room, queue: boolean, nights?: number) => {
+      let n = 0;
+      for (let seed = 0; seed < 40; seed++) {
+        const r = withSwitch(PATIENCE, queue, () => processArrivals({ ...state, hour, reviewScore: 9, starRating: 5 }, hour, new PRNG(seed)));
+        n += r.checkedIn.filter(c => c.roomId === room.id && (nights === undefined || c.guest.stayLength === nights)).length;
       }
+      return n;
+    };
+    const [a, b] = s.rooms;
+    for (const queue of [true, false]) {
+      expect(into(held, a, queue)).toBe(0);
+      expect(into(held, b, queue)).toBeGreaterThan(0);
+      expect(into(s, a, queue, 1)).toBeGreaterThan(0);
+      for (const status of ['staying', 'done'] as const) expect(into({ ...held, spotlight: { ...held.spotlight!, status } }, a, queue)).toBeGreaterThan(0);
+      expect(withSwitch(SPOTLIGHT, false, () => into(held, a, queue))).toBeGreaterThan(0);
     }
-    expect(taken).toBe(0);
   });
 
   it('a refit booked on the held suite waits till the guest has been (the room left as it is)', () => {
@@ -368,7 +441,7 @@ describe('Spotlight guests: the suite held', () => {
     }
   });
 
-  it('a guest moved after a breakdown is never moved into the held suite (if they\'d still be in it on the day)', () => {
+  it('a guest moved after a breakdown is never moved into the held suite, however soon they leave', () => {
     let s = hotel(2, 0, { day: 9, hour: 12 });
     const [a, b] = s.rooms;
     const g = guest('g', { checkInDay: 8, stayLength: 4 });
@@ -377,11 +450,537 @@ describe('Spotlight guests: the suite held', () => {
     s = { ...s, rooms: s.rooms.map(r => (r.id === a.id ? { ...r, condition: 0 } : r)), activeIncidents: [incident] };
     const held = { ...s, spotlight: plan({ arrivalDay: 11, roomId: b.id }) };
     expect(advanceIncidents(held, new PRNG(1)).state.rooms.find(r => r.id === b.id)!.guestId).toBeUndefined();
-    // Leaving before the day: may
+    // Leaving before the day: not either
     const early = { ...held, guests: [{ ...g, stayLength: 2 }] };
-    expect(advanceIncidents(early, new PRNG(1)).state.rooms.find(r => r.id === b.id)!.guestId).toBe(g.id);
-    // No hold: may
+    expect(advanceIncidents(early, new PRNG(1)).state.rooms.find(r => r.id === b.id)!.guestId).toBeUndefined();
+    // No hold, or they've come, or the switch off (a hold in a save holds nothing): may
+    expect(advanceIncidents({ ...early, spotlight: { ...early.spotlight!, status: 'staying' } }, new PRNG(1)).state.rooms.find(r => r.id === b.id)!.guestId).toBe(g.id);
     expect(advanceIncidents(s, new PRNG(1)).state.rooms.find(r => r.id === b.id)!.guestId).toBe(g.id);
+    expect(withSwitch(SPOTLIGHT, false, () => advanceIncidents(held, new PRNG(1))).state.rooms.find(r => r.id === b.id)!.guestId).toBe(g.id);
+    // Another suite free: moved there (only the held suite is closed to them; it comes first in the list)
+    let three = occupy(hotel(3, 0, { day: 9, hour: 12 }), a, g);
+    const c = three.rooms[2];
+    three = { ...three, rooms: three.rooms.map(r => (r.id === a.id ? { ...r, condition: 0 } : r)), activeIncidents: [incident], spotlight: plan({ arrivalDay: 11, roomId: b.id }) };
+    const moved = advanceIncidents(three, new PRNG(1)).state;
+    expect(moved.rooms.find(r => r.id === c.id)!.guestId).toBe(g.id);
+    expect(moved.rooms.find(r => r.id === b.id)!.guestId).toBeUndefined();
+  });
+
+  it('a guest whose suite breaks, with only the held suite to move to, leaves early, told that it\'s held', () => {
+    let s = hotel(2, 0, { day: 9, hour: 12 });
+    const [a, b] = s.rooms;
+    const g = guest('g', { checkInDay: 8, stayLength: 2 }); // (leaves day 10, before the writer comes)
+    s = occupy(s, a, g);
+    const incident = { id: 'i1', type: 'mid_stay_breakdown' as const, guestId: g.id, roomId: a.id, stage: 'active' as never, hoursRemaining: 1, chainId: 'i1' };
+    s = { ...s, rooms: s.rooms.map(r => (r.id === a.id ? { ...r, condition: 0 } : r)), activeIncidents: [incident] };
+    const label = (r: Room) => formatRoomLabel(r.gridX, r.gridY, r.floor);
+    const out = advanceIncidents({ ...s, spotlight: plan({ arrivalDay: 11, roomId: b.id }) }, new PRNG(1));
+    expect(out.earlyDepartureGuestIds.has(g.id)).toBe(true);
+    expect(out.state.storyLog.find(e => e.type === 'mid_stay_breakdown_escalated')!.message).toBe(`The only suite they could move to, Room ${label(b)}, is held for the travel writer -- g had to leave Room ${label(a)} early.`);
+    expect(out.events.map(e => e.message)).toContain('G is leaving early -- the only suite they could move to is held for the travel writer');
+    // ... and named right with another room free ahead of it in the list (a standard room: no move there)
+    let mixed = hotel(1, 1, { day: 9, hour: 12 });
+    mixed = addRoom(mixed, 'suite', 9, 2, 0, 'up')!;
+    const [ma, , mb] = mixed.rooms;
+    mixed = occupy(mixed, ma, g);
+    mixed = { ...mixed, rooms: mixed.rooms.map(r => (r.id === ma.id ? { ...r, condition: 0 } : r)), activeIncidents: [{ ...incident, roomId: ma.id }], spotlight: plan({ arrivalDay: 11, roomId: mb.id }) };
+    expect(advanceIncidents(mixed, new PRNG(1)).state.storyLog.find(e => e.type === 'mid_stay_breakdown_escalated')!.message).toBe(`The only suite they could move to, Room ${label(mb)}, is held for the travel writer -- g had to leave Room ${label(ma)} early.`);
+    // ... for a celebrity too (who it's held for)
+    const celeb = advanceIncidents({ ...s, spotlight: plan({ kind: 'celebrity', arrivalDay: 11, roomId: b.id }) }, new PRNG(1));
+    expect(celeb.state.storyLog.find(e => e.type === 'mid_stay_breakdown_escalated')!.message).toContain('is held for the celebrity --');
+    // A guest in a room that's no suite isn't told about the suite (it was never theirs to move to)
+    let std = hotel(1, 1, { day: 9, hour: 12 });
+    const [sa, sb] = std.rooms;
+    std = occupy(std, sb, g);
+    std = { ...std, rooms: std.rooms.map(r => (r.id === sb.id ? { ...r, condition: 0 } : r)), activeIncidents: [{ ...incident, roomId: sb.id }], spotlight: plan({ arrivalDay: 11, roomId: sa.id }) };
+    expect(advanceIncidents(std, new PRNG(1)).state.storyLog.find(e => e.type === 'mid_stay_breakdown_escalated')!.message).toBe(`No rooms available -- g had to leave Room ${label(sb)} early.`);
+    // No suite free at all: as ever
+    const full = advanceIncidents(occupy(s, b, guest('other', { checkInDay: 8, stayLength: 5 })), new PRNG(1));
+    expect(full.state.storyLog.find(e => e.type === 'mid_stay_breakdown_escalated')!.message).toBe(`No rooms available -- g had to leave Room ${label(a)} early.`);
+    expect(full.events.map(e => e.message)).toContain('G is leaving early -- no room to move to after a breakdown');
+  });
+
+  it('the held suite jumps the housekeepers\' queue (though its turnover is the longest) when in its turn it\'d be too late, and the estimate counts on it', () => {
+    // Five standard rooms being cleaned ahead of the suite in the list, shorter turnovers than its, one housekeeper
+    let base = hotel(0, 5, { day: 9, hour: 9 });
+    base = addRoom(base, 'suite', 8, 2, 0, 'up')!;
+    const suite = base.rooms[5];
+    expect(profileRoom(suite).type).toBe('suite');
+    const dirty = { ...base, staff: { ...base.staff, housekeepers: 1 }, rooms: base.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: r.id === suite.id ? 3 : 2 })) };
+    const p = plan({ arrivalDay: 9, arrivalHour: 18, roomId: suite.id });
+    const held = { ...dirty, spotlight: p };
+    const firstJob = (state: HotelState) => {
+      const leg = getStaffPlan(state).itineraries.flatMap(it => it.legs).find(l => l.kind === 'stay' && l.job === 'turnover');
+      return leg?.kind === 'stay' ? leg.placeId : undefined;
+    };
+    expect(rushedSuite(held)).toBe(suite.id); // (in its turn, after the five: not by 18:00)
+    expect(firstJob(held)).toBe(suite.id);
+    expect(firstJob(dirty)).toBe(dirty.rooms[0].id); // (no hold: the shortest, then the list's order)
+    // In its turn in time (they're due tomorrow): it waits its turn, and is judged in it
+    const tomorrow = { ...held, spotlight: { ...p, arrivalDay: 10, arrivalHour: 15 } };
+    expect(rushedSuite(tomorrow)).toBeUndefined();
+    expect(firstJob(tomorrow)).toBe(dirty.rooms[0].id);
+    expect(readyAt(tomorrow, tomorrow.rooms[5], tomorrow.spotlight)).toBeGreaterThan(readyAt(held, held.rooms[5], held.spotlight));
+    expect(freeBy(tomorrow, tomorrow.rooms[5], tomorrow.spotlight)).toBe(true);
+    expect(withSwitch(SPOTLIGHT, false, () => firstJob(held))).toBe(dirty.rooms[0].id);
+    expect(firstJob({ ...held, spotlight: { ...p, status: 'staying' } })).toBe(dirty.rooms[0].id);
+    // The estimate (from where this hour's plan leaves things) says when, to the hour, and the tick agrees
+    const left = 3 - (plannedWork(getStaffPlan(held), 'turnover').get(suite.id) ?? 0);
+    const due = Math.ceil(10 + left - 1e-9); // (she keeps at it from 10:00)
+    const dirtySuite = held.rooms[5];
+    expect(freeBy(held, dirtySuite, { ...p, arrivalHour: due }, true)).toBe(true);
+    expect(freeBy(held, dirtySuite, { ...p, arrivalHour: due - 1 }, true)).toBe(false);
+    let st: HotelState = held;
+    for (let h = 9; h < due - 1; h++) st = tickSimulation(st, new PRNG(h)).state;
+    expect(st.rooms.find(r => r.id === suite.id)!.status).toBe('cleaning');
+    st = tickSimulation(st, new PRNG(0)).state;
+    expect(st.hour).toBe(due);
+    expect(st.rooms.find(r => r.id === suite.id)!.status).toBe('vacant');
+    expect(st.rooms.filter(r => r.id !== suite.id && r.status === 'cleaning').length).toBe(5);
+    // Not held, it waits its turn (after the five shorter ones): judged as things stand, not ready even by the last
+    // check-in; judged as if held (picking a hold), ready by their hour
+    const w = baseWalkHours(held);
+    const unheld = { ...dirty, spotlight: { ...p, roomId: undefined } };
+    expect(freeBy(unheld, dirtySuite, { ...p, arrivalHour: ECONOMY.checkInEndHour })).toBe(false);
+    expect(freeBy(unheld, dirtySuite, { ...p, arrivalHour: Math.ceil(10 + 3 + w) }, false, true)).toBe(true);
+    // ... so it's the suite a hold is picked on, offered on its card and held by hand
+    expect(planSpotlight(unheld).state.spotlight!.roomId).toBe(suite.id);
+    // ... even with a plainer suite vacant (the fresher one is ready by their hour, as held: the writer wants the freshest)
+    let plainer = addRoom(unheld, 'suite', 9, 2, 0, 'up')!;
+    plainer = { ...plainer, rooms: plainer.rooms.map(r => (r.id === suite.id ? { ...r, decor: 90 } : profileRoom(r).type === 'suite' ? { ...r, decor: 30 } : r)) };
+    expect(planSpotlight(plainer).state.spotlight!.roomId).toBe(suite.id);
+    expect(holdFor(unheld, dirtySuite)).toMatchObject({ held: false });
+    expect(holdSuite(unheld, suite.id)).not.toBeNull();
+    // ... and another suite held goes first in its estimate too
+    let two = addRoom(base, 'suite', 9, 2, 0, 'up')!;
+    two = { ...two, staff: { ...two.staff, housekeepers: 1 }, rooms: two.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: profileRoom(r).type === 'suite' ? 3 : 2 })) };
+    const other = two.rooms[6];
+    const heldOther = { ...two, spotlight: { ...p, roomId: other.id } };
+    expect(freeBy(heldOther, two.rooms[5], { ...p, arrivalHour: Math.ceil(10 + 3 + w) }, false, true)).toBe(true); // (as if held instead: first)
+    expect(freeBy(heldOther, two.rooms[5], { ...p, arrivalHour: ECONOMY.checkInEndHour })).toBe(false); // (as things stand: in its turn, after the five)
+  });
+
+  it('a housekeeper already in a room keeps at it, suite held or not (the held suite is the next one she takes)', () => {
+    let base = hotel(0, 3, { day: 9, hour: 9 });
+    base = addRoom(base, 'suite', 6, 2, 0, 'up')!;
+    const [r0, , , suite] = base.rooms;
+    const dirty = { ...base, staff: { ...base.staff, housekeepers: 1 }, rooms: base.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: 3 })) };
+    const roster = getRoster(dirty);
+    const inRoom = { ...dirty, staffRoster: roster.map(m => (m.role === 'housekeeper' ? { ...m, roomId: r0.id } : m)), spotlight: plan({ arrivalDay: 9, arrivalHour: 18, roomId: suite.id }) };
+    const jobs = getStaffPlan(inRoom).itineraries.flatMap(it => it.legs).filter(l => l.kind === 'stay' && l.job === 'turnover');
+    expect(jobs.map(l => (l.kind === 'stay' ? l.placeId : '')).filter((id, i, all) => all.indexOf(id) === i)[0]).toBe(r0.id);
+    // ... and the estimate has her finish it first (3h of it from 09:00), then the suite (a walk and 3h)
+    const w = baseWalkHours(inRoom);
+    const done = 9 + 3 + w + 3;
+    const p = inRoom.spotlight!;
+    expect(freeBy(inRoom, inRoom.rooms[3], { ...p, arrivalHour: Math.ceil(done + 1e-9) }, true)).toBe(true);
+    expect(freeBy(inRoom, inRoom.rooms[3], { ...p, arrivalHour: Math.ceil(done + 1e-9) - 1 }, true)).toBe(false);
+  });
+
+  it('an occupied suite whose guest leaves before the day, judged as if held: its turnover goes ahead of the other checkouts', () => {
+    let base = hotel(0, 5, { day: 9, hour: 9, staff: { ...createStarterHotel().staff, housekeepers: 1 } });
+    base = addRoom(base, 'suite', 8, 2, 0, 'up')!;
+    let s: HotelState = { ...base, housekeeping: { ...base.housekeeping, turnoverQuality: 'thorough' } }; // (3h turnovers)
+    base.rooms.forEach((r, i) => { s = occupy(s, r, guest(`g${i}`, { checkInDay: 7, stayLength: 2 })); }); // (all leave today at 11:00)
+    const suite = s.rooms[5];
+    const p = plan({ arrivalDay: 10, arrivalHour: 15 });
+    const unheld = { ...s, spotlight: p };
+    // In its turn (the last of six turnovers, with one housekeeper): not before tomorrow afternoon
+    expect(freeBy(unheld, suite, p)).toBe(false);
+    // As if held: first, this afternoon (from her checkout at 11:00, a walk and 3h)
+    expect(freeBy(unheld, suite, p, false, true)).toBe(true);
+    expect(readyAt(unheld, suite, p, false, true)).toBeCloseTo((9 - 1) * 24 + 11 + 3 + baseWalkHours(unheld), 6);
+    expect(planSpotlight(unheld).state.spotlight!.roomId).toBe(suite.id);
+  });
+
+  it('the rushed suite goes to the housekeeper who\'d finish it first, and only if that gets it ready sooner (a slow one free now, a fast one finishing a room)', () => {
+    const rush = (s: HotelState) => getStaffPlan(s).rush;
+    // The fast one first in the roster: she takes the shorter room when she's done, and the slow one (free now) the
+    // suite, in its turn: not by 15:00. Rushed, it's kept for the fast one: ready in time
+    {
+      const { held, S } = twoSpeeds('fastFirst', 3);
+      expect(rush(held)).toEqual({ roomId: S.id, staffId: 'hk-fast' });
+      expect(rushedSuite(held)).toBe(S.id);
+      const out = tickTillIn(held, S.id);
+      expect(out).toMatchObject({ into: S.id, at: 15, by: ['hk-fast'] });
+      expect(holdFor({ ...held, staffPlan: getStaffPlan(held) }, held.rooms[0])!.readyBy).toBeUndefined();
+    }
+    // The slow one first: she takes the shorter room, and the fast one the suite in its turn, in time: not rushed
+    {
+      const { held, S } = twoSpeeds('slowFirst', 3);
+      expect(rush(held)).toBeUndefined();
+      expect(tickTillIn(held, S.id)).toMatchObject({ into: S.id, at: 15, by: ['hk-fast'] });
+    }
+    // A longer turnover, the fast one first: rushed for her it's still not by 15:00, but sooner than in its turn (the
+    // slow one), so rushed; the card says when, and they wait for it till then
+    {
+      const { held, S } = twoSpeeds('fastFirst', 4.5);
+      expect(rush(held)).toEqual({ roomId: S.id, staffId: 'hk-fast' });
+      const card = holdFor({ ...held, staffPlan: getStaffPlan(held) }, held.rooms[0])!;
+      const out = tickTillIn(held, S.id);
+      expect(out).toMatchObject({ into: S.id, by: ['hk-fast'] });
+      expect(card.readyBy).toBe(`${out.at}:00`);
+      expect(out.at).toBe(16);
+    }
+    // ... and with the slow one first, the fast one takes it in its turn already: rushing it wouldn't be sooner (it
+    // would go to the slow one, free now), so it isn't
+    {
+      const { held, S } = twoSpeeds('slowFirst', 4.5);
+      expect(rush(held)).toBeUndefined();
+      const out = tickTillIn(held, S.id);
+      expect(out).toMatchObject({ into: S.id, at: 16, by: ['hk-fast'] });
+    }
+  });
+
+  it('who\'d finish it first counts the night: in the evening, the fast one busy till the end of her shift, not the slow one free now', () => {
+    // 20:00: the fast one finishing X (an hour's work left), the slow one free; the suite (3h), the writer due tomorrow at 10:00
+    const { held: h0, S } = twoSpeeds('slowFirst', 3);
+    const X = h0.rooms[1];
+    const evening = { ...h0, hour: 20, rooms: h0.rooms.map(r => (r.id === X.id ? { ...r, cleaningHoursRemaining: 1.5 } : r.id === h0.rooms[2].id ? { ...r, status: 'vacant' as const, cleaningHoursRemaining: 0 } : r)),
+      spotlight: { ...h0.spotlight!, arrivalDay: 10, arrivalHour: 10 } };
+    // In its turn the slow one starts it now and finishes it tomorrow, late; the fast one, from 07:00, wouldn't be
+    expect(getStaffPlan(evening).rush).toEqual({ roomId: S.id, staffId: 'hk-fast' });
+    // (ready by their hour, the fast one's work alone; this roster has nobody at the desk to check them in)
+    expect(tickTillIn(evening, S.id, 15)).toMatchObject({ vacantAt: 10, by: ['hk-fast'] });
+  });
+
+  it('a replan in the middle of the hour keeps the hour\'s rush', () => {
+    // As above (the fast one first, the suite 3h), with a 1h turnover the slow one starts at once
+    const { held: h0, S } = twoSpeeds('fastFirst', 3);
+    const Z = h0.rooms[3];
+    const held = { ...h0, rooms: h0.rooms.map(r => (r.id === Z.id ? { ...r, status: 'cleaning' as const, cleaningHoursRemaining: 1 } : r)) };
+    const planned = { ...held, staffPlan: getStaffPlan(held) };
+    expect(planned.staffPlan.rush).toEqual({ roomId: S.id, staffId: 'hk-fast' });
+    const on = (p: StaffPlan) => p.itineraries.filter(it => it.legs.some(l => l.kind === 'stay' && l.job === 'turnover' && l.placeId === S.id)).map(it => it.staffId);
+    expect(on(planned.staffPlan)).toEqual(['hk-fast']);
+    // At 12:10 (a room built, say): the slow one keeps at Z; the fast one, done with X, takes the suite, not Y
+    const re = replanStaff(planned, hourStart(planned) + 1 / 6);
+    expect(re.staffPlan!.rush).toEqual({ roomId: S.id, staffId: 'hk-fast' });
+    expect(on(re.staffPlan!)).toEqual(['hk-fast']);
+  });
+
+  it('a room attendant does the held suite before her dailies, unless a faster housekeeper would finish it first (it\'s rushed for her)', () => {
+    // The slow one a room attendant, first in the roster or second: she'd take the held suite at once, and be late
+    for (const order of ['slowFirst', 'fastFirst'] as const) {
+      const { held, S } = twoSpeeds(order, 3, 'room_attendant');
+      expect(getStaffPlan(held).rush).toEqual({ roomId: S.id, staffId: 'hk-fast' });
+      expect(tickTillIn(held, S.id)).toMatchObject({ into: S.id, at: 15, by: ['hk-fast'] });
+    }
+    // With the time to do it herself, she does (before the shorter room: the suite held is hers first)
+    const { held, S } = twoSpeeds('slowFirst', 3, 'room_attendant');
+    const later = { ...held, spotlight: { ...held.spotlight!, arrivalHour: 18 } };
+    expect(getStaffPlan(later).rush).toBeUndefined();
+    expect(getStaffPlan(later).itineraries.find(it => it.staffId === 'hk-slow')!.legs.find(l => l.kind === 'stay' && !!l.job)).toMatchObject({ placeId: S.id });
+    // ... and the estimate knows it: ready (at her rate, from 12:00 and a walk) when the tick has it
+    const out = tickTillIn(later, S.id);
+    expect(out).toMatchObject({ into: S.id, at: 18, by: ['hk-slow'] });
+    expect(clock(readyAt(later, later.rooms[0], later.spotlight!, true))).toBe(`${out.vacantAt}:00`);
+    // ... from the hour's end too (nobody sent yet): she takes it, not the shorter room (as a turnover runner would)
+    const runner = twoSpeeds('slowFirst', 3).held;
+    const laterRunner = { ...runner, spotlight: { ...runner.spotlight!, arrivalHour: 18 } };
+    expect(readyAt(later, later.rooms[0], later.spotlight!)).toBeGreaterThan(readyAt(laterRunner, laterRunner.rooms[0], laterRunner.spotlight!) + 1);
+  });
+
+  it('in its turn ready after their hour but before the last check-in: rushed, ready by their hour, and nothing says they\'ll wait', () => {
+    // 09:00, one housekeeper, two standard rooms being turned over (2h each) and the suite (3h); the writer due at 15:00
+    let base = hotel(0, 2, { day: 9, hour: 9 });
+    base = addRoom(base, 'suite', 7, 2, 0, 'up')!;
+    const suite = base.rooms[2];
+    const dirty = { ...base, staff: { ...base.staff, housekeepers: 1 }, rooms: base.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: r.id === suite.id ? 3 : 2 })) };
+    const p = plan({ arrivalDay: 9, arrivalHour: 15 });
+    const inTurn = readyAt({ ...dirty, spotlight: { ...p, status: 'staying' } }, dirty.rooms[2], p); // (nothing held: its turn)
+    expect(inTurn).toBeGreaterThan(arrivalTime(p));
+    expect(inTurn).toBeLessThanOrEqual(arrivalTime({ ...p, arrivalHour: ECONOMY.checkInEndHour }));
+    const held = { ...dirty, spotlight: { ...p, roomId: suite.id } };
+    expect(rushedSuite(held)).toBe(suite.id);
+    expect(firstTurnover(held)).toBe(suite.id);
+    // Picked from no hold: the story says it's held, and no more
+    const picked = planSpotlight({ ...dirty, spotlight: p }).state;
+    expect(picked.spotlight!.roomId).toBe(suite.id);
+    expect(picked.storyLog.at(-1)!.message).toBe(`Room ${formatRoomLabel(suite.gridX, suite.gridY, suite.floor)} is now held for the travel writer.`);
+    expect(tickTillIn(held, suite.id)).toMatchObject({ into: suite.id, at: 15 });
+    // Held by hand between hours (the hour's plan made with no hold): the card says nothing of waiting, and the tick agrees
+    const s0 = { ...dirty, spotlightHold: 'none' as const, spotlight: p };
+    const s = { ...s0, staffPlan: getStaffPlan(s0) };
+    expect(firstTurnover(s)).toBe(s.rooms[0].id);
+    const hand = holdSuite(s, suite.id)!;
+    expect(holdFor(hand, hand.rooms[2])).toEqual({ held: true, who: 'travel writer', when: 'Tue ~15:00' });
+    expect(tickTillIn(hand, suite.id)).toMatchObject({ into: suite.id, at: 15 });
+  });
+
+  it('the rush is judged from the hour\'s start: in its turn just in time from now, it waits its turn', () => {
+    let base = hotel(0, 1, { day: 9, hour: 9 });
+    base = addRoom(base, 'suite', 7, 2, 0, 'up')!;
+    const suite = base.rooms[1];
+    const dirty = { ...base, staff: { ...base.staff, housekeepers: 1 }, rooms: base.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: r.id === suite.id ? 3 : 2 })) };
+    const w = baseWalkHours(dirty);
+    expect(9 + 2 + w + 3 + w).toBeLessThanOrEqual(15); // (from the hour's start: in time)
+    expect(10 + 2 + w + 3 + w).toBeGreaterThan(15); // (from its end it wouldn't be)
+    const held = { ...dirty, spotlight: plan({ arrivalDay: 9, arrivalHour: 15, roomId: suite.id }) };
+    expect(rushedSuite(held)).toBeUndefined();
+    expect(firstTurnover(held)).toBe(dirty.rooms[0].id);
+    const out = tickTillIn(held, suite.id);
+    expect(out.vacantAt).toBeLessThanOrEqual(15);
+    expect(out).toMatchObject({ into: suite.id, at: 15 });
+  });
+
+  it('cross-trained clerks helping with turnovers (no housekeepers): the suite is not rushed (the estimate does not count them)', () => {
+    let base = addRoom({ ...createStarterHotel(), day: 2, hour: 11, cash: 1_000_000, peakStarRating: 5, starRating: 3 }, 'standard', 5, 2, 0, 'up')!;
+    base = addRoom(base, 'suite', 6, 2, 0, 'up')!;
+    const people = physicalDeskLanes(base).map((lane, index) => ({
+      id: index === 0 ? 'helper' : 'cover', serial: index + 1, name: index === 0 ? 'Avery Park' : 'Robin Lee',
+      role: 'front_desk', shift: 'early', at: lane.front, deskLane: lane.key, dailyWage: index === 0 ? 46 : 40,
+      profile: { experience: 'skilled', style: 'standard', reliability: 'dependable', stamina: 'normal', hospitality: 'polite', ...(index === 0 ? { cleaningTrained: true } : {}) },
+      stats: { workHours: 80, lateDays: 0, absentDays: 0, fatigue: 0, fatigueAt: hourStart(base) },
+    } as StaffMember));
+    const s: HotelState = { ...base, frontDeskRosterReady: true, staffRoster: people, staffPlan: null, staff: { frontDesk: people.length, housekeepers: 0, maintenanceWorkers: 0 },
+      rooms: base.rooms.map(room => ({ ...room, status: 'cleaning' as const, cleaningHoursRemaining: room.type === 'suite' ? 10 : 8, cleaningHoursTotal: 10, dailyCleanHoursRemaining: 0 })) };
+    const suite = s.rooms.find(r => r.type === 'suite')!;
+    const std = s.rooms.find(r => r.type === 'standard')!;
+    const firstClean = (st: HotelState) => getStaffPlan(st).itineraries.find(it => it.staffId === 'helper')!.legs.find(l => l.kind === 'stay' && l.activity === 'clean');
+    const held = { ...s, spotlight: plan({ announceDay: 2, arrivalDay: 3, arrivalHour: 15, roomId: suite.id }) };
+    expect(firstClean(s)).toMatchObject({ placeId: std.id }); // (no hold: the shorter)
+    // (The estimate doesn't count clerks helping with turnovers: with no housekeepers, no rush, the shorter first)
+    expect(getStaffPlan(held).rush).toBeUndefined();
+    expect(firstClean(held)).toMatchObject({ placeId: std.id });
+  });
+
+  it('overnight nobody keeps a room: two housekeepers walked out at 21:00 share the rooms afresh at 07:00 (the shorter first), as the estimate has it', () => {
+    // 19:00: one in the suite (4h left), the other in X (3h); the writer due tomorrow at 15:00 (in time: not rushed)
+    let base = hotel(1, 1, { day: 9, hour: 19 });
+    const [suite, x] = base.rooms;
+    base = { ...base, staff: { ...base.staff, housekeepers: 2 }, rooms: base.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: r.id === suite.id ? 4 : 3 })) };
+    const [h1, h2] = getRoster(base).filter(m => m.role === 'housekeeper');
+    const s = { ...base, staffRoster: getRoster(base).map(m => (m.id === h1.id ? { ...m, roomId: suite.id } : m.id === h2.id ? { ...m, roomId: x.id } : m)),
+      spotlight: plan({ arrivalDay: 10, arrivalHour: 15, roomId: suite.id }) };
+    expect(rushedSuite(s)).toBeUndefined();
+    // Till 21:00 (this hour's plan, then an hour): X has less left than the suite. At 07:00 the first in the roster
+    // takes X (the shorter), the other the suite: a walk and the rest
+    const worked = plannedWork(getStaffPlan(s), 'turnover');
+    const left = { suite: 4 - worked.get(suite.id)! - 1, x: 3 - worked.get(x.id)! - 1 };
+    expect(left.x).toBeLessThan(left.suite);
+    const w = baseWalkHours(s);
+    const morning = 9 * 24 + 7 + w + left.suite;
+    expect(readyAt(s, s.rooms[0], s.spotlight!, true)).toBeCloseTo(morning, 6);
+    const out = tickTillIn(s, suite.id, 16);
+    expect(out.vacantAt).toBe(Math.ceil(7 + w + left.suite));
+    // Sent to it at 20:00 (a walk, then an hour less the walk till 21:00), she walks to it again at 07:00
+    const eve = { ...hotel(1, 0, { day: 9, hour: 19 }), staff: { ...base.staff, housekeepers: 1 } };
+    const late = { ...eve, rooms: eve.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: 3 })), spotlight: plan({ arrivalDay: 10, arrivalHour: 15, roomId: eve.rooms[0].id }) };
+    const w1 = baseWalkHours(late);
+    expect(readyAt(late, late.rooms[0], late.spotlight!)).toBeCloseTo(9 * 24 + 7 + w1 + (3 - (1 - w1)), 6);
+  });
+
+  it('with no suite ready by their hour, the one ready soonest for them is held (they wait for it), and it\'s offered on its card', () => {
+    // 12:00, the writer due at 15:00; the suite needs 3h after the housekeeper finishes the room she's in (2h), and in
+    // its turn two shorter turnovers come before it
+    let base = hotel(0, 3, { day: 9, hour: 12 });
+    base = addRoom(base, 'suite', 6, 2, 0, 'up')!;
+    const [r0, r1, r2, suite] = base.rooms;
+    base = addRoom(base, 'standard', 7, 2, 0, 'up')!; // (a free room for them, all the same)
+    const dirty = { ...base, staff: { ...base.staff, housekeepers: 1 }, rooms: base.rooms.map(r => ([r0.id, r1.id, r2.id].includes(r.id) ? { ...r, status: 'cleaning' as const, cleaningHoursRemaining: 2 } : r.id === suite.id ? { ...r, status: 'cleaning' as const, cleaningHoursRemaining: 3 } : r)) };
+    const roster = getRoster(dirty);
+    const p = plan({ arrivalDay: 9, arrivalHour: 15 });
+    const s = { ...dirty, staffRoster: roster.map(m => (m.role === 'housekeeper' ? { ...m, roomId: r0.id } : m)), spotlight: p };
+    const dirtySuite = s.rooms.find(r => r.id === suite.id)!;
+    expect(freeBy(s, dirtySuite, p, false, true)).toBe(false); // (not by 15:00, even first)
+    expect(freeBy(s, dirtySuite, { ...p, arrivalHour: ECONOMY.checkInEndHour }, false, true)).toBe(true);
+    expect(freeBy(s, dirtySuite, { ...p, arrivalHour: ECONOMY.checkInEndHour })).toBe(false); // (in its turn, after the other two: not today)
+    const picked = planSpotlight(s).state;
+    expect(picked.spotlight!.roomId).toBe(suite.id);
+    const byLast = { ...p, arrivalHour: ECONOMY.checkInEndHour, byLast: true };
+    const at = readyAt(picked, dirtySuite, byLast, false, true);
+    expect(Number.isInteger(at)).toBe(false); // (the next whole hour, said)
+    const name = `Room ${formatRoomLabel(suite.gridX, suite.gridY, suite.floor)}`;
+    expect(picked.storyLog.at(-1)!.message).toBe(`${name} is now held for the travel writer. It'll be ready by about ${clock(at)}: they'll wait for it.`);
+    expect(holdFor(s, dirtySuite)).toEqual({ held: false, who: 'travel writer', when: 'Tue ~15:00', readyBy: clock(readyAt(s, dirtySuite, byLast, true, true)) });
+    expect(holdFor(picked, dirtySuite)).toEqual({ held: true, who: 'travel writer', when: 'Tue ~15:00', readyBy: clock(readyAt(picked, dirtySuite, byLast, true, true)) });
+    expect(holdSuite(s, suite.id)).not.toBeNull();
+    // ... but a plainer suite ready by their hour comes before it, however much fresher this one is
+    let plain = addRoom(s, 'suite', 8, 2, 0, 'up')!;
+    plain = { ...plain, rooms: plain.rooms.map(r => (r.id === suite.id ? { ...r, decor: 95 } : profileRoom(r).type === 'suite' ? { ...r, decor: 30 } : r)) };
+    const other = plain.rooms.find(r => profileRoom(r).type === 'suite' && r.id !== suite.id)!;
+    expect(other.status).toBe('vacant');
+    expect(planSpotlight(plain).state.spotlight!.roomId).toBe(other.id);
+    // Through the tick: they wait for it, and check in to it, though a standard room was free all along
+    let st: HotelState = s;
+    let into: string | undefined;
+    for (let h = 0; h < 12 && !into; h++) {
+      const r = tickSimulation(st, new PRNG(h));
+      st = r.state;
+      into = r.events.find(e => e.type === 'spotlight_arrived')?.data?.roomId as string | undefined;
+    }
+    expect(into).toBe(suite.id);
+    expect(st.hour).toBeGreaterThan(15);
+    // ... at the hour the story in the tick said (made after the hour's work: a direct call on a fresh state is an hour behind)
+    const said = st.storyLog.find(e => e.type === 'spotlight_hold')!.message.match(/ready by about (\d\d:00)/)![1];
+    expect(`${st.hour}:00`).toBe(said);
+  });
+
+  it('a second-choice hold gives way to a suite that turns up ready by their hour and suits them as well (not a plainer one)', () => {
+    // The only suite free for them needs till the evening; another's taken past their day
+    let base = hotel(2, 0, { day: 9, hour: 9 });
+    const [a, b] = base.rooms;
+    base = occupy(base, b, guest('stayer', { checkInDay: 8, stayLength: 5 }));
+    const s = { ...base, staff: { ...base.staff, housekeepers: 1 }, spotlight: plan({ arrivalDay: 9, arrivalHour: 15 }),
+      rooms: base.rooms.map(r => (r.id === a.id ? { ...r, status: 'cleaning' as const, cleaningHoursRemaining: 8, decor: 60 } : { ...r, decor: 60 })) };
+    const second = planSpotlight(s).state;
+    expect(second.spotlight!.roomId).toBe(a.id);
+    // b comes free (its guest leaves early), as fresh: the hold moves to it
+    const freed = { ...second, guests: [], rooms: second.rooms.map(r => (r.id === b.id ? { ...r, status: 'vacant' as const, guestId: undefined } : r)) };
+    const moved = planSpotlight(freed).state;
+    expect(moved.spotlight!.roomId).toBe(b.id);
+    expect(moved.storyLog.at(-1)!.message).toMatch(/^The suite held for the travel writer is now Room /);
+    // ... but not to a plainer one (they'll wait for the fresher), nor from one picked by hand
+    expect(planSpotlight({ ...freed, rooms: freed.rooms.map(r => (r.id === b.id ? { ...r, decor: 30 } : r)) }).state.spotlight!.roomId).toBe(a.id);
+    expect(planSpotlight({ ...freed, spotlight: { ...freed.spotlight!, chosen: true } }).state.spotlight!.roomId).toBe(a.id);
+    // ... and to one coming up for turning over that would be ready by their hour held (rushed), not in its turn
+    const turned = { ...second, guests: [], rooms: second.rooms.map(r => (r.id === b.id ? { ...r, status: 'cleaning' as const, cleaningHoursRemaining: 2, guestId: undefined } : r)) };
+    expect(freeBy(turned, turned.rooms[1], turned.spotlight!)).toBe(false);
+    expect(freeBy(turned, turned.rooms[1], turned.spotlight!, false, true)).toBe(true);
+    expect(planSpotlight(turned).state.spotlight!.roomId).toBe(b.id);
+  });
+
+  it('another suite, as things stand: behind the held one only while that\'s rushed', () => {
+    const s0 = hotel(2, 0, { day: 9, hour: 9 });
+    const [a, b] = s0.rooms;
+    const s = { ...s0, staff: { ...s0.staff, housekeepers: 1 }, spotlight: plan({ arrivalDay: 10, arrivalHour: 15, roomId: a.id }),
+      rooms: s0.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: r.id === a.id ? 3 : 2 })) };
+    const w = baseWalkHours(s);
+    expect(rushedSuite(s)).toBeUndefined(); // (the held one's in time tomorrow)
+    expect(readyAt(s, s.rooms[1], s.spotlight!)).toBeCloseTo(8 * 24 + 10 + w + 2, 6); // (the shorter, first: from 10:00)
+    // Due today at 13:00: the held one's rushed, and b behind it
+    const today = { ...s, spotlight: { ...s.spotlight!, arrivalDay: 9, arrivalHour: 13 } };
+    expect(readyAt(today, today.rooms[1], today.spotlight!)).toBeCloseTo(8 * 24 + 10 + w + 3 + w + 2, 6);
+    expect(b.id).not.toBe(a.id);
+  });
+
+  it('two second-choice suites as good as each other: the hold stays put (no moving between them hour after hour)', () => {
+    const s0 = hotel(2, 0, { day: 9, hour: 9 });
+    const s = { ...s0, staff: { ...s0.staff, housekeepers: 1 }, spotlight: plan({ arrivalDay: 9, arrivalHour: 15 }),
+      rooms: s0.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: 8, decor: 60 })) };
+    const first = planSpotlight(s).state;
+    const held = first.spotlight!.roomId!;
+    expect(freeBy(first, first.rooms.find(r => r.id === held)!, first.spotlight!, false, true)).toBe(false); // (a second choice)
+    let st = first;
+    for (let k = 0; k < 3; k++) st = planSpotlight(st).state;
+    expect(st.spotlight!.roomId).toBe(held);
+    expect(st.storyLog.length).toBe(first.storyLog.length);
+  });
+
+  it('a hold that slips past their hour, unchanged, is said once (not each hour): "won\'t be ready when they come"', () => {
+    const s0 = hotel(1, 0, { day: 9, hour: 12 });
+    const [a] = s0.rooms;
+    const s = { ...s0, staff: { ...s0.staff, housekeepers: 1 }, spotlight: plan({ arrivalDay: 9, arrivalHour: 15, roomId: a.id }),
+      rooms: s0.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: 1 })) };
+    expect(planSpotlight(s).state.storyLog.length).toBe(s.storyLog.length); // (in time: nothing to say)
+    const slipped = { ...s, rooms: s.rooms.map(r => ({ ...r, cleaningHoursRemaining: 6 })) };
+    const told = planSpotlight(slipped).state;
+    const at = readyAt(told, told.rooms[0], { ...told.spotlight!, arrivalHour: ECONOMY.checkInEndHour, byLast: true }, false, true);
+    const name = `Room ${formatRoomLabel(a.gridX, a.gridY, a.floor)}`;
+    expect(told.storyLog.at(-1)!.message).toBe(`${name}, held for the travel writer, won't be ready when they come. It'll be ready by about ${clock(at)}: they'll wait for it.`);
+    expect(told.spotlight).toMatchObject({ roomId: a.id, waitNoted: true });
+    expect(planSpotlight(told).state.storyLog.length).toBe(told.storyLog.length);
+    // Held again by hand: said afresh (if it still won't be)
+    const hand = holdSuite(told, a.id)!;
+    expect(hand.spotlight!.waitNoted).toBeUndefined();
+    expect(planSpotlight(hand).state.storyLog.length).toBe(told.storyLog.length + 1);
+    // Moved off it to one ready in time (as good): nothing said of waiting, and the new hold's slip would be said
+    let two = addRoom(told, 'suite', 4, 2, 0, 'up')!;
+    two = { ...two, rooms: two.rooms.map(r => ({ ...r, decor: 60 })) };
+    const moved = planSpotlight(two).state;
+    expect(moved.spotlight!.roomId).toBe(two.rooms[1].id);
+    expect(moved.storyLog.at(-1)!.message).toBe(`The suite held for the travel writer is now Room ${formatRoomLabel(two.rooms[1].gridX, two.rooms[1].gridY, two.rooms[1].floor)}.`);
+    expect(moved.spotlight!.waitNoted).toBeUndefined();
+  });
+
+  it('a suite held by hand that would only be ready after their hour, with one as good free: the card says they\'d take that instead', () => {
+    const s0 = hotel(2, 0, { day: 9, hour: 9 });
+    const [a, b] = s0.rooms;
+    const s = { ...s0, staff: { ...s0.staff, housekeepers: 1 }, spotlightHold: 'none' as const, spotlight: plan({ arrivalDay: 9, arrivalHour: 15 }),
+      rooms: s0.rooms.map(r => ({ ...r, decor: 60, ...(r.id === a.id ? { status: 'cleaning' as const, cleaningHoursRemaining: 8 } : {}) })) };
+    const hand = holdSuite(s, a.id)!;
+    const name = `Room ${formatRoomLabel(b.gridX, b.gridY, b.floor)}`;
+    expect(holdFor(hand, hand.rooms[0])).toMatchObject({ held: true, readyBy: expect.stringMatching(/:00$/), rival: name });
+    expect(holdFor(s, s.rooms[0])).toMatchObject({ held: false, rival: name }); // (offered: the same)
+    // With b taken, or plainer, they'd wait for it
+    const taken = occupy(hand, b, guest('stayer', { checkInDay: 8, stayLength: 4 }));
+    expect(holdFor(taken, taken.rooms[0])!.rival).toBeUndefined();
+    const plainer = { ...hand, rooms: hand.rooms.map(r => (r.id === b.id ? { ...r, decor: 30 } : r)) };
+    expect(holdFor(plainer, plainer.rooms[0])!.rival).toBeUndefined();
+    // On another suite's card, judged with that one held instead, from the hour's plan (made with the suite held now,
+    // rushed: the housekeeper's in it this hour and keeps at it, so it's free by noon whichever is held): it's the one
+    // they'd take instead, and they do
+    let q = hotel(2, 3, { day: 9, hour: 9 });
+    const [qa, qb] = q.rooms;
+    q = { ...q, staff: { ...q.staff, housekeepers: 1 }, spotlight: plan({ arrivalDay: 9, arrivalHour: 15, roomId: qa.id }),
+      rooms: q.rooms.map(r => ({ ...r, decor: 60, status: 'cleaning' as const, cleaningHoursRemaining: r.id === qa.id ? 3 : r.id === qb.id ? 8 : 1.5 })) };
+    q = { ...q, staffPlan: getStaffPlan(q) };
+    expect(rushedSuite(q)).toBe(qa.id);
+    expect(freeBy(q, q.rooms[0], q.spotlight!, true)).toBe(true);
+    expect(holdFor(q, q.rooms[1])).toMatchObject({ held: false, readyBy: expect.stringMatching(/:00$/), rival: `Room ${formatRoomLabel(qa.gridX, qa.gridY, qa.floor)}` });
+    expect(tickTillIn(holdSuite(q, qb.id)!, qb.id).into).toBe(qa.id);
+    // ... and so they do: at their hour they take b, free
+    expect(tickTillIn(hand, a.id).into).toBe(b.id);
+  });
+
+  it('a suite whose guest leaves the morning they come is held at the announcement (not "every suite is taken"), and is theirs', () => {
+    let s = hotel(1, 0, { day: 9, hour: 9, spotlight: plan({ status: 'planned', announceDay: 9, arrivalDay: 10, arrivalHour: 15 }) });
+    const [a] = s.rooms;
+    s = occupy(s, a, guest('leaving', { checkInDay: 8, stayLength: 2 })); // (leaves day 10 at 11:00)
+    s = { ...s, staff: { ...s.staff, housekeepers: 1 } };
+    const announced = planSpotlight(s).state;
+    expect(announced.spotlight).toMatchObject({ status: 'announced', roomId: a.id });
+    const told = announced.storyLog.find(e => e.type === 'spotlight_announced')!.message;
+    expect(told).toContain(`is held for them.`);
+    expect(told).not.toContain('Every suite is taken');
+    // (By their hour it isn't counted: their guest is still in it on the day)
+    expect(freeBy(announced, announced.rooms[0], announced.spotlight!)).toBe(false);
+    expect(freeBy(announced, announced.rooms[0], { ...announced.spotlight!, arrivalHour: ECONOMY.checkInEndHour, byLast: true })).toBe(true);
+    // Ready by their hour (the turnover after 11:00): no wait note, no ready time on its card
+    expect(told).toBe(`A travel writer arrives Wednesday at about 15:00 and wants a suite. Room ${formatRoomLabel(a.gridX, a.gridY, a.floor)} is held for them.`);
+    expect(holdFor(announced, announced.rooms[0])).toEqual({ held: true, who: 'travel writer', when: 'Wed ~15:00' });
+    // Not held ('Don't hold one'), it's offered on its card, and can be held by hand
+    const none = { ...s, spotlightHold: 'none' as const, spotlight: { ...s.spotlight!, status: 'announced' as const } };
+    expect(holdFor(none, none.rooms[0])).toEqual({ held: false, who: 'travel writer', when: 'Wed ~15:00' });
+    expect(holdSuite(none, a.id)).not.toBeNull();
+    // Due at 12:00 instead: ready only after their hour, and the story says when (the next whole hour)
+    const noon = { ...s, spotlight: { ...s.spotlight!, arrivalHour: 12 } };
+    const early = planSpotlight(noon).state;
+    const at = readyAt(early, early.rooms[0], { ...early.spotlight!, arrivalHour: ECONOMY.checkInEndHour, byLast: true }, false, true);
+    expect(at).toBeGreaterThan(arrivalTime(early.spotlight!));
+    expect(early.storyLog.at(-1)!.message).toBe(`A travel writer arrives Wednesday at about 12:00 and wants a suite. Room ${formatRoomLabel(a.gridX, a.gridY, a.floor)} is held for them. It'll be ready by about ${clock(at)}: they'll wait for it.`);
+    expect(early.spotlight!.waitNoted).toBe(true);
+  });
+
+  it('a hold placed by hand between hours is judged from where this hour\'s plan leaves things (the housekeepers already sent)', () => {
+    // 11:00, the writer due at 15:00, no hold ('Don\'t hold one'): the hour's plan has sent the housekeeper to the first room
+    let base = hotel(0, 3, { day: 9, hour: 11, spotlightHold: 'none' });
+    base = addRoom(base, 'suite', 6, 2, 0, 'up')!;
+    const suite = base.rooms[3];
+    const p = plan({ arrivalDay: 9, arrivalHour: 15 });
+    const s0 = { ...base, staff: { ...base.staff, housekeepers: 1 }, spotlight: p, rooms: base.rooms.map(r => ({ ...r, status: 'cleaning' as const, cleaningHoursRemaining: 3 })) };
+    const s = { ...s0, staffPlan: getStaffPlan(s0) }; // (made at 11:00, with no hold)
+    const dirtySuite = s.rooms[3];
+    const firstJob = getStaffPlan(s).itineraries.flatMap(it => it.legs).find(l => l.kind === 'stay' && l.job === 'turnover');
+    expect(firstJob?.kind === 'stay' && firstJob.placeId).toBe(s.rooms[0].id);
+    // Not ready by 15:00 even held now (she finishes the room she's in first); by the last check-in, yes: offered
+    expect(freeBy(s, dirtySuite, p, true, true)).toBe(false);
+    expect(holdFor(s, dirtySuite)).toMatchObject({ held: false });
+    const ready = [...Array(24).keys()].find(h => freeBy(s, dirtySuite, { ...p, arrivalHour: h }, true, true))!;
+    // Held by hand: the tick has it ready by then (never later), and the writer waits for it
+    let st: HotelState = holdSuite(s, suite.id)!;
+    let into: string | undefined;
+    let vacantAt: number | undefined;
+    for (let h = 0; h < 12 && !into; h++) {
+      const r = tickSimulation(st, new PRNG(h));
+      st = r.state;
+      if (vacantAt === undefined && st.rooms.find(x => x.id === suite.id)!.status !== 'cleaning') vacantAt = st.hour;
+      into = r.events.find(e => e.type === 'spotlight_arrived')?.data?.roomId as string | undefined;
+    }
+    expect(vacantAt).toBeLessThanOrEqual(ready);
+    expect(vacantAt).toBeGreaterThanOrEqual(ready - 1);
+    expect(into).toBe(suite.id);
   });
 
   it('a held suite can\'t start a renovation (or a refit) that would run past the arrival', () => {
@@ -575,8 +1174,9 @@ describe('Spotlight guests: arriving', () => {
         expect(rr.checkedIn.filter(c => c.roomId === s.rooms[0].id)).toHaveLength(1);
       }
     }
-    // Without the queue, they're one of the hour's check-ins (the desk's capacity, all told)
-    const roomy = hotel(1, 5, { day: 10, hour: 14, reviewScore: 10, starRating: 5 });
+    // Without the queue, they're one of the hour's check-ins (the desk's capacity, all told: more rooms than it)
+    const roomy = hotel(1, 6, { day: 10, hour: 14, reviewScore: 10, starRating: 5 });
+    expect(roomy.rooms.length).toBeGreaterThan(getCheckInCapacity(roomy));
     const crowd = { ...roomy, spotlight: plan({ roomId: roomy.rooms[0].id }) };
     let full = 0;
     for (let seed = 0; seed < 10; seed++) {

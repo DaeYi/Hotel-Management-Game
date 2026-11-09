@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { STAFF_HOSPITALITY, STAFF_PERSONALITIES, STAFF_SPECIALTIES } from '../src/config/staff.js';
-import { HOSTED_NIGHTS, STORY, TRAVEL, VOICE } from '../src/config/balance.js';
+import { HOSTED_NIGHTS, SPOTLIGHT, STORY, TRAVEL, VOICE } from '../src/config/balance.js';
 import { addRoom, createStarterHotel } from '../src/simulation/HotelState.js';
 import { assignStaffSpecialty, hireCandidate, hiringCandidates } from '../src/simulation/StaffHiring.js';
 import { candidatesFor, checkInHours, hospitalityOf, specialtiesFor, type Hospitality } from '../src/simulation/StaffProfiles.js';
@@ -285,7 +285,7 @@ describe('Upsellers offer suitable rooms at the actual check-in', () => {
     }
   });
 
-  it('preserves a suite promised to an announced spotlight guest whose stay overlaps the booking', () => {
+  it('preserves a suite held for an announced spotlight guest, however short the booking', () => {
     const { state, member, stay, booked } = upsellBooking();
     let reserved = addRoom(state, 'suite', 5, 2, 0, 'up')!;
     const suite = reserved.rooms.find(r => r.type === 'suite')!;
@@ -294,6 +294,16 @@ describe('Upsellers offer suitable rooms at the actual check-in', () => {
         status: 'announced', roomId: suite.id, chainId: 'spotlight-test' } };
     expect(offerUpsell({ ...reserved, spotlight: undefined }, booked.id, member, stay).rooms.find(r => r.id === suite.id)!.status).toBe('occupied');
     expect(offerUpsell(reserved, booked.id, member, stay)).toBe(reserved);
+    // ... even a booking that leaves (day 5) before the spotlight guest comes (day 6)
+    const later = { ...reserved, spotlight: { ...reserved.spotlight!, arrivalDay: 6 } };
+    expect(offerUpsell(later, booked.id, member, stay)).toBe(later);
+    // Once nothing holds it (another suite held, they've come or been, the switch off), it's offered
+    const upsold = (state: HotelState) => offerUpsell(state, booked.id, member, stay).rooms.find(r => r.id === suite.id)!.guestId;
+    expect(upsold({ ...reserved, spotlight: { ...reserved.spotlight!, roomId: 'another-suite' } })).toBe(booked.id);
+    for (const status of ['staying', 'done'] as const) expect(upsold({ ...reserved, spotlight: { ...reserved.spotlight!, status } })).toBe(booked.id);
+    const was = SPOTLIGHT.enabled;
+    SPOTLIGHT.enabled = false;
+    try { expect(upsold(reserved)).toBe(booked.id); } finally { SPOTLIGHT.enabled = was; }
   });
 
   it('preserves the walk already taken and reroutes from the tile actually reached when check-in finished earlier in the hour', () => {

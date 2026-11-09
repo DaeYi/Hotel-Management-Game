@@ -153,7 +153,7 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
 
   const stats = [
     `Status:      ${status}`,
-    ...(hold?.held ? [`Held:        for the ${hold.who} (${hold.when})`] : []),
+    ...(hold?.held ? [`Held:        for the ${hold.who} (${hold.when}${hold.readyBy ? `; ready by ${hold.readyBy}: ${hold.rival ? `they'll take ${hold.rival}${hold.rivalBy ? ` (free by about ${hold.rivalBy})` : ''} if it's still free, else wait` : hold.here ? "they're waiting" : "they'll wait"}` : ''})`] : []),
     ...(visitors ? [`Visitors:    ${visitors}`] : []),
     `Condition:   ${formatBar(room.condition)} ${room.condition.toFixed(0)}%`,
     `Cleanliness: ${formatBar(room.cleanliness)} ${room.cleanliness.toFixed(0)}%${cleaning?.job === 'daily' ? `, ${dailyStatus(cleaning)}` : ''}`,
@@ -214,13 +214,13 @@ function RoomInspector({ room, state }: { room: Room; state: HotelState }) {
           </button>
         )}
         {hold?.held && (
-          <button onClick={() => c.releaseHold()} title={`It can be booked again; the ${hold.who} takes the best suite free when they come`}>
+          <button onClick={() => c.releaseHold()} title={`It can be booked again; the ${hold.who} ${hold.here ? "(here already) takes the best suite as soon as one's free" : 'takes the best suite free when they come'}`}>
             Let the hold go
           </button>
         )}
         {hold && !hold.held && (
-          <button class="good" onClick={() => c.holdSuite(room.id)} title={`Instead of the suite held now (if any)`}>
-            Hold for the {hold.who}
+          <button class="good" onClick={() => c.holdSuite(room.id)} title={`Instead of the suite held now (if any)${hold.readyBy ? `: it would be ready by ${hold.readyBy}, ${hold.here ? "and they're here already:" : 'after they come, and'} they'd wait for it${hold.rival ? ` (or take ${hold.rival}${hold.rivalBy ? `, free by about ${hold.rivalBy},` : ','} if it's still free)` : ''}` : ''}`}>
+            Hold for the {hold.who}{hold.readyBy ? ` (ready ${hold.readyBy})` : ''}
           </button>
         )}
         {canRenovate && (
