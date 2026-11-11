@@ -16,6 +16,14 @@ updates:
       # Node type definitions should match the Node 22 used to build and test.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
+      # Major versions of the game engine, the UI library and the compiler need their own
+      # planned upgrade and testing, so Dependabot offers only their minor and patch releases.
+      - dependency-name: "phaser"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "preact"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
