@@ -14,7 +14,8 @@ import { baseWalkHours } from '../src/simulation/HousekeepingManager.js';
 import { PRNG } from '../src/simulation/prng.js';
 import { settleChanges } from '../src/simulation/Settle.js';
 import { tickSimulation } from '../src/simulation/tick.js';
-import type { HotelState, Leg, StaffMember, StaffPlan } from '../src/simulation/types.js';
+import { dismissStaff, hireCandidate, hiringCandidates } from '../src/simulation/StaffHiring.js';
+import type { Guest, HotelState, Leg, StaffMember, StaffPlan, StayLeg } from '../src/simulation/types.js';
 
 function worker(extra: Partial<StaffMember> = {}): StaffMember {
   return { id: 'h1', serial: 1, name: 'Avery Park', role: 'housekeeper', dailyWage: 70,
@@ -461,5 +462,38 @@ describe('Held suites allow for the cleaning crew’s fatigue', () => {
     expect(freeBy(busy, busy.rooms.find(room => room.id === suite.id)!, { kind: 'writer', arrivalDay: 2, arrivalHour: deadline }, true)).toBe(false);
     STAFF_FATIGUE.enabled = false;
     expect(freeBy(busy, busy.rooms.find(room => room.id === suite.id)!, { kind: 'writer', arrivalDay: 2, arrivalHour: deadline }, true)).toBe(true);
+  });
+});
+
+describe('Resting at home till a do-not-disturb party goes out is spare time', () => {
+  const fresh = (fatigue: number) => ({ workHours: 80, lateDays: 0, absentDays: 0, fatigue, fatigueAt: 36 });
+  const legsOf = (state: HotelState, id = 'h1') => getStaffPlan(state).itineraries.find(it => it.staffId === id)!.legs;
+  const rests = (state: HotelState, id = 'h1') => legsOf(state, id).filter((leg): leg is StayLeg => leg.kind === 'stay' && leg.activity === 'rest');
+
+  it('it gives way to the turnover a let-go leaves her', () => {
+    // D (5,2): its do-not-disturb party goes out at 12:36. X (6,2): a's turnover. h1 has only D, so rests at a base till she sets off
+    const a = worker({ id: 'a', serial: 2, at: { gridX: 6, gridY: 2, floor: 0 }, stats: fresh(0) });
+    const two = addRoom(hotel(), 'standard', 6, 2, 0, 'up')!;
+    const [D, X] = two.rooms, at = roomTile(D), hall = { ...at, gridY: 1 };
+    const party = { id: 'd', name: 'd', budget: 1000, stayLength: 5, trait: 'normal', satisfaction: 55, checkInDay: 1, isReturning: false, hadNoiseComplaint: false,
+      profile: { chronotype: 'regular', mobility: 'normal', sleep: 'normal', rowdiness: 'normal', favorite: 'none', housekeeping: 'dnd' },
+      tripKind: 'outing', trip: [makeWalk([at, hall], 36.6, 0.06), makeStay(hall, 36.66, 40, 'away'), makeWalk([hall, at], 40, 0.06)] } as Guest;
+    const s0: HotelState = { ...two, guests: [party], staff: { frontDesk: 0, housekeepers: 2, maintenanceWorkers: 0 },
+      staffRoster: [worker({ at: { gridX: 5, gridY: 1, floor: 0 }, stats: fresh(0) }), { ...a, roomId: X.id }],
+      rooms: [{ ...D, status: 'occupied', guestId: 'd', dailyCleanHoursRemaining: 0.5 }, { ...X, status: 'cleaning', cleaningHoursRemaining: 1.5 }] };
+    const s = { ...s0, staffPlan: getStaffPlan(s0) };
+    const homeRest = rests(s)[0];
+    expect(homeRest.end).toBeLessThan(36.66);
+    const daily = legsOf(s).find(leg => leg.kind === 'stay' && leg.job === 'daily' && leg.placeId === D.id)!;
+    // a let go mid-rest: h1 takes X at once
+    const t = (homeRest.start + homeRest.end) / 2;
+    const re = settleChanges(s, dismissStaff(s, 'a', t)!, t);
+    const after = legsOf(re).filter(leg => leg.end > t + 1e-9);
+    expect(after[0]).toMatchObject({ kind: 'walk', start: t });
+    expect(after.find(leg => leg.kind === 'stay' && leg.job)).toMatchObject({ job: 'turnover', placeId: X.id });
+    // a hire instead (nothing new for her): D is still cleaned as the party goes out
+    const offer = hiringCandidates(s, 'housekeeper')[0];
+    const hired = settleChanges(s, hireCandidate(s, 'housekeeper', offer.id, undefined, t)!, t);
+    expect(legsOf(hired).find(leg => leg.kind === 'stay' && leg.job === 'daily' && leg.placeId === D.id)!.start).toBeCloseTo(daily.start, 10);
   });
 });

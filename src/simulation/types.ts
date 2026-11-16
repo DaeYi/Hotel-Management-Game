@@ -229,6 +229,7 @@ export interface StayLeg {
   job?: 'turnover' | 'daily' | 'repair'; // what the stay works on, for staff
   workRate?: number; // work units per hour, fixed when this leg was planned
   restRate?: number; // fatigue points recovered per hour at this reserved resting place
+  idle?: boolean; // spare-time recovery, not a compulsory break: a mid-hour re-plan gives it up to new work (replanStaff)
   credited?: boolean; // a facility visit whose bonus and sale have been counted (once the guest got there)
   out?: 'beach' | 'breakfast' | 'lunch' | 'dinner'; // an outing instead of a facility the hotel doesn't have
   lane?: string; // the front desk clerk ("deskId:seat") a check-in or complaint takes, and whose line a wait is in (see DeskQueue.ts)

@@ -40,11 +40,11 @@ export function settleChanges(before: HotelState, after: HotelState, t: number):
   const lanesChanged = layoutChanged || oldLanes !== lanesKey(after);
   let state = after;
   if (namedFrontDesk(state)) {
-    if (workChanged) state = replanStaff(state, t);
+    if (workChanged) state = replanStaff(state, t, before);
     if (lanesChanged || oldLanes !== lanesKey(state)) {
       state = reseatLanes(rerouteTrips(state, t), t);
       // Room workers must use the guests' final routes and return times.
-      if (workChanged) state = replanStaff(state, t);
+      if (workChanged) state = replanStaff(state, t, before);
     }
     return state;
   }
@@ -53,7 +53,7 @@ export function settleChanges(before: HotelState, after: HotelState, t: number):
   const guestsFirst = GUEST_HOUSEKEEPING.enabled;
   // (with the desk queue on, everyone not yet at the counter is seated again on the clerks there now)
   if (lanesChanged && guestsFirst) state = reseatLanes(rerouteTrips(state, t), t);
-  if (workChanged) state = replanStaff(state, t);
+  if (workChanged) state = replanStaff(state, t, before);
   if (lanesChanged && !guestsFirst) state = reseatLanes(rerouteTrips(state, t), t);
   return state;
 }
