@@ -3,7 +3,7 @@ import type { StaffIdentity, Stamina } from './StaffProfiles.js';
 import { staffDuty, staffDutyAt } from './StaffProfiles.js';
 import { STAFF_FATIGUE as RULES, STAFF_PERSONALITIES } from '../config/staff.js';
 import { BREAK_ROOM, TRAVEL } from '../config/balance.js';
-import { getAccessibleBreakRooms, getStaffBases, findRoute, doorTile, getFixtureFront } from './Layout.js';
+import { getAccessibleBreakRooms, getStaffBases, findRoute, doorTile, getFixtureFront, isHallway } from './Layout.js';
 import { hourStart, makeStay, makeWalk, sameTile } from './Movement.js';
 
 export interface RestReservation { staffId: string; placeId: string; start: number; end: number }
@@ -115,6 +115,34 @@ export function planStaffRest(state: HotelState, member: StaffMember, at: TilePo
   if (end > start) legs.push(makeStay(target, start, end, 'rest', { restRate: selected ? RULES.roomRecovery : RULES.fallbackRecovery, ...(selected ? { placeId: selected.room.id } : {}) }));
   if (selected && end > start) reservations.push({ staffId: member.id, placeId: selected.room.id, start, end });
   return { legs, at: target, until: end, reservation };
+}
+
+/** Where someone rests: the tile, and the break room whose seat they hold (none: a slower fallback). */
+export type RestSpot = Pick<FatigueBreak, 'at' | 'placeId'>;
+
+/**
+ * Spare-time recovery kept through a mid-hour re-plan (StaffManager.
+ * replanStaff): back at (or on to) the same spot until `until`, in the same
+ * seat -- from when she's there, or (there early, by a new way, and her seat
+ * not free yet) waiting there for when it was to be hers (`planned`). Null
+ * when the spot is gone or cut off, or its seat was taken meanwhile: plan the
+ * rest afresh then.
+ */
+export function keepRestSpot(state: HotelState, member: StaffMember, spot: RestSpot, at: TilePos, from: number, until: number, reservations: RestReservation[], planned = Infinity): { legs: Leg[]; at: TilePos; until: number } | null {
+  const valid = spot.placeId ? getAccessibleBreakRooms(state).some(r => r.id === spot.placeId && sameTile(r, spot.at))
+    : isHallway(state, spot.at.gridX, spot.at.gridY, spot.at.floor);
+  const route = valid && !sameTile(at, spot.at) ? findRoute(state, at, spot.at, TRAVEL.hoursPerTile) : null;
+  if (!valid || !route && !sameTile(at, spot.at)) return null;
+  const legs: Leg[] = route && route.path.length > 1 ? [makeWalk(route.path, from, TRAVEL.hoursPerTile)] : [];
+  const arrive = legs.at(-1)?.end ?? from;
+  const free = (start: number) => !spot.placeId || start >= until - 1e-9 || seatFree(reservations, spot.placeId, member.id, start, until);
+  const start = free(arrive) ? arrive : planned > arrive && planned < until && free(planned) ? planned : null;
+  if (start === null) return null;
+  const end = Math.max(start, until);
+  if (start > arrive) legs.push(makeStay(spot.at, arrive, start, 'wait'));
+  if (end > start) legs.push(makeStay(spot.at, start, end, 'rest', { restRate: spot.placeId ? RULES.roomRecovery : RULES.fallbackRecovery, ...(spot.placeId ? { placeId: spot.placeId } : {}) }));
+  if (spot.placeId && end > start) reservations.push({ staffId: member.id, placeId: spot.placeId, start, end });
+  return { legs, at: spot.at, until: end };
 }
 
 export function breakRoomOccupancy(state: HotelState, roomId: string, t: number): number {

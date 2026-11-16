@@ -1,4 +1,4 @@
-import type { HotelState, Room, StaffMember, StaffPlan, StaffRush, StaffItinerary, StaffRole, FrontDeskShift, Leg, WalkLeg, TilePos, ReceptionSupport } from './types.js';
+import type { HotelState, Room, StaffMember, StaffPlan, StaffRush, StaffItinerary, StaffRole, FrontDeskShift, Leg, WalkLeg, TilePos, ReceptionSupport, FatigueBreak } from './types.js';
 import { STAFF, TRAVEL, GUEST_PROFILE, GUEST_HOUSEKEEPING } from '../config/balance.js';
 import { findRoute, routeFromStreet, routeToStreet, getStaffBases, getAccessibleBreakRooms, isEntranceTile, stepHours, doorTile, isHallway } from './Layout.js';
 import { isRoomReachable } from './HotelState.js';
@@ -11,7 +11,7 @@ import { STAFF_PERSONALITIES, STAFF_SPECIALTIES, STAFF_FATIGUE, STAFF_CROSS_TRAI
 import { reconcileStaff, initializeFrontDesk } from './StaffHiring.js';
 import { staffRate, attendance, afterWork, repairTarget, nextStaffWork, staffDutyAt, shiftFor, specialtyOf, hospitalityOf, receptionTrained, checkInHours, cleaningTrained } from './StaffProfiles.js';
 import { planDeskClerk, scheduledDeskLanes, physicalDeskLanes } from './FrontDesk.js';
-import { fatigueOn, fatigueAt, projectFatigue, planStaffRest, restReservations, fatigueGain } from './StaffFatigue.js';
+import { fatigueOn, fatigueAt, projectFatigue, planStaffRest, keepRestSpot, restReservations, fatigueGain, type RestSpot } from './StaffFatigue.js';
 import { receptionSupports } from './CrossTraining.js';
 import { cleaningSupports, planClerkCleaning } from './ClerkCleaning.js';
 import { rushFor, heldNow } from './Spotlight.js';
@@ -223,6 +223,25 @@ function roomClearAt(state: HotelState, room: Room): number {
 }
 
 /**
+ * Spare-time rest found by a mid-hour re-plan: its spot, when it was to
+ * start, and (resting at home for do-not-disturb parties to go out) the rooms
+ * her plan had next, with the set-off for the first and when she'd be at its
+ * door.
+ */
+type IdleRest = RestSpot & { start?: number; dnd?: { rooms: string[]; setOff: number; atDoor: number; fatigue: number } };
+
+/**
+ * What a mid-hour re-plan knows of the hotel before the edit: who it found
+ * resting in spare time, and the front desk then -- each lane there was, and
+ * who was to be at it when -- so the counter it offers them is only what's new.
+ */
+interface Replan {
+  idleRests: ReadonlyMap<string, IdleRest>;
+  deskBefore: ReadonlyMap<string, { staffId: string; from: number; to: number }[]>;
+  before?: HotelState; // the hotel before the edit, for her way to the counter then
+}
+
+/**
  * Plan every housekeeper's and maintenance worker's coming hour from the
  * state at its start. Each worker keeps at the room they were on (if it still
  * needs them), then takes the most urgent unclaimed job; one worker per room.
@@ -230,7 +249,9 @@ function roomClearAt(state: HotelState, room: Room): number {
  * held for a spotlight guest jumps the housekeepers' queue (`rush`) if, as the
  * hour planned without that leaves things, it wouldn't be ready for them in
  * its turn, and rushing gets it ready sooner (Spotlight.rushFor; undefined:
- * decide that here, null: not rushed).
+ * decide that here, null: not rushed). `replan`: a mid-hour re-plan's view
+ * of the plan it replaces (replanStaff): people resting in spare time keep
+ * their rest if nothing new comes up for them.
  */
 export function planStaff(
   state: HotelState,
@@ -238,12 +259,13 @@ export function planStaff(
   from = hourStart(state),
   done?: { turnover: Map<string, number>; daily: Map<string, number>; repair?: Map<string, number> },
   rush?: StaffRush | null,
+  replan?: Replan,
 ): StaffPlan {
-  if (rush !== undefined) return planHour(state, roster, from, done, rush ?? undefined);
-  const plain = planHour(state, roster, from, done, undefined);
+  if (rush !== undefined) return planHour(state, roster, from, done, rush ?? undefined, replan);
+  const plain = planHour(state, roster, from, done, undefined, replan);
   const pick = rushFor(state, plain);
   if (!pick) return plain;
-  const rushed = planHour(state, roster, from, done, pick.rush);
+  const rushed = planHour(state, roster, from, done, pick.rush, replan);
   return pick.helps(rushed) ? rushed : plain;
 }
 
@@ -253,8 +275,10 @@ function planHour(
   from: number,
   done: { turnover: Map<string, number>; daily: Map<string, number>; repair?: Map<string, number> } | undefined,
   rush: StaffRush | undefined,
+  replan: Replan | undefined,
 ): StaffPlan {
   const T = hourStart(state);
+  const idleRests = replan?.idleRests;
   const end = T + 1;
   const pace = TRAVEL.hoursPerTile;
   const queues = jobQueues(state, done, rush);
@@ -336,8 +360,33 @@ function planHour(
       claimed.add(job.room.id);
     }
   }
+  // Re-planned while resting at home for a do-not-disturb party to go out: the room she was resting for stays hers
+  // against colleagues re-planned with her. Not as her own room: new work still comes first for her (see below).
+  const homeJobs = new Map<string, Job>();
+  for (const m of roster) {
+    const dnd = idleRests?.get(m.id)?.dnd;
+    const job = dnd && !m.leaving ? personalQueues.get(m.id)!.find(j => j.room.id === dnd.rooms[0] && !claimed.has(j.room.id)) : undefined;
+    // (one cut off from where she is now is anyone's who can get there)
+    const at = m.carry && m.carry.end > from ? m.carry.path.at(-1)! : m.at;
+    if (job && at && (sameTile(at, roomTile(job.room)) || findRoute(state, at, roomTile(job.room), TRAVEL.hoursPerTile))) {
+      homeJobs.set(m.id, job);
+      claimed.add(job.room.id);
+    }
+  }
+
+  // Rooms the hour's plan had someone now let go (or gone) do, or on their way to
+  const leftBehind = new Set(homeJobs.size && state.staffPlan?.start === T ? state.staffPlan.itineraries
+    .filter(it => !roster.some(m => m.id === it.staffId && !m.leaving))
+    .flatMap(it => [...it.legs.flatMap(l => (l.kind === 'stay' && l.job && l.placeId && l.end > from ? [l.placeId] : [])), ...(it.end.roomId ? [it.end.roomId] : [])]) : []);
+  // ... and who the hour's plan had at each room; a room a colleague already re-planned has given up is new work too
+  const hadIt = new Map<string, string[]>();
+  if (homeJobs.size && state.staffPlan?.start === T) for (const it of state.staffPlan.itineraries)
+    for (const id of [...it.legs.flatMap(l => (l.kind === 'stay' && l.job && l.placeId && l.end > from ? [l.placeId] : [])), ...(it.end.roomId ? [it.end.roomId] : [])])
+      hadIt.set(id, [...(hadIt.get(id) ?? []), it.staffId]);
+  const replanned = new Set<string>();
 
   const itineraries: StaffItinerary[] = roster.map(m => {
+    replanned.add(m.id);
     if (m.role === 'front_desk') return deskPlans.get(m.id)!;
     let rate = staffRate(m);
     const worked = new Map<string, number>();
@@ -358,6 +407,14 @@ function planHour(
     const initialFatigue = fatigueAt(state, m, from);
     const energy = () => projectFatigue(m, legs, from, t, initialFatigue);
     const updateRate = () => { rate = staffRate({ ...m, stats: { ...m.stats!, fatigue: energy() } }); };
+    /** Rest in spare time (and the walk to it), marked idle: a re-plan gives it up to new work. Reached at the break threshold, it's a break: unmarked, held like one. */
+    const spareRest = (rest: Leg[]): Leg[] => rest.map((l, i) => (fatigueOn() && l.kind === 'stay' && l.activity === 'rest'
+      && projectFatigue(m, [...legs, ...rest.slice(0, i)], from, l.start, initialFatigue) < STAFF_FATIGUE.breakAt - 1e-9 ? { ...l, idle: true } : l));
+    const idleRest = idleRests?.get(m.id);
+    let homeJob = homeJobs.get(m.id);
+    const giveUpHome = () => { if (homeJob) claimed.delete(homeJob.room.id); homeJob = undefined; };
+    // (when she took it up: other do-not-disturb rooms are judged as while it was hers for the rest of that moment)
+    let homeAt = -Infinity;
 
     // A walk under way at the boundary carries on
     if (m.carry && m.carry.end > from) {
@@ -510,32 +567,68 @@ function planHour(
      * later this hour: when to set off to be at its door as they go. From the
      * resting place if there's time to get there and wait, else from here.
      */
-    const nextDndSetOff = (): { at: number; home: boolean; rest?: { path: TilePos[] }; restPlaceId?: string } | null => {
-      if (!pos || !GUEST_HOUSEKEEPING.enabled) return null;
+    type DndOption = { roomId: string; at: number; home: boolean; rest?: { path: TilePos[] }; restPlaceId?: string };
+    const dndOptions = (): { options: DndOption[]; dnd?: NonNullable<IdleRest['dnd']> } => {
+      if (!pos || !GUEST_HOUSEKEEPING.enabled) return { options: [] };
       const home = restingPlace(state, pos.floor);
       const toRest = home && !sameTile(pos, home.at) ? findRoute(state, pos, home.at, pace) : null;
-      let best: { at: number; home: boolean; rest?: { path: TilePos[] }; restPlaceId?: string } | null = null;
       // In a room (one just cleaned): never wait in it -- step out into the hallway first
       const inRoom = state.rooms.find(r => sameTile(r, pos));
       const outside = inRoom ? { ...doorTile(inRoom, inRoom.door) } : null;
       const stepOut = outside ? { path: [pos, outside] } : null;
       const waitAt = outside ?? pos;
       const waitFrom = t + (stepOut ? stepHours(pos, outside!, pace) : 0);
+      // (re-planned at home for a party not out soon enough to wait for yet, with nothing new, as she takes its room up)
+      const dnd = homeAt === t ? idleRest?.dnd : undefined;
+      const options: DndOption[] = [];
       for (const j of queue) {
         if (claimed.has(j.room.id) || unreachable.has(j.room.id) || !isDnd(j)) continue;
         const guest = dndGuestOf(j)!;
         const here = approachTo(waitAt, j);
         if (!here) continue;
         const fromHere = dndSetOff(guest, j.room, waitFrom, here.approach, needed(j) / rate + here.step + pace, end);
-        if (fromHere === null) continue;
-        let option: { at: number; home: boolean; rest?: { path: TilePos[] }; restPlaceId?: string } = { at: fromHere, home: false, ...(stepOut ? { rest: stepOut } : {}) };
+        // (her own room: she rests on till the set-off already planned, or sooner if her way's longer now; too tired for it
+        // just now, it's timed as she'll be by then, rested, as planned -- at the set-off she's judged as she is)
+        const own = j.room.id === dnd?.rooms[0];
+        if (fromHere === null && !own) continue;
+        let option: (typeof options)[number] | null = fromHere === null ? null : { roomId: j.room.id, at: fromHere, home: false, ...(stepOut ? { rest: stepOut } : {}) };
         if (home && (toRest || sameTile(pos, home.at))) {
           const fromHome = approachTo(home.at, j);
           const arrive = t + (toRest ? toRest.hours : 0);
-          const setOff = fromHome ? dndSetOff(guest, j.room, arrive, fromHome.approach, needed(j) / rate + fromHome.step + pace, end) : null;
-          if (setOff !== null) option = { at: setOff, home: true, ...(toRest ? { rest: toRest } : {}), ...(home.breakRoomId ? { restPlaceId: home.breakRoomId } : {}) };
+          const r = own ? Math.max(rate, staffRate({ ...m, stats: { ...m.stats!, fatigue: dnd!.fatigue } })) : rate;
+          const timed = fromHome ? dndSetOff(guest, j.room, arrive, fromHome.approach, needed(j) / r + fromHome.step + pace, end) : null;
+          // (held to the set-off planned only while from there she'd not wait at the door longer than she may)
+          let setOff = timed !== null && own && dnd!.setOff > arrive + 1e-9 && timed - dnd!.setOff <= GUEST_HOUSEKEEPING.dndMaxWait + 1e-9
+            ? Math.min(timed, dnd!.setOff) : timed;
+          // (her own room, which from home she'd reach only once its party's out, or only next hour, as planned: she rests on
+          // till the set-off planned, or sooner if her way's longer now, so as to be there no later than planned -- if she
+          // can still clean it then; if she'd have to leave before she's home, she's timed as ever)
+          if (setOff === null && own && fromHome) {
+            const leave = Math.min(dnd!.setOff, dnd!.atDoor - fromHome.approach), there = leave + fromHome.approach;
+            if (leave > arrive + 1e-9
+              && (there >= end - 1e-9 || dndCleanStart(guest, j.room, there, needed(j) / r + fromHome.step + pace) !== null)) setOff = leave;
+          }
+          if (setOff !== null) option = { roomId: j.room.id, at: setOff, home: true, ...(toRest ? { rest: toRest } : {}), ...(home.breakRoomId ? { restPlaceId: home.breakRoomId } : {}) };
         }
-        if (!best || option.at < best.at) best = option;
+        if (option) options.push(option);
+      }
+      return { options, ...(dnd ? { dnd } : {}) };
+    };
+    // Re-planned at home for a party not out soon enough to wait for yet, with nothing new: her own room can still be
+    // done this hour
+    const hersTimed = () => { const { options, dnd } = dndOptions(); return !!dnd && options.some(o => o.roomId === dnd.rooms[0]); };
+    const nextDndSetOff = (): DndOption | null => {
+      const { options, dnd } = dndOptions();
+      let best: DndOption | null = null;
+      // (nor off sooner than planned for another room -- one her plan had after hers, whose set-off comes first from where
+      // she is now, or another party's chance that came round as she rested -- unless it's new work: one someone let go was
+      // to do, or a colleague re-planned before her has given up; while hers still has one: if it can't be done, the rest
+      // of her rooms are timed as ever)
+      const hers = !!dnd && options.some(o => o.roomId === dnd.rooms[0]);
+      const isNew = (id: string) => leftBehind.has(id) || (hadIt.get(id) ?? []).some(s => s !== m.id && replanned.has(s));
+      for (const o of options) {
+        if (hers && o.roomId !== dnd!.rooms[0] && !isNew(o.roomId) && o.at < dnd!.setOff - 1e-9) continue;
+        if (!best || o.at < best.at) best = o;
       }
       return best;
     };
@@ -557,13 +650,18 @@ function planHour(
       updateRate();
       if (!job) {
         job = queue.find(j => !claimed.has(j.room.id) && !unreachable.has(j.room.id) && notNow.get(j.room.id) !== t);
+        // (the room she was resting for keeps its place in her queue; new work after it in her queue comes after it --
+        // if hers can't be done yet, it's anyone's again; nothing new: on to the room she was resting for)
+        if (homeJob && (!job || queue.indexOf(homeJob) < queue.indexOf(job))) { job = homeJob; homeJob = undefined; homeAt = t; }
+        else if (job && !isDnd(job)) giveUpHome();
         if (!job) {
           // Nothing to do now, but a do-not-disturb party going out later this hour: be at their door as they go
           const later = nextDndSetOff();
           if (later === null) break;
           // (resting, if they can get to the resting place in time; else waiting where they are)
           if (later.rest) walk(later.rest);
-          legs.push(later.home ? makeStay(pos!, t, later.at, 'rest', { ...(later.restPlaceId ? { placeId: later.restPlaceId } : {}), ...(fatigueOn() ? { restRate: STAFF_FATIGUE.fallbackRecovery } : {}) }) : makeStay(pos!, t, later.at, 'wait'));
+          legs.push(...(later.home ? spareRest([makeStay(pos!, t, later.at, 'rest', { ...(later.restPlaceId ? { placeId: later.restPlaceId } : {}), ...(fatigueOn() ? { restRate: STAFF_FATIGUE.fallbackRecovery } : {}) })])
+            : [makeStay(pos!, t, later.at, 'wait')]));
           t = later.at;
           continue;
         }
@@ -612,11 +710,30 @@ function planHour(
         const guest = dndGuestOf(job)!;
         const reachesTired = energy() < STAFF_FATIGUE.tiredAt && energy() + STAFF_FATIGUE.gain[m.profile?.stamina ?? 'normal'] * (way.approach + way.step + needed(job) / rate) >= STAFF_FATIGUE.tiredAt;
         const safeRate = fatigueOn() && reachesTired ? rate * STAFF_FATIGUE.tiredRate : rate;
-        if (!guest || dndCleanStart(guest, job.room, t + way.approach, needed(job) / safeRate + way.step + pace) === null) {
+        const hours = needed(job) / safeRate + way.step + pace;
+        const start = guest ? dndCleanStart(guest, job.room, t + way.approach, hours) : null;
+        // (resting at home for another party to go out, a room her plan had later, or a wait at this door, isn't new
+        // work: its chance just came round -- unless it's one someone let go was to do)
+        // (a room her plan had later only while her own can still be done this hour: if it can't, the rest of her rooms are
+        // timed as ever)
+        if (start === null || (homeJob || homeAt === t && job.room.id !== idleRest?.dnd?.rooms[0]) && !leftBehind.has(job.room.id)
+          && (start > t + way.approach + 1e-9 || idleRest?.dnd?.rooms.includes(job.room.id) && (!!homeJob || hersTimed()))) {
           turnDown(job.room.id);
           job = undefined;
           continue;
         }
+        if (idleRest?.dnd?.rooms[0] === job.room.id && legs.every(l => l === m.carry)) {
+          // Re-planned while resting at home for this party to go out (or on her way there) with nothing new: rest on there
+          // till the set-off already planned -- sooner if her way from there is longer now -- rather than wait at the door
+          const there = approachTo(idleRest.at, job);
+          const leave = there ? Math.min(idleRest.dnd.setOff, idleRest.dnd.atDoor - there.approach) : t;
+          const rest: ReturnType<typeof keepRestSpot> = leave > t + 1e-9 ? keepRestSpot(state, m, idleRest, pos!, t, leave, reservations) : null;
+          if (rest?.legs.at(-1)?.kind === 'stay') {
+            legs.push(...spareRest(rest.legs)); t = rest.until; pos = rest.at;
+            continue;
+          }
+        }
+        giveUpHome();
         claimed.add(job.room.id);
         if (way.route) walk({ path: way.route.path.slice(0, -1) });
         if (t >= end - 1e-9) {
@@ -712,19 +829,26 @@ function planHour(
       }
       job = undefined;
     }
+    giveUpHome();
 
     // Home work has priority. Only spare afternoon time may be committed to
     // reception, and travel/energy/shift limits must leave a useful block.
+    // Re-planned in spare-time rest with nothing new, a lane counts only if
+    // the plan being replaced wouldn't have had it for her now (a let-go, or
+    // a new desk, opened it): not one free anyway, or one she has the energy
+    // for only since.
+    const held = !!idleRest && !idleRest.dnd && legs.every(l => l === m.carry);
     if (t < end - 1e-9 && pos && receptionTrained(m) && t % 24 >= STAFF_CROSS_TRAINING.startHour
       && (m.restUntil ?? -Infinity) <= t && (!fatigueOn() || energy() < STAFF_FATIGUE.breakAt)) {
       const duty = staffDutyAt(m, t);
-      const options = supportLanes.flatMap(lane => {
-        const route = findRoute(state, pos!, lane.front, pace);
+      const counter = (before: boolean) => supportLanes.flatMap(lane => {
+        const route = findRoute(before && replan!.before || state, pos!, lane.front, pace);
         if (!route) return [];
         const arrival = t + route.hours;
         const fatigue = projectFatigue(m, route.path.length > 1 ? [makeWalk(route.path, t, pace)] : [], t, arrival, energy());
         const busy = [...(lane.duties ?? []).filter(d => d.staffId !== m.id).map(d => ({ from: d.from, to: d.to })),
-          ...[...commitments].filter(([id, s]) => id !== m.id && s.lane === lane.key).map(([, s]) => s)];
+          ...[...commitments].filter(([id, s]) => id !== m.id && s.lane === lane.key).map(([, s]) => s),
+          ...(before ? (replan!.deskBefore.get(lane.key) ?? []).filter(d => d.staffId !== m.id) : [])];
         if (busy.some(b => b.from <= arrival + 1e-9 && b.to > arrival + 1e-9)) return [];
         const next = Math.min(Infinity, ...busy.filter(b => b.from > arrival).map(b => b.from));
         const toBreak = fatigueOn() ? (STAFF_FATIGUE.breakAt - fatigue) / fatigueGain(m) : Infinity;
@@ -733,16 +857,25 @@ function planHour(
         if (to - arrival < Math.max(STAFF_CROSS_TRAINING.minSupportHours, service) - 1e-9) return [];
         return [{ lane, from: arrival, to }];
       }).sort((a, b) => a.from - b.from || a.lane.key.localeCompare(b.lane.key));
+      const then = held ? counter(true) : [];
+      const options = counter(false).filter(o => !held || !replan!.deskBefore.has(o.lane.key) || !then.some(p => p.lane.key === o.lane.key));
       if (options[0]) coverReception({ lane: options[0].lane.key, from: options[0].from, to: options[0].to });
     }
 
     // Done for now: rest -- in the break room if they can get there, else where they are
     if (t < end - 1e-9 && pos) {
       if (fatigueOn()) {
-        // Idle recovery can be interrupted by work arriving next hour; only
-        // a compulsory break retains a fixed end beyond this plan.
-        const rest = planStaffRest(state, { ...m, stats: { ...m.stats!, fatigue: energy(), fatigueAt: t } }, pos, t, reservations, end - t, end, true);
-        legs.push(...rest.legs); t = rest.until; pos = rest.at;
+        // Idle recovery can be interrupted by work arriving next hour, or
+        // mid-hour by a re-plan that finds some (it's marked idle); only a
+        // compulsory break retains a fixed end beyond this plan. Re-planned
+        // with nothing new to do, she stays at the spot she was resting at
+        // (not one she was resting at only for a do-not-disturb party).
+        // Reached at the break threshold (after a counter block that ends
+        // there, or a walk), it's a break: unmarked, a re-plan keeps it.
+        const spot = legs.every(l => l === m.carry) && !idleRest?.dnd ? idleRest : undefined;
+        const rest = (spot && keepRestSpot(state, m, spot, pos, t, end, reservations, spot.start))
+          || planStaffRest(state, { ...m, stats: { ...m.stats!, fatigue: energy(), fatigueAt: t } }, pos, t, reservations, end - t, end, true);
+        legs.push(...spareRest(rest.legs)); t = rest.until; pos = rest.at;
       } else {
         const rest = restingPlace(state, pos.floor);
         if (rest && !sameTile(pos, rest.at)) walk(findRoute(state, pos, rest.at, pace));
@@ -856,13 +989,17 @@ export function rosterAfter(state: HotelState, plan: StaffPlan): StaffMember[] {
  * being cleaned) or the work (a room renovated mid-repair): everyone keeps
  * what they've done so far -- finishing the step they're on, if it's still
  * clear -- and carries on from there. Cleaning already done this hour counts,
- * so nobody re-cleans a room. The tick credits the merged plan.
+ * so nobody re-cleans a room. The tick credits the merged plan. `before`: the
+ * hotel before the change (Settle), for the front desk lanes there were.
  */
-export function replanStaff(state: HotelState, t: number): HotelState {
+export function replanStaff(state: HotelState, t: number, before?: HotelState): HotelState {
   const plan = getStaffPlan(state);
   const supports = receptionSupports({ ...state, staffPlan: plan });
   const cleanings = cleaningSupports({ ...state, staffPlan: plan });
   const done = new Map<string, Leg[]>();
+  // Spare-time rests give way to new work: planned afresh, not as a fixed
+  // break, they're kept at the same spot (and seat) only if nothing comes up.
+  const idleRests = new Map<string, IdleRest>();
   const now = getRoster(state).map(m => {
     // These are planning-only snapshots. The returned state retains its
     // boundary stats and the merged plan commits fatigue exactly once.
@@ -875,21 +1012,45 @@ export function replanStaff(state: HotelState, t: number): HotelState {
       cleaningSupport: cleanings.find(({ member }) => member.id === m.id)?.support };
     if (!it || it.legs.length === 0 || it.legs[0].start >= t) return m;
     const current = positionAt(it.legs, t)?.leg;
-    const resting = current?.kind === 'stay' && current.activity === 'rest' ? current
-      : current?.kind === 'walk' ? it.legs.slice(it.legs.indexOf(current) + 1).find(l => l.kind === 'stay') : undefined;
-    if (fatigueOn() && resting?.kind === 'stay' && resting.activity === 'rest' && resting.restRate !== undefined && resting.end > t
+    const first = current?.kind === 'walk' ? it.legs.slice(it.legs.indexOf(current) + 1).find(l => l.kind === 'stay') : current;
+    // (a wait at her rest's spot that runs into it -- there early, her seat or her break not hers yet -- is on her way to it;
+    // a break with no time left in it isn't one)
+    const into = first?.kind === 'stay' && first.activity === 'wait' ? it.legs[it.legs.indexOf(first) + 1] : undefined;
+    const resting = into?.kind === 'stay' && into.activity === 'rest' && into.end > into.start + 1e-9 && sameTile(into.at, first!.at) && Math.abs(into.start - first!.end) < 1e-9 ? into
+      : first?.kind === 'stay' && first.activity === 'rest' || current?.kind === 'walk' ? first : undefined;
+    if (fatigueOn() && resting?.kind === 'stay' && resting.activity === 'rest' && resting.idle && resting.end > t) {
+      // (an idle rest ending before the hour does is at home till a do-not-disturb party goes out: the rooms she'd
+      // do next -- her jobs, then the one she's on her way to at the hour's end -- when she'd set off for the first,
+      // and when she'd be at its door; spare-time rests back to back at one spot -- turned down at her set-off, she rests
+      // on there -- are one rest)
+      let upTo = it.legs.indexOf(resting);
+      for (let l = it.legs[upTo + 1]; l?.kind === 'stay' && l.activity === 'rest' && l.idle && sameTile(l.at, resting.at)
+        && Math.abs(l.start - it.legs[upTo].end) < 1e-9; l = it.legs[upTo + 1]) upTo++;
+      const until = it.legs[upTo].end, after = it.legs.slice(upTo + 1);
+      const rooms = [...after.flatMap(l => (l.kind === 'stay' && l.job && l.placeId ? [l.placeId] : [])), ...(it.end.roomId ? [it.end.roomId] : [])];
+      const spot = { at: resting.at, ...(resting.placeId ? { placeId: resting.placeId } : {}), start: resting.start };
+      if (until >= plan.start + 1 - 1e-9) idleRests.set(m.id, spot);
+      else if (rooms.length && after[0]?.kind === 'walk') idleRests.set(m.id, { ...spot, dnd: { rooms, setOff: until, atDoor: after[0].end,
+        fatigue: fatigueAt({ ...state, staffPlan: plan }, m, until) } });
+    } else if (fatigueOn() && resting?.kind === 'stay' && resting.activity === 'rest' && resting.restRate !== undefined && resting.end > t
       && (!m.cleaningSupport || current?.kind !== 'walk' || sameTile(current.path.at(-1), resting.at))) {
-      const fixed = m.cleaningSupport ? it.end.fatigueBreak : undefined;
+      // A clerk's legs stop at the hour's end; a break running past it runs on.
+      const fixed = it.end.fatigueBreak;
       m = { ...m, fatigueBreak: fixed && sameTile(fixed.at, resting.at)
         && fixed.start <= resting.start + 1e-9 && fixed.end >= resting.end - 1e-9
         ? fixed : { at: resting.at, placeId: resting.placeId, start: resting.start, end: resting.end } };
-    } else if (fatigueOn() && current?.kind === 'walk' && it.end.fatigueBreak
+    } else if (fatigueOn() && current?.kind === 'walk' && it.end.fatigueBreak && walksTo(it.legs, current, it.end.fatigueBreak, plan.start + 1)
       && (!m.cleaningSupport || (!resting || resting.activity === 'rest') && sameTile(current.path.at(-1), it.end.fatigueBreak.at))) {
       m = { ...m, fatigueBreak: it.end.fatigueBreak };
+    } else if (fatigueOn() && current?.kind === 'stay' && it.end.fatigueBreak && waitsFor(it.legs, current, it.end.fatigueBreak, plan.start + 1)) {
+      // (there early, waiting for it)
+      m = { ...m, fatigueBreak: it.end.fatigueBreak };
     }
-    const next = it.legs.find(l => l.kind === 'stay' && l.end > t && l.job);
+    // The room she's at or on her way to. A job after spare-time rest (a
+    // do-not-disturb clean she was resting for) is a forecast, not her room.
+    const next = it.legs.find(l => l.kind === 'stay' && l.end > t && (l.job || l.activity === 'rest' && l.idle));
     const roomId = (current?.kind === 'stay' && current.job ? current.placeId : undefined)
-      ?? (next?.kind === 'stay' ? next.placeId : undefined);
+      ?? (next?.kind === 'stay' && next.job ? next.placeId : undefined);
     // Mid-step on a walk: finish the step if the tile ahead is still there to step onto
     if (current?.kind === 'walk' && t < current.end) {
       // Summing tile durations can leave a walk a few floating-point bits
@@ -918,7 +1079,8 @@ export function replanStaff(state: HotelState, t: number): HotelState {
   });
   const sofar: StaffPlan = { start: plan.start, itineraries: [...done].map(([staffId, legs]) => ({ staffId, legs, end: { at: null } })) };
   const rush = keptRush(state, plan.rush, now);
-  const fresh = planStaff(state, now, t, { turnover: plannedWork(sofar, 'turnover'), daily: plannedWork(sofar, 'daily'), repair: plannedWork(sofar, 'repair') }, rush);
+  const fresh = planStaff(state, now, t, { turnover: plannedWork(sofar, 'turnover'), daily: plannedWork(sofar, 'daily'), repair: plannedWork(sofar, 'repair') }, rush, { idleRests, deskBefore: now.some(m => idleRests.has(m.id) && receptionTrained(m)) ? deskBefore(before ?? { ...state, staffPlan: plan }, plan, t) : new Map(),
+    ...(before ? { before } : {}) });
   const itineraries = fresh.itineraries.map(it => ({ ...it, legs: [...(done.get(it.staffId) ?? []), ...it.legs] }));
   return { ...state, staffPlan: { start: plan.start, itineraries, ...(fresh.rush ? { rush: fresh.rush } : {}) } };
 }
@@ -933,6 +1095,44 @@ export function replanStaff(state: HotelState, t: number): HotelState {
 function keptRush(state: HotelState, rush: StaffRush | undefined, roster: StaffMember[]): StaffRush | null | undefined {
   if (!rush || !heldNow(state, rush.roomId)) return null;
   return rush.staffId && !roster.some(m => m.id === rush.staffId && m.role === 'housekeeper' && !m.leaving) ? undefined : rush;
+}
+
+/**
+ * Whether a walk under way goes straight to a break: walks only, ending at its
+ * tile, then its rest there (or a wait there for it, or the plan's end). Not a
+ * wait at that tile for something else first, such as a door wait before the
+ * room whose doorway the break is then taken in.
+ */
+function walksTo(legs: Leg[], walk: WalkLeg, brk: FatigueBreak, hourEnd: number): boolean {
+  const ahead = legs.slice(legs.indexOf(walk));
+  const stop = ahead.findIndex(l => l.kind === 'stay');
+  const last = (stop < 0 ? ahead : ahead.slice(0, stop)).at(-1);
+  // (a break with no time left in it isn't one to go to)
+  return brk.end > brk.start + 1e-9 && last?.kind === 'walk' && sameTile(last.path.at(-1), brk.at) && (stop < 0 || waitsFor(legs, ahead[stop], brk, hourEnd));
+}
+
+/**
+ * Whether a stay at a break's tile is the break, or a wait there for it: one
+ * that runs into it, or to the hour's end with the break after it.
+ */
+function waitsFor(legs: Leg[], stay: Leg, brk: FatigueBreak, hourEnd: number): boolean {
+  const isBreak = (l?: Leg) => l?.kind === 'stay' && l.activity === 'rest' && sameTile(l.at, brk.at) && l.start >= brk.start - 1e-9 && l.start < brk.end;
+  const then = legs[legs.indexOf(stay) + 1];
+  return isBreak(stay) || stay.kind === 'stay' && stay.activity === 'wait' && sameTile(stay.at, brk.at)
+    && (Math.abs(stay.end - brk.start) < 1e-9 && isBreak(then) || !then && stay.end >= hourEnd - 1e-9 && brk.start >= stay.end - 1e-9 && brk.end > brk.start + 1e-9);
+}
+
+/**
+ * The front desk as it was before an edit: each lane, with who was to be at
+ * it when (clerks' shifts and breaks, helpers' blocks), and the counter stays
+ * in the plan being replaced (Settle's second re-plan replaces the first's).
+ */
+function deskBefore(before: HotelState, plan: StaffPlan, t: number): Map<string, { staffId: string; from: number; to: number }[]> {
+  const lanes = new Map(scheduledDeskLanes(before).map(l => [l.key, (l.duties ?? []).filter(d => d.to > t).map(d => ({ staffId: d.staffId, from: d.from, to: d.to }))]));
+  for (const it of plan.itineraries) for (const l of it.legs) {
+    if (l.kind === 'stay' && l.activity === 'desk' && l.lane && l.end > t) lanes.get(l.lane)?.push({ staffId: it.staffId, from: l.start, to: l.end });
+  }
+  return lanes;
 }
 
 /** The legs before a given one. */

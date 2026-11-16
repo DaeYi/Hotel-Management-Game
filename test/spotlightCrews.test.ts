@@ -226,6 +226,26 @@ describe('Spotlight guests: the held suite\'s turnover, crews by hand', () => {
     expect(workersIn(re, S.id)).not.toContain('hk-slow');
     expect(tickTillIn(re, S.id)).toMatchObject({ into: S.id, at: 16 });
   });
+
+  it('the housekeeper it\'s kept for let go a few minutes into the hour: the one resting idle takes it at once, not at the hour\'s end', () => {
+    // 12:00, due 15:00: three free in a clean room; S 2.5h, X 1.5h. The fast one keeps S, the slow one takes X, the
+    // skilled one has nothing to do and rests nearby till 13:00: idle recovery, not a break with a fixed end
+    const s0 = build({ day: 9, hour: 12, suites: 1, standards: 2, dirty: { 0: 2.5, 1: 1.5 },
+      crew: (r, abs) => [keeper('hk-fast', 'fast', r[2], abs), keeper('hk-slow', 'slow', r[2], abs), keeper('hk-mid', 'mid', r[2], abs)] });
+    const S = s0.rooms[0];
+    const held = { ...s0, spotlight: plan({ arrivalDay: 9, arrivalHour: 15, roomId: S.id }) };
+    const s = { ...held, staffPlan: getStaffPlan(held) };
+    expect(s.staffPlan.rush).toEqual({ roomId: S.id, staffId: 'hk-fast' });
+    const idle = s.staffPlan.itineraries.find(it => it.staffId === 'hk-mid')!.legs.find(l => l.kind === 'stay' && l.activity === 'rest')!;
+    expect(idle.end).toBe(hourStart(s) + 1);
+    // let go at the hour's start, mid-step out of the room, and while she rests: the same as at the hour's start
+    for (const dt of [0, (idle.start - hourStart(s)) / 2, 0.1]) {
+      const t = hourStart(s) + dt;
+      const re = settleChanges(s, dismissStaff(s, 'hk-fast', t)!, t);
+      expect(workersIn(re, S.id)).toEqual(['hk-mid']);
+      expect(tickTillIn(re, S.id)).toMatchObject({ into: S.id, at: 15 });
+    }
+  });
 });
 
 describe('Spotlight guests: the estimate across the night', () => {
